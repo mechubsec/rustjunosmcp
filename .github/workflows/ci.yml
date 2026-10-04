@@ -127,3 +127,45 @@ jobs:
       - name: Container runtime and SCP integration smoke test
         working-directory: RustJunosMCP
         run: ./packaging/tests/container-scp-smoke.sh
+
+  conformance:
+    name: Package conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the release binary
+        run: cargo build --release --locked --bin rust-junosmcp
+
+      - name: Stage the package
+        run: |
+          set -euo pipefail
+          mkdir -p staging/bin
+          cp target/release/rust-junosmcp staging/bin/
+          cp -r packaging staging/packaging
+          cp packaging/conformance.toml staging/
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          load: true
+          tags: rust-junosmcp:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Conformance
+        uses: mechubsec/mecmcp/packaging/conformance@927361a755ceb5a43289275ab5f5f00d66359cc3
+        with:
+          staging: staging
+          manifest: staging/conformance.toml
+          image: rust-junosmcp:ci
