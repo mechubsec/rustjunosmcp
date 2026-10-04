@@ -19,3 +19,10 @@ units = ["packaging/systemd/rust-junosmcp.service"]
 # supplies their own CMD override (Docker appends to ENTRYPOINT but replaces
 # CMD wholesale -- rustmistmcp#78).
 must_survive_override = ["-f", "--tokens-file", "--audit-hmac-key-file"]
+
+# The binary generates its own key when the file is absent (ensure_audit_hmac_key
+# in src/main.rs) and the image has no shell to run a key-generating entrypoint
+# script, so this declares the audit_hmac_flag pattern instead of audit_entrypoint.
+# Promotes conformance R7 from warn to fatal: the flag above is already in
+# must_survive_override, so R6 proves it reaches the running container's argv.
+audit_hmac_flag = "--audit-hmac-key-file"
