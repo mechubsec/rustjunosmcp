@@ -164,7 +164,10 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Conformance
-        uses: mechubsec/mecmcp/packaging/conformance@927361a755ceb5a43289275ab5f5f00d66359cc3
+        # Pinned past mecmcp#492, which adds the `audit_hmac_flag` manifest
+        # key this repo's conformance.toml declares (MEC-1793). No mecmcp
+        # tag covers it yet; repin to a tag once one is cut.
+        uses: mechubsec/mecmcp/packaging/conformance@373dc51cac90b97e728e20363b4b05d7b2c179a5
         with:
           staging: staging
           manifest: staging/conformance.toml
