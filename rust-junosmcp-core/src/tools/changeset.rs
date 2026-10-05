@@ -3008,6 +3008,22 @@ mod tests {
         );
     }
 
+    /// MEC-1879 P5a (sole-action rule): a change set with more than one
+    /// rollback action on a plane-owned device is refused.
+    #[tokio::test]
+    async fn create_change_set_refuses_multiple_rollback_actions_on_plane_owned_device() {
+        let r = create_on_plane_owned_device(
+            "mist",
+            vec![rollback_action(0), rollback_action(5)],
+            false,
+        )
+        .await;
+        assert!(
+            matches!(r, Err(JmcpError::PlaneOwnedRollbackMixedAction { .. })),
+            "expected a mixed-action refusal, got {r:?}"
+        );
+    }
+
     /// MEC-1879 P5a (lab-mode refusal): no lab-mode waiver ever applies to a
     /// plane-owned rollback action, so creating one in lab mode is refused
     /// before the depth check would even run.
