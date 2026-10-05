@@ -572,6 +572,11 @@ pub async fn create_change_set_with_cancel(
         }
     }
 
+    // Set when this create classifies commit 0 for a guarded `rollback_source:
+    // 1` (MEC-1880, §5.6): the redacted, length-capped attribution shown to
+    // the creator, threaded into both response branches below.
+    let mut commit0_output: Option<Value> = None;
+
     // Rollback-depth guard on plane-owned devices (MEC-1879, P5a). Checked
     // before the override/lab-mode gate below and before policy, since it
     // must refuse unconditionally — no flag or lab-mode waiver may bypass it.
@@ -639,6 +644,11 @@ pub async fn create_change_set_with_cancel(
                         class: class.as_str(),
                     });
                 }
+
+                commit0_output = Some(crate::commit_attribution::commit0_attribution_output(
+                    entry.as_ref(),
+                    class,
+                ));
 
                 // Bind commit 0 into the plan so apply time can detect the
                 // commit log moving underneath it (MEC-1880, §5.5 TOCTOU
@@ -750,22 +760,36 @@ pub async fn create_change_set_with_cancel(
             .await
             .map_err(|e| JmcpError::Validation(e.to_string()))?;
 
-        return Ok(json!({
+        let mut waived_result = json!({
             "change_set_id": waived.change_set_id,
             "plan_digest": waived.digest,
             "state": format!("{:?}", waived.state),
             "approver": waived.approver,
             "approval_waiver": waived.approval_waiver,
             "message": "change set created and approval waived: this server runs in lab mode, so no second principal reviewed it"
-        }));
+        });
+        if let Some(commit0) = commit0_output {
+            waived_result
+                .as_object_mut()
+                .expect("json! macro produces an object here")
+                .insert("commit0_attribution".to_string(), commit0);
+        }
+        return Ok(waived_result);
     }
 
-    Ok(json!({
+    let mut created_result = json!({
         "change_set_id": result.change_set_id,
         "plan_digest": result.digest,
         "state": format!("{:?}", result.state),
         "message": "change set created; awaiting approval by a second principal"
-    }))
+    });
+    if let Some(commit0) = commit0_output {
+        created_result
+            .as_object_mut()
+            .expect("json! macro produces an object here")
+            .insert("commit0_attribution".to_string(), commit0);
+    }
+    Ok(created_result)
 }
 
 /// Approve a change set (second principal).
