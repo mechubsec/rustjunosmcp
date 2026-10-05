@@ -32,6 +32,31 @@ pub struct JunosAction {
     /// Exactly one of `payload` or `rollback_source` must be set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rollback_source: Option<u32>,
+    /// Commit-0 attribution binding for a guarded plane-owned
+    /// `rollback_source: 1` (MEC-1880, P5b TOCTOU binding, §5.5).
+    ///
+    /// **Reserved: server-computed only.** `create_junos_change_set` rejects
+    /// any caller-supplied value outright before this field is ever trusted.
+    /// It exists on the wire type only because the change-set plan is stored
+    /// and re-read as this same type, and the approval digest must cover it —
+    /// a caller allowed to set it directly could forge the server's own
+    /// commit-0 classification and defeat the TOCTOU re-check this binding
+    /// exists for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit0: Option<crate::commit_attribution::CommitZeroBinding>,
+}
+
+impl Default for JunosAction {
+    /// All-`None` default, so existing test literals that predate `commit0`
+    /// can opt in with `..Default::default()` instead of being rewritten one
+    /// by one.
+    fn default() -> Self {
+        Self {
+            payload: None,
+            rollback_source: None,
+            commit0: None,
+        }
+    }
 }
 
 impl JunosAction {
@@ -1534,6 +1559,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source,
+            ..Default::default()
         }
     }
 
@@ -1547,6 +1573,7 @@ mod tests {
                 mode: Some(mode.to_owned()),
             }),
             rollback_source: None,
+            ..Default::default()
         }
     }
 
