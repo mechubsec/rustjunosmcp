@@ -391,6 +391,42 @@ pub fn check_plane_owned_operation(
     }
 }
 
+/// Refuse a rollback to depth `depth` on a plane-owned device.
+///
+/// The single deterministic function the rollback-depth guard is built from
+/// (MEC-1879, P5a): every call site — `create_junos_change_set`,
+/// `JunosTransaction::stage`'s apply-time re-check, and the `RollbackRef::Archive`
+/// defense-in-depth path — calls this instead of repeating the depth logic, so
+/// the rule can only be changed in one place.
+///
+/// `depth` 0 is a no-op load (revert candidate to running config) and is
+/// always allowed. Any `depth >= 1` on a plane-owned device is refused
+/// unconditionally: depth 1 because commit-origin attribution (MEC-1880, P5b)
+/// does not exist yet to tell the server's own commits from the plane's, and
+/// depth 2+ because of the same risk at greater blast radius. No flag
+/// overrides this.
+///
+/// # Errors
+///
+/// Returns [`JmcpError::PlaneOwnedRollbackDepthRefused`] when the device is
+/// plane-owned and `depth >= 1`.
+pub fn check_plane_owned_rollback_depth(
+    tool_name: &'static str,
+    device_name: &str,
+    authority: &crate::config_authority::JunosAuthority,
+    depth: u32,
+) -> Result<(), JmcpError> {
+    if depth >= 1 && authority.is_plane_owned() {
+        return Err(JmcpError::PlaneOwnedRollbackDepthRefused {
+            tool: tool_name,
+            device: device_name.to_string(),
+            authority: authority.as_str().to_string(),
+            depth,
+        });
+    }
+    Ok(())
+}
+
 /// Write a test fixture with mode 0600.
 ///
 /// The inventory is read through a hardened reader (mecmcp 0.3.8+) that refuses
@@ -412,6 +448,67 @@ pub(crate) fn write_restricted_fixture(path: impl AsRef<std::path::Path>, conten
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plane_owned_rollback_depth_zero_is_always_allowed() {
+        use crate::config_authority::JunosAuthority;
+        for authority in [
+            JunosAuthority::Local,
+            JunosAuthority::Unknown,
+            JunosAuthority::Mist,
+            JunosAuthority::SecurityDirectorCloud,
+            JunosAuthority::SecurityDirectorOnprem,
+        ] {
+            assert!(
+                check_plane_owned_rollback_depth("t", "r1", &authority, 0).is_ok(),
+                "depth 0 must be allowed for {authority:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plane_owned_rollback_depth_one_is_refused_pre_p5b() {
+        use crate::config_authority::JunosAuthority;
+        let r = check_plane_owned_rollback_depth("t", "r1", &JunosAuthority::Mist, 1);
+        match r {
+            Err(JmcpError::PlaneOwnedRollbackDepthRefused { depth, .. }) => {
+                assert_eq!(depth, 1);
+            }
+            other => {
+                panic!("expected depth 1 to be refused on a plane-owned device, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn plane_owned_rollback_depth_two_or_more_is_refused() {
+        use crate::config_authority::JunosAuthority;
+        for depth in [2, 5, 49] {
+            let r = check_plane_owned_rollback_depth(
+                "t",
+                "r1",
+                &JunosAuthority::SecurityDirectorCloud,
+                depth,
+            );
+            assert!(
+                matches!(r, Err(JmcpError::PlaneOwnedRollbackDepthRefused { depth: d, .. }) if d == depth),
+                "expected depth {depth} to be refused, got {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn local_and_unknown_authority_allow_any_depth() {
+        use crate::config_authority::JunosAuthority;
+        for authority in [JunosAuthority::Local, JunosAuthority::Unknown] {
+            for depth in [0, 1, 2, 49] {
+                assert!(
+                    check_plane_owned_rollback_depth("t", "r1", &authority, depth).is_ok(),
+                    "depth {depth} must be allowed for {authority:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn build_config_payload_defaults_to_set() {

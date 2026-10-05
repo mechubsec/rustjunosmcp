@@ -38,6 +38,33 @@ impl mecmcp_inventory::LocalAuthority for JunosAuthority {
     }
 }
 
+impl JunosAuthority {
+    /// True when some management plane other than this server owns the
+    /// device's running configuration (anything but `Local` or `Unknown`).
+    ///
+    /// The single predicate the rollback-depth guard (MEC-1879) is built on:
+    /// every refusal in that guard is gated on this, not on a per-vendor list,
+    /// so a new plane variant is covered automatically.
+    pub fn is_plane_owned(&self) -> bool {
+        !matches!(self, Self::Local | Self::Unknown)
+    }
+
+    /// Stable lowercase-kebab name for error messages and audit records.
+    ///
+    /// Matches the `#[serde(rename_all = "kebab-case")]` wire form exactly, so
+    /// a human reading an error message sees the same string that appears in
+    /// `devices.json`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Mist => "mist",
+            Self::SecurityDirectorCloud => "security-director-cloud",
+            Self::SecurityDirectorOnprem => "security-director-onprem",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 impl Default for JunosAuthority {
     /// Default authority when not specified in `devices.json`.
     ///
@@ -67,6 +94,35 @@ mod tests {
     #[test]
     fn default_is_unknown() {
         assert_eq!(JunosAuthority::default(), JunosAuthority::Unknown);
+    }
+
+    #[test]
+    fn is_plane_owned_true_only_for_non_local_non_unknown() {
+        assert!(!JunosAuthority::Local.is_plane_owned());
+        assert!(!JunosAuthority::Unknown.is_plane_owned());
+        assert!(JunosAuthority::Mist.is_plane_owned());
+        assert!(JunosAuthority::SecurityDirectorCloud.is_plane_owned());
+        assert!(JunosAuthority::SecurityDirectorOnprem.is_plane_owned());
+    }
+
+    #[test]
+    fn as_str_matches_kebab_case_wire_form() {
+        let cases = [
+            (JunosAuthority::Local, "local"),
+            (JunosAuthority::Mist, "mist"),
+            (
+                JunosAuthority::SecurityDirectorCloud,
+                "security-director-cloud",
+            ),
+            (
+                JunosAuthority::SecurityDirectorOnprem,
+                "security-director-onprem",
+            ),
+            (JunosAuthority::Unknown, "unknown"),
+        ];
+        for (authority, expected) in cases {
+            assert_eq!(authority.as_str(), expected);
+        }
     }
 
     #[test]
