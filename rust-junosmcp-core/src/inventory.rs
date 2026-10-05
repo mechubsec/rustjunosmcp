@@ -393,15 +393,6 @@ pub struct DeviceEntry {
     /// See RustJunosMCP#292 and mecmcp#256.
     #[serde(default)]
     pub config_authority: crate::config_authority::JunosAuthority,
-    /// Declared logins the owning plane's own commit sessions use on this
-    /// device (MEC-1880, P5b). Used only by the commit-0 attribution
-    /// classifier that gates a guarded `rollback_source: 1` on a plane-owned
-    /// device.
-    ///
-    /// Absent or empty always classifies commit 0 as `ambiguous` — this field
-    /// is never inferred from device behaviour, only declared by the operator.
-    #[serde(default)]
-    pub plane_commit_logins: Vec<String>,
 }
 
 #[cfg(test)]
