@@ -543,6 +543,48 @@ pub enum JmcpError {
         depth: u32,
     },
 
+    /// `rollback_source: 1` on a plane-owned device was refused because
+    /// commit-0 attribution did not positively establish that commit 0 was not
+    /// the owning plane's own (MEC-1880, P5b). `class` names exactly which of
+    /// the non-`non_plane` [`crate::commit_attribution::CommitZeroClass`]
+    /// values applied, so the operator sees why without re-deriving it.
+    #[error(
+        "refused: {tool} on '{device}' ({authority}) requests rollback_source: 1, but commit-0 \
+         attribution classifies the current running config as '{class}', not 'non_plane'. Only \
+         a commit positively attributed to someone other than the owning plane may be rolled \
+         back this way. Resolve this in the owning plane (e.g. Security Director) instead, or \
+         author an explicit inverse payload change via create_junos_change_set."
+    )]
+    PlaneOwnedRollbackOneRefused {
+        /// Name of the MCP tool that was refused.
+        tool: &'static str,
+        /// Name of the device the rollback targeted.
+        device: String,
+        /// Configuration authority that owns this device.
+        authority: String,
+        /// The commit-0 class that caused the refusal (never `non_plane`).
+        class: &'static str,
+    },
+
+    /// A `rollback_source: 1` change set was approved with a commit-0 binding,
+    /// but the device's commit log no longer matches it at apply time
+    /// (MEC-1880, §5.5 TOCTOU binding). Something committed to the device
+    /// between create and apply, so the classification this plan was approved
+    /// under no longer describes the device; apply is refused rather than
+    /// trusting a stale classification.
+    #[error(
+        "refused: {tool} on '{device}' cannot apply a plane-owned rollback_source: 1 plan — the \
+         commit log has moved since this plan was approved (entry 0 no longer matches the \
+         commit-0 binding the plan was approved against). Re-create and re-approve the change \
+         set against the device's current state."
+    )]
+    CommitLogMoved {
+        /// Name of the MCP tool or code path that was refused.
+        tool: &'static str,
+        /// Name of the device the rollback targeted.
+        device: String,
+    },
+
     /// A change set mixed a `rollback_source` action with another action on a
     /// plane-owned device.
     ///
@@ -830,6 +872,8 @@ impl JmcpError {
             Self::ConfigDomainAllowlistInvariant { .. } => "blocked",
             Self::PlaneOwnedDevice { .. } => "blocked",
             Self::PlaneOwnedRollbackDepthRefused { .. } => "blocked",
+            Self::PlaneOwnedRollbackOneRefused { .. } => "blocked",
+            Self::CommitLogMoved { .. } => "blocked",
             Self::PlaneOwnedRollbackMixedAction { .. } => "blocked",
             Self::PlaneOwnedRollbackLabMode { .. } => "blocked",
             Self::PlaneOwnedRollbackConfigRefused { .. } => "blocked",

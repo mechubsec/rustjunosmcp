@@ -307,6 +307,28 @@ pub fn commit0_attribution_output(entry: Option<&CommitLogEntry>, class: CommitZ
     })
 }
 
+/// Fetch `show system commit` from `router` and classify entry 0 against
+/// `plane_commit_logins`/`device_login`.
+///
+/// Any failure to reach the device or read its commit log folds into
+/// [`CommitZeroClass::Unreadable`] rather than propagating a transport error:
+/// the classifier's job is to say who owns commit 0, and "the device didn't
+/// answer" is exactly the kind of missing evidence §5.3 says must fail closed,
+/// not a different error class the caller has to special-case.
+pub async fn classify_commit_zero_for_router(
+    dm: &crate::device_manager::DeviceManager,
+    router: &str,
+    plane_commit_logins: &[String],
+    device_login: &str,
+) -> (CommitZeroClass, Option<CommitLogEntry>) {
+    let entry = match dm.run_cli(router, "show system commit").await {
+        Ok(log) => parse_newest_entry(&log),
+        Err(_) => None,
+    };
+    let class = classify_commit_zero(entry.as_ref(), plane_commit_logins, device_login);
+    (class, entry)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -528,7 +528,7 @@ pub async fn create_change_set(
 
 /// Cancellable variant of `create_change_set` for use in transport shutdown paths.
 pub async fn create_change_set_with_cancel(
-    args: CreateChangeSetArgs,
+    mut args: CreateChangeSetArgs,
     dm: Arc<DeviceManager>,
     coordinator: Arc<ChangesetCoordinator>,
     policy: Arc<Policy>,
@@ -606,21 +606,56 @@ pub async fn create_change_set_with_cancel(
             }
 
             // rollback_count == args.actions.len() (checked above): there is
-            // exactly one action, and it is the rollback. Depth >= 1 is
-            // refused unconditionally on a plane-owned device until
-            // commit-origin attribution (MEC-1880, P5b) exists to tell this
-            // server's own commits from the plane's — depth 0 is a no-op
-            // load and needs no attribution, so it is allowed through.
+            // exactly one action, and it is the rollback. Depth 0 is a no-op
+            // load and needs no attribution. Depth >= 2 is refused
+            // unconditionally regardless of attribution (greater blast radius
+            // than commit-0 attribution can speak to). Depth 1 is the one case
+            // commit-0 attribution (MEC-1880, P5b) can positively clear: only
+            // when the device's own commit log shows the current running
+            // config was not committed by the owning plane.
             let depth = args.actions[0]
                 .rollback_source
                 .expect("rollback_count == 1 implies the sole action carries rollback_source");
 
-            crate::helpers::check_plane_owned_rollback_depth(
-                "create_junos_change_set",
-                &args.device,
-                &config_authority,
-                depth,
-            )?;
+            if depth == 1 {
+                let (device_login, plane_commit_logins) = {
+                    let inv = dm.inventory();
+                    let entry = inv.get(&args.device)?;
+                    (entry.username.clone(), entry.plane_commit_logins.clone())
+                };
+                let (class, entry) = crate::commit_attribution::classify_commit_zero_for_router(
+                    &dm,
+                    &args.device,
+                    &plane_commit_logins,
+                    &device_login,
+                )
+                .await;
+
+                if !class.allows_rollback_one() {
+                    return Err(JmcpError::PlaneOwnedRollbackOneRefused {
+                        tool: "create_junos_change_set",
+                        device: args.device.clone(),
+                        authority: config_authority.as_str().to_string(),
+                        class: class.as_str(),
+                    });
+                }
+
+                // Bind commit 0 into the plan so apply time can detect the
+                // commit log moving underneath it (MEC-1880, §5.5 TOCTOU
+                // binding). `entry` is always `Some` here: `Unreadable` (the
+                // only class that can have a `None` entry) never reaches this
+                // line because it fails `allows_rollback_one` above.
+                args.actions[0].commit0 = entry
+                    .as_ref()
+                    .map(crate::commit_attribution::CommitZeroBinding::from_entry);
+            } else {
+                crate::helpers::check_plane_owned_rollback_deep_depth(
+                    "create_junos_change_set",
+                    &args.device,
+                    &config_authority,
+                    depth,
+                )?;
+            }
         }
     }
 
@@ -2813,15 +2848,17 @@ mod tests {
         );
     }
 
-    /// MEC-1879 P5a: `rollback_source: 1` on a plane-owned device is refused
-    /// at create, fail-closed, until commit-origin attribution (MEC-1880,
-    /// P5b) exists.
+    /// MEC-1880 P5b: `rollback_source: 1` on a plane-owned device is refused
+    /// at create when commit-0 attribution cannot positively clear it. This
+    /// fixture's device has no `plane_commit_logins` declared and is
+    /// unreachable, so the classifier fails closed to `unreadable` — the
+    /// no-evidence default, not `non_plane`.
     #[tokio::test]
     async fn create_change_set_refuses_rollback_depth_one_on_plane_owned_device() {
         let r = create_on_plane_owned_device("mist", vec![rollback_action(1)], false).await;
         match r {
-            Err(JmcpError::PlaneOwnedRollbackDepthRefused { depth, .. }) => {
-                assert_eq!(depth, 1);
+            Err(JmcpError::PlaneOwnedRollbackOneRefused { class, .. }) => {
+                assert_eq!(class, "unreadable");
             }
             other => panic!("expected depth 1 to be refused, got {other:?}"),
         }
