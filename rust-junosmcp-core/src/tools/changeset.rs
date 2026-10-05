@@ -2652,7 +2652,8 @@ mod tests {
                 actions: vec![JunosAction {
                     payload: None,
                     rollback_source: None,
-                }],
+            ..Default::default()
+        }],
             },
             dm.clone(),
             coordinator.clone(),
@@ -2685,7 +2686,8 @@ mod tests {
                         mode: None,
                     }),
                     rollback_source: None,
-                }],
+            ..Default::default()
+        }],
             },
             dm,
             coordinator,
@@ -2726,7 +2728,8 @@ mod tests {
                             mode: None,
                         }),
                         rollback_source: Some(1),
-                    }],
+            ..Default::default()
+        }],
                 },
                 dm,
                 coordinator,
@@ -2750,6 +2753,7 @@ mod tests {
         JunosAction {
             payload: None,
             rollback_source: Some(depth),
+            ..Default::default()
         }
     }
 
@@ -2761,6 +2765,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         }
     }
 
@@ -2931,7 +2936,8 @@ mod tests {
                         mode: Some("override".into()),
                     }),
                     rollback_source: None,
-                }],
+            ..Default::default()
+        }],
             },
             dm,
             coordinator,
@@ -2972,7 +2978,8 @@ mod tests {
                         mode: None,
                     }),
                     rollback_source: None,
-                }],
+            ..Default::default()
+        }],
             },
             dm,
             coordinator,
@@ -3016,7 +3023,8 @@ mod tests {
                         mode: Some("wipe".into()),
                     }),
                     rollback_source: None,
-                }],
+            ..Default::default()
+        }],
             },
             dm.clone(),
             coordinator.clone(),
@@ -3042,7 +3050,8 @@ mod tests {
                         mode: None,
                     }),
                     rollback_source: None,
-                }],
+            ..Default::default()
+        }],
             },
             dm,
             coordinator,
@@ -3083,7 +3092,8 @@ mod tests {
                         mode: Some("override".into()),
                     }),
                     rollback_source: None,
-                }],
+            ..Default::default()
+        }],
             },
             dm,
             coordinator,
@@ -3124,6 +3134,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create_result =
             create_change_set(
@@ -3196,6 +3207,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create_result =
             create_change_set(
@@ -3266,6 +3278,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create_result =
             create_change_set(
@@ -3343,6 +3356,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let r1_result = create_change_set(
             CreateChangeSetArgs {
@@ -3366,6 +3380,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let r2_result = create_change_set(
             CreateChangeSetArgs {
@@ -3463,6 +3478,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create_result = create_change_set(
             CreateChangeSetArgs {
@@ -3508,6 +3524,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create2 = create_change_set(
             CreateChangeSetArgs {
@@ -3549,6 +3566,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create_result = create_change_set(
             CreateChangeSetArgs {
@@ -3619,6 +3637,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create_result = create_change_set(
             CreateChangeSetArgs {
