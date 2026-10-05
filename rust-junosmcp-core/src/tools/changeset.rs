@@ -535,8 +535,10 @@ pub async fn create_change_set_with_cancel(
     attribution: Attribution,
     _ct: CancellationToken,
 ) -> Result<Value, JmcpError> {
-    // Validate the device exists.
-    let _ = dm.inventory().get(&args.device)?;
+    // Validate the device exists, and capture its config authority for the
+    // plane-owned rollback guard below (dropped at the end of this block;
+    // `inv` holds the only reference into it).
+    let config_authority = { dm.inventory().get(&args.device)?.config_authority.clone() };
 
     // Derive the owner from the authenticated caller's principal.
     let owner = attribution.principal.to_string();
@@ -567,6 +569,58 @@ pub async fn create_change_set_with_cancel(
             if requested_mode == rustez::LoadAction::Override {
                 requests_override = true;
             }
+        }
+    }
+
+    // Rollback-depth guard on plane-owned devices (MEC-1879, P5a). Checked
+    // before the override/lab-mode gate below and before policy, since it
+    // must refuse unconditionally — no flag or lab-mode waiver may bypass it.
+    if config_authority.is_plane_owned() {
+        let rollback_count = args
+            .actions
+            .iter()
+            .filter(|a| a.rollback_source.is_some())
+            .count();
+
+        if rollback_count > 0 {
+            // No lab-mode waiver ever applies to a plane-owned rollback,
+            // regardless of depth: lab mode waives approval, and this action
+            // has no waiver path at all.
+            if coordinator.lab_mode() {
+                return Err(JmcpError::PlaneOwnedRollbackLabMode {
+                    tool: "create_junos_change_set",
+                    device: args.device.clone(),
+                    authority: config_authority.as_str().to_string(),
+                });
+            }
+
+            // A rollback_source action on a plane-owned device must be the
+            // sole action in the change set, regardless of depth, so the
+            // depth check below evaluates it in isolation.
+            if rollback_count != args.actions.len() {
+                return Err(JmcpError::PlaneOwnedRollbackMixedAction {
+                    tool: "create_junos_change_set",
+                    device: args.device.clone(),
+                    authority: config_authority.as_str().to_string(),
+                });
+            }
+
+            // rollback_count == args.actions.len() (checked above): there is
+            // exactly one action, and it is the rollback. Depth >= 1 is
+            // refused unconditionally on a plane-owned device until
+            // commit-origin attribution (MEC-1880, P5b) exists to tell this
+            // server's own commits from the plane's — depth 0 is a no-op
+            // load and needs no attribution, so it is allowed through.
+            let depth = args.actions[0]
+                .rollback_source
+                .expect("rollback_count == 1 implies the sole action carries rollback_source");
+
+            crate::helpers::check_plane_owned_rollback_depth(
+                "create_junos_change_set",
+                &args.device,
+                &config_authority,
+                depth,
+            )?;
         }
     }
 
@@ -2690,6 +2744,148 @@ mod tests {
             }
             other => panic!("expected create to reject a both-fields action, got {other:?}"),
         }
+    }
+
+    fn rollback_action(depth: u32) -> JunosAction {
+        JunosAction {
+            payload: None,
+            rollback_source: Some(depth),
+        }
+    }
+
+    fn payload_action(text: &str) -> JunosAction {
+        JunosAction {
+            payload: Some(ConfigPayloadSpec {
+                text: text.into(),
+                format: Some("set".into()),
+                mode: None,
+            }),
+            rollback_source: None,
+        }
+    }
+
+    async fn create_on_plane_owned_device(
+        authority: &str,
+        actions: Vec<JunosAction>,
+        lab_mode: bool,
+    ) -> Result<Value, JmcpError> {
+        let inv = inv_with(&format!(
+            r#"{{"r1":{{"ip":"127.0.0.1","username":"u","auth":{{"type":"password","password":"x"}},"config_authority":"{authority}"}}}}"#,
+        ));
+        let dm = Arc::new(DeviceManager::new(inv.clone()));
+        let policy = test_policy(inv);
+        let state_dir = TempDir::new().unwrap();
+        let coordinator = if lab_mode {
+            test_coordinator_lab_mode(&state_dir)
+        } else {
+            test_coordinator(&state_dir)
+        };
+
+        create_change_set(
+            CreateChangeSetArgs {
+                device: "r1".into(),
+                expected_fingerprint:
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                        .into(),
+                actions,
+            },
+            dm,
+            coordinator,
+            policy,
+            test_attribution("alice"),
+        )
+        .await
+    }
+
+    /// MEC-1879 P5a: `rollback_source: 0` is a no-op load and is always
+    /// allowed on a plane-owned device.
+    #[tokio::test]
+    async fn create_change_set_allows_rollback_depth_zero_on_plane_owned_device() {
+        let r = create_on_plane_owned_device("mist", vec![rollback_action(0)], false).await;
+        assert!(
+            r.is_ok(),
+            "expected depth 0 to be allowed on a plane-owned device, got {r:?}"
+        );
+    }
+
+    /// MEC-1879 P5a: `rollback_source: 1` on a plane-owned device is refused
+    /// at create, fail-closed, until commit-origin attribution (MEC-1880,
+    /// P5b) exists.
+    #[tokio::test]
+    async fn create_change_set_refuses_rollback_depth_one_on_plane_owned_device() {
+        let r = create_on_plane_owned_device("mist", vec![rollback_action(1)], false).await;
+        match r {
+            Err(JmcpError::PlaneOwnedRollbackDepthRefused { depth, .. }) => {
+                assert_eq!(depth, 1);
+            }
+            other => panic!("expected depth 1 to be refused, got {other:?}"),
+        }
+    }
+
+    /// MEC-1879 P5a: depth >= 2 on a plane-owned device is refused
+    /// unconditionally, with no flag to override it.
+    #[tokio::test]
+    async fn create_change_set_refuses_rollback_depth_two_or_more_on_plane_owned_device() {
+        for depth in [2, 5, 49] {
+            let r = create_on_plane_owned_device(
+                "security-director-cloud",
+                vec![rollback_action(depth)],
+                false,
+            )
+            .await;
+            match r {
+                Err(JmcpError::PlaneOwnedRollbackDepthRefused { depth: d, .. }) => {
+                    assert_eq!(d, depth);
+                }
+                other => panic!("expected depth {depth} to be refused, got {other:?}"),
+            }
+        }
+    }
+
+    /// MEC-1879 P5a: a rollback on a `local`/`unknown` device needs no
+    /// attribution and is unaffected by this guard, at any depth.
+    #[tokio::test]
+    async fn create_change_set_allows_any_depth_on_local_device() {
+        for depth in [0, 1, 2, 49] {
+            let r =
+                create_on_plane_owned_device("local", vec![rollback_action(depth)], false).await;
+            assert!(
+                r.is_ok(),
+                "expected depth {depth} to be allowed on a local device, got {r:?}"
+            );
+        }
+    }
+
+    /// MEC-1879 P5a (sole-action rule): a change set mixing a
+    /// `rollback_source` action with a payload action on a plane-owned
+    /// device is refused, regardless of depth.
+    #[tokio::test]
+    async fn create_change_set_refuses_rollback_mixed_with_payload_on_plane_owned_device() {
+        let r = create_on_plane_owned_device(
+            "mist",
+            vec![
+                rollback_action(0),
+                payload_action("set system host-name test"),
+            ],
+            false,
+        )
+        .await;
+        assert!(
+            matches!(r, Err(JmcpError::PlaneOwnedRollbackMixedAction { .. })),
+            "expected a mixed-action refusal, got {r:?}"
+        );
+    }
+
+    /// MEC-1879 P5a (lab-mode refusal): no lab-mode waiver ever applies to a
+    /// plane-owned rollback action, so creating one in lab mode is refused
+    /// before the depth check would even run.
+    #[tokio::test]
+    async fn create_change_set_refuses_plane_owned_rollback_in_lab_mode() {
+        let r = create_on_plane_owned_device("mist", vec![rollback_action(0)], true).await;
+        assert!(
+            matches!(r, Err(JmcpError::PlaneOwnedRollbackLabMode { .. })),
+            "expected a lab-mode refusal even for depth 0, got {r:?}"
+        );
     }
 
     /// The call that produced #254, verbatim. Before `deny_unknown_fields`

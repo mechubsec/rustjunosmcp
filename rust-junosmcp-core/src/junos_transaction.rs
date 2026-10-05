@@ -476,6 +476,79 @@ impl DeviceTransaction for JunosTransaction {
 
         // Load actions. Track success count for partial-failure revert.
         for (loaded, resolved) in resolved_actions.into_iter().enumerate() {
+            // Re-check the rollback-depth guard here, inside the candidate
+            // lock, rather than trusting the check `create_junos_change_set`
+            // already did (MEC-1879, P5a item 6). A device can be re-tagged
+            // plane-owned in `devices.json` between create and apply; reading
+            // the inventory fresh on every staged action closes that window.
+            if let ResolvedAction::Rollback(rollback) = &resolved {
+                let depth_check: Result<(), JmcpError> = {
+                    let inv = self.device_manager.inventory();
+                    inv.get(&self.router).and_then(|entry| {
+                        crate::helpers::check_plane_owned_rollback_depth(
+                            "apply_junos_change_set",
+                            &self.router,
+                            &entry.config_authority,
+                            *rollback,
+                        )
+                    })
+                };
+
+                if let Err(depth_error) = depth_check {
+                    // Same cleanup contract as a load failure below, but the
+                    // primary error is already a `JmcpError` built from this
+                    // check rather than the wire-level load result.
+                    let mut revert_err_opt = None;
+                    let mut unlock_err_opt = None;
+
+                    if loaded > 0
+                        && let Err(revert_error) = cfg.rollback(0).await
+                    {
+                        tracing::error!(
+                            router = %self.router,
+                            loaded,
+                            primary_error = %depth_error,
+                            revert_error = %revert_error,
+                            "failed to revert partial stage after apply-time plane-owned \
+                             rollback refusal; session tainted"
+                        );
+                        revert_err_opt = Some(revert_error.to_string());
+                    }
+
+                    if let Err(unlock_error) = dev.release_lock().await {
+                        tracing::error!(
+                            router = %self.router,
+                            primary_error = %depth_error,
+                            unlock_error = %unlock_error,
+                            "failed to release lock after apply-time plane-owned rollback \
+                             refusal; session tainted"
+                        );
+                        unlock_err_opt = Some(unlock_error.to_string());
+                    }
+
+                    return match (&revert_err_opt, &unlock_err_opt) {
+                        (Some(revert_err), Some(unlock_err)) => {
+                            Err(JmcpError::CandidateCleanupFailed {
+                                primary: depth_error.to_string(),
+                                rollback: revert_err.clone(),
+                                unlock: unlock_err.clone(),
+                            })
+                        }
+                        (Some(revert_err), None) => Err(JmcpError::CandidateCleanupFailed {
+                            primary: depth_error.to_string(),
+                            rollback: revert_err.clone(),
+                            unlock: "ok".into(),
+                        }),
+                        (None, Some(unlock_err)) => Err(JmcpError::CandidateCleanupFailed {
+                            primary: depth_error.to_string(),
+                            rollback: if loaded > 0 { "ok" } else { "skipped" }.into(),
+                            unlock: unlock_err.clone(),
+                        }),
+                        (None, None) => Err(depth_error),
+                    };
+                }
+            }
+
             let load_result = match resolved {
                 ResolvedAction::Rollback(rollback) => cfg.rollback(rollback).await,
                 ResolvedAction::Load(payload, load_action) => {
@@ -719,6 +792,22 @@ impl DeviceTransaction for JunosTransaction {
     async fn rollback(&self, to: RollbackRef) -> Result<RollbackOutcome, Self::Error> {
         match to {
             RollbackRef::Archive(n) => {
+                // Defense-in-depth (MEC-1879, H10): no caller reaches this
+                // variant today, but refuse on a plane-owned device the same
+                // way `stage()` and `create_junos_change_set` do, so a future
+                // mecmcp version that starts calling `rollback()` directly
+                // cannot bypass the guard just by not going through a change set.
+                let authority = {
+                    let inv = self.device_manager.inventory();
+                    inv.get(&self.router)?.config_authority.clone()
+                };
+                crate::helpers::check_plane_owned_rollback_depth(
+                    "rollback_archive",
+                    &self.router,
+                    &authority,
+                    n,
+                )?;
+
                 // Defect #6: Archive rollback leaks the lock. After acquiring the lock,
                 // an invalid or unavailable archive makes rollback(n) return without
                 // unlocking, and a successful load followed by a known commit rejection
@@ -1369,6 +1458,72 @@ mod tests {
             Arc::new(DeviceManager::new(Arc::new(Inventory::empty()))),
             "no-such-router".to_owned(),
         )
+    }
+
+    /// A transaction over a router that exists in inventory with the given
+    /// `config_authority`, but is never actually dialled: every test using
+    /// this asserts on the plane-owned rollback-depth guard, which (for
+    /// `RollbackRef::Archive`) runs on the inventory lookup alone, before
+    /// `device_manager.open()`. Reaching a real connection attempt is itself
+    /// the signal that the guard stopped running first.
+    fn plane_owned_transaction(authority: &str) -> JunosTransaction {
+        use crate::{device_manager::DeviceManager, inventory::Inventory};
+        use std::io::Write;
+        use std::sync::Arc;
+
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(
+            format!(
+                r#"{{"r1":{{"ip":"127.0.0.1","username":"u","auth":{{"type":"password","password":"x"}},"config_authority":"{authority}"}}}}"#,
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+
+        JunosTransaction::new(
+            Arc::new(DeviceManager::new(Arc::new(
+                Inventory::load(f.path()).unwrap(),
+            ))),
+            "r1".to_owned(),
+        )
+    }
+
+    /// MEC-1879 H10: `RollbackRef::Archive` has no caller today, but refuses
+    /// depth >= 1 on a plane-owned device anyway, so a future mecmcp version
+    /// that starts calling `rollback()` directly cannot bypass the guard just
+    /// by not going through a change set.
+    #[tokio::test]
+    async fn rollback_archive_refuses_depth_one_on_plane_owned_device() {
+        let txn = plane_owned_transaction("mist");
+        let err = txn
+            .rollback(RollbackRef::Archive(1))
+            .await
+            .expect_err("depth 1 on a plane-owned device must be refused");
+
+        assert!(
+            matches!(
+                err,
+                JmcpError::PlaneOwnedRollbackDepthRefused { depth: 1, .. }
+            ),
+            "expected a depth-refusal error, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rollback_archive_refuses_deeper_depth_on_plane_owned_device() {
+        let txn = plane_owned_transaction("security-director-onprem");
+        let err = txn
+            .rollback(RollbackRef::Archive(10))
+            .await
+            .expect_err("depth 10 on a plane-owned device must be refused");
+
+        assert!(
+            matches!(
+                err,
+                JmcpError::PlaneOwnedRollbackDepthRefused { depth: 10, .. }
+            ),
+            "expected a depth-refusal error, got {err:?}"
+        );
     }
 
     fn action(payload: Option<&str>, rollback_source: Option<u32>) -> JunosAction {
