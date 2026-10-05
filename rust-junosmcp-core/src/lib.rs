@@ -7,6 +7,7 @@
 
 pub mod bootstrap;
 pub mod changeset_recovery;
+pub mod commit_attribution;
 pub mod config_authority;
 pub mod device_manager;
 pub mod error;
