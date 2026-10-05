@@ -512,56 +512,56 @@ impl DeviceTransaction for JunosTransaction {
                     inv.get(&self.router)?.config_authority.clone()
                 };
 
-                let depth_check: Result<(), JmcpError> = if !authority.is_plane_owned()
-                    || *rollback == 0
-                {
-                    Ok(())
-                } else if *rollback == 1 {
-                    // Re-read entry 0 fresh, inside the candidate lock, rather
-                    // than trusting the plan's create-time snapshot (MEC-1880,
-                    // §5.5 TOCTOU binding): a commit can land on the device
-                    // between create and apply. The NETCONF candidate lock is
-                    // device-side RPC state independent of this
-                    // `ConfigManager` handle's lifetime (lock/unlock are
-                    // explicit RPCs, not a `Drop` effect), so dropping and
-                    // reacquiring the handle to free `dev` for a plain CLI
-                    // read does not release it.
-                    drop(cfg);
-                    let log = dev.cli("show system commit").await;
-                    let fresh_cfg = match dev.config() {
-                        Ok(fresh) => fresh,
-                        Err(error) => {
-                            // No candidate-manager handle to revert or unlock
-                            // through; the session is already non-reusable
-                            // (`prevent_reuse` above) and stays that way.
-                            // Failing hard here is fail-closed: we cannot
-                            // reconstruct the shared cleanup path below
-                            // without a `cfg` to call it on.
-                            return Err(error.into());
-                        }
-                    };
-                    cfg = fresh_cfg;
+                let depth_check: Result<(), JmcpError> =
+                    if !authority.is_plane_owned() || *rollback == 0 {
+                        Ok(())
+                    } else if *rollback == 1 {
+                        // Re-read entry 0 fresh, inside the candidate lock, rather
+                        // than trusting the plan's create-time snapshot (MEC-1880,
+                        // §5.5 TOCTOU binding): a commit can land on the device
+                        // between create and apply. The NETCONF candidate lock is
+                        // device-side RPC state independent of this
+                        // `ConfigManager` handle's lifetime (lock/unlock are
+                        // explicit RPCs, not a `Drop` effect — it borrows `dev`
+                        // but carries no `Drop` impl of its own), so ending its
+                        // borrow here to free `dev` for a plain CLI read does
+                        // not release the device-side lock.
+                        let _ = cfg;
+                        let log = dev.cli("show system commit").await;
+                        let fresh_cfg = match dev.config() {
+                            Ok(fresh) => fresh,
+                            Err(error) => {
+                                // No candidate-manager handle to revert or unlock
+                                // through; the session is already non-reusable
+                                // (`prevent_reuse` above) and stays that way.
+                                // Failing hard here is fail-closed: we cannot
+                                // reconstruct the shared cleanup path below
+                                // without a `cfg` to call it on.
+                                return Err(error.into());
+                            }
+                        };
+                        cfg = fresh_cfg;
 
-                    let fresh_entry = log
-                        .ok()
-                        .and_then(|log| crate::commit_attribution::parse_newest_entry(&log));
-                    match (&fresh_entry, actions[loaded].commit0.as_ref()) {
-                        (Some(fresh_entry), Some(binding)) if binding.matches(fresh_entry) => {
-                            Ok(())
+                        let fresh_entry = log
+                            .ok()
+                            .and_then(|log| crate::commit_attribution::parse_newest_entry(&log));
+                        match (&fresh_entry, actions[loaded].commit0.as_ref()) {
+                            (Some(fresh_entry), Some(binding)) if binding.matches(fresh_entry) => {
+                                Ok(())
+                            }
+                            _ => Err(JmcpError::CommitLogMoved {
+                                tool: "apply_junos_change_set",
+                                device: self.router.clone(),
+                            }),
                         }
-                        _ => Err(JmcpError::CommitLogMoved {
-                            tool: "apply_junos_change_set",
-                            device: self.router.clone(),
-                        }),
-                    }
-                } else {
-                    crate::helpers::check_plane_owned_rollback_deep_depth(
-                        "apply_junos_change_set",
-                        &self.router,
-                        &authority,
-                        *rollback,
-                    )
-                };
+                    } else {
+                        crate::helpers::check_plane_owned_rollback_deep_depth(
+                            "apply_junos_change_set",
+                            &self.router,
+                            &authority,
+                            *rollback,
+                        )
+                    };
 
                 if let Err(depth_error) = depth_check {
                     // Same cleanup contract as a load failure below, but the

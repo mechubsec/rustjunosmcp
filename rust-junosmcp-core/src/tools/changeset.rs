@@ -860,6 +860,38 @@ pub async fn cancel_change_set_with_cancel(
     }))
 }
 
+/// Attach commit-0 attribution, the confirm deadline, and the fixed advisory
+/// text (MEC-1880, §5.6) to a guarded plane-owned `rollback_source: 1`
+/// apply's response. Never attaches anything implying the device is "in
+/// sync" with the owning plane — this server has no way to verify that.
+fn attach_commit_zero_advisory(
+    result: &mut Value,
+    binding: &crate::commit_attribution::CommitZeroBinding,
+    confirm_deadline_unix: Option<u64>,
+) {
+    let obj = result
+        .as_object_mut()
+        .expect("json! macro produces an object here");
+    obj.insert(
+        "commit0_attribution".to_string(),
+        json!({
+            "class": "non_plane",
+            "sequence": binding.sequence,
+            "timestamp": binding.timestamp,
+            "user": binding.user,
+            "client": binding.client,
+        }),
+    );
+    obj.insert(
+        "confirm_deadline_unix".to_string(),
+        json!(confirm_deadline_unix),
+    );
+    obj.insert(
+        "advisory".to_string(),
+        json!(crate::commit_attribution::PLANE_OWNED_ROLLBACK_ADVISORY),
+    );
+}
+
 /// Apply an approved change set.
 pub async fn apply_change_set(
     args: ApplyChangeSetArgs,
@@ -942,9 +974,18 @@ pub async fn apply_change_set_with_cancel(
     // hardcoding "merge" (Percy review, rustjunosmcp#425 F4: an override
     // apply used to be logged as a merge).
     let mut resolved_modes: Vec<&'static str> = Vec::new();
+    // Set when this change set is a guarded plane-owned `rollback_source: 1`
+    // (MEC-1880, §5.6): carries the commit-0 binding through to the response
+    // built after commit, so the approver-facing output can say what commit 0
+    // was attributed to without re-deriving it or re-reading the device.
+    let mut guarded_rollback_commit0: Option<crate::commit_attribution::CommitZeroBinding> = None;
     for action_value in &change_set_record.actions {
         let action: JunosAction = serde_json::from_value(action_value.clone())
             .map_err(|e| JmcpError::Validation(format!("failed to deserialize action: {e}")))?;
+
+        if action.rollback_source == Some(1) && device_entry.config_authority.is_plane_owned() {
+            guarded_rollback_commit0 = action.commit0.clone();
+        }
 
         if let Some(payload) = &action.payload {
             let format = payload.format.as_deref().unwrap_or("set");
@@ -981,6 +1022,20 @@ pub async fn apply_change_set_with_cancel(
         }
         // Rollback actions do not need policy checks and carry no load mode.
     }
+
+    // The deadline this apply requested via `confirm_timeout_mins` (MEC-45's
+    // commit-confirmed default), surfaced alongside `commit0_attribution` on a
+    // guarded rollback (§5.6) so the approver sees the same window whichever
+    // commit-outcome arm below actually returns. `AwaitingConfirmation`'s own
+    // `rollback_deadline_unix` is more authoritative when present and is used
+    // instead in that arm.
+    let requested_confirm_deadline_unix = confirm_mins_used.map(|(_, secs)| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_secs())
+            .unwrap_or(0);
+        now + u64::from(secs)
+    });
 
     // Build the transaction backend.
     let transaction = JunosTransaction::new(dm.clone(), args.device.clone());
@@ -1197,6 +1252,9 @@ pub async fn apply_change_set_with_cancel(
                     .expect("json! macro produces an object here")
                     .insert("config_authority_warning".to_string(), json!(warning));
             }
+            if let Some(binding) = &guarded_rollback_commit0 {
+                attach_commit_zero_advisory(&mut result, binding, requested_confirm_deadline_unix);
+            }
             Ok(result)
         }
         // A device that refuses the commit reports it as an *outcome*, not an
@@ -1268,6 +1326,9 @@ pub async fn apply_change_set_with_cancel(
                     .expect("json! macro produces an object here")
                     .insert("config_authority_warning".to_string(), json!(warning));
             }
+            if let Some(binding) = &guarded_rollback_commit0 {
+                attach_commit_zero_advisory(&mut result, binding, requested_confirm_deadline_unix);
+            }
             Ok(result)
         }
         CommitOutcome::AwaitingConfirmation {
@@ -1289,6 +1350,11 @@ pub async fn apply_change_set_with_cancel(
                     .as_object_mut()
                     .expect("json! macro produces an object here")
                     .insert("config_authority_warning".to_string(), json!(warning));
+            }
+            if let Some(binding) = &guarded_rollback_commit0 {
+                // The device's own deadline is authoritative here, unlike the
+                // requested-at-apply-time fallback used in the other two arms.
+                attach_commit_zero_advisory(&mut result, binding, Some(rollback_deadline_unix));
             }
             Ok(result)
         }
@@ -2687,8 +2753,8 @@ mod tests {
                 actions: vec![JunosAction {
                     payload: None,
                     rollback_source: None,
-            ..Default::default()
-        }],
+                    ..Default::default()
+                }],
             },
             dm.clone(),
             coordinator.clone(),
@@ -2721,8 +2787,8 @@ mod tests {
                         mode: None,
                     }),
                     rollback_source: None,
-            ..Default::default()
-        }],
+                    ..Default::default()
+                }],
             },
             dm,
             coordinator,
@@ -2763,8 +2829,8 @@ mod tests {
                             mode: None,
                         }),
                         rollback_source: Some(1),
-            ..Default::default()
-        }],
+                        ..Default::default()
+                    }],
                 },
                 dm,
                 coordinator,
@@ -2973,8 +3039,8 @@ mod tests {
                         mode: Some("override".into()),
                     }),
                     rollback_source: None,
-            ..Default::default()
-        }],
+                    ..Default::default()
+                }],
             },
             dm,
             coordinator,
@@ -3015,8 +3081,8 @@ mod tests {
                         mode: None,
                     }),
                     rollback_source: None,
-            ..Default::default()
-        }],
+                    ..Default::default()
+                }],
             },
             dm,
             coordinator,
@@ -3060,8 +3126,8 @@ mod tests {
                         mode: Some("wipe".into()),
                     }),
                     rollback_source: None,
-            ..Default::default()
-        }],
+                    ..Default::default()
+                }],
             },
             dm.clone(),
             coordinator.clone(),
@@ -3087,8 +3153,8 @@ mod tests {
                         mode: None,
                     }),
                     rollback_source: None,
-            ..Default::default()
-        }],
+                    ..Default::default()
+                }],
             },
             dm,
             coordinator,
@@ -3129,8 +3195,8 @@ mod tests {
                         mode: Some("override".into()),
                     }),
                     rollback_source: None,
-            ..Default::default()
-        }],
+                    ..Default::default()
+                }],
             },
             dm,
             coordinator,

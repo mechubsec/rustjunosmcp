@@ -18,6 +18,22 @@
 //! Classification is fail-closed by construction: every condition in
 //! [`classify_commit_zero`] that cannot positively prove a non-plane commit
 //! returns `Ambiguous` or a stricter class, never `NonPlane`.
+//!
+//! # Threat-model note: clustered-device residual window (MEC-1876 §12 Q3, open)
+//!
+//! The §5.5 TOCTOU binding re-reads entry 0 inside *this session's* candidate
+//! lock at apply time, which closes the race for a standalone device. On a
+//! chassis cluster, locking opens a *private* candidate configuration
+//! database scoped to the locking session (MEC-153); the commit log this
+//! module reads is the shared, committed history, not that private database.
+//! A second session on the other routing engine can commit — and overwrite
+//! entry 0 — after this module's apply-time re-read returns `Ok` but before
+//! this session's own commit lands, because the re-read and this session's
+//! commit are not atomic with respect to a commit from outside this lock.
+//! Closing that fully would require the shared-candidate behavior MEC-153
+//! describes, which this change does not implement. This residual window is
+//! accepted here, not fixed; it must be confirmed by Percy during review
+//! (MEC-1880 acceptance criteria) rather than treated as already closed.
 
 use crate::helpers::excerpt;
 use crate::tools::transfer_file::hex32;
@@ -54,7 +70,9 @@ fn is_header_line(line: &str) -> bool {
     !line.starts_with(' ')
         && line
             .split_once(char::is_whitespace)
-            .is_some_and(|(first, _)| !first.is_empty() && first.bytes().all(|b| b.is_ascii_digit()))
+            .is_some_and(|(first, _)| {
+                !first.is_empty() && first.bytes().all(|b| b.is_ascii_digit())
+            })
 }
 
 /// Parse one header line into its fields.
@@ -197,9 +215,14 @@ pub fn classify_commit_zero(
     }
 
     let logins_unusable = plane_commit_logins.is_empty()
-        || plane_commit_logins.iter().any(|login| login == device_login);
+        || plane_commit_logins
+            .iter()
+            .any(|login| login == device_login);
     let no_login_session = entry.user == "root" && entry.client == "other";
-    let automated_client = matches!(entry.client.as_str(), "synchronize" | "autoinstall" | "button");
+    let automated_client = matches!(
+        entry.client.as_str(),
+        "synchronize" | "autoinstall" | "button"
+    );
 
     if logins_unusable || no_login_session || automated_client {
         return CommitZeroClass::Ambiguous;
