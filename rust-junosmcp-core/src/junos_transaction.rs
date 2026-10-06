@@ -32,6 +32,24 @@ pub struct JunosAction {
     /// Exactly one of `payload` or `rollback_source` must be set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rollback_source: Option<u32>,
+    /// Reserved: server-computed only. `create_junos_change_set` rejects
+    /// any caller-supplied value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub commit0: Option<crate::commit_attribution::CommitZeroBinding>,
+}
+
+impl Default for JunosAction {
+    /// All-`None` default, so existing test literals that predate `commit0`
+    /// can opt in with `..Default::default()` instead of being rewritten one
+    /// by one.
+    fn default() -> Self {
+        Self {
+            payload: None,
+            rollback_source: None,
+            commit0: None,
+        }
+    }
 }
 
 impl JunosAction {
@@ -482,16 +500,97 @@ impl DeviceTransaction for JunosTransaction {
             // plane-owned in `devices.json` between create and apply; reading
             // the inventory fresh on every staged action closes that window.
             if let ResolvedAction::Rollback(rollback) = &resolved {
-                let depth_check: Result<(), JmcpError> = {
+                // Looked up as a `Result` rather than `?`-propagated: an
+                // unknown-router error here must still go through the same
+                // revert/unlock cleanup as any other depth-check failure
+                // below, not skip it via an early return (F2, Percy review
+                // rustjunosmcp#495).
+                let inventory_lookup: Result<(_, _, _), JmcpError> = {
                     let inv = self.device_manager.inventory();
-                    inv.get(&self.router).and_then(|entry| {
-                        crate::helpers::check_plane_owned_rollback_depth(
-                            "apply_junos_change_set",
-                            &self.router,
-                            &entry.config_authority,
-                            *rollback,
+                    inv.get(&self.router).map(|entry| {
+                        (
+                            entry.config_authority.clone(),
+                            entry.plane_commit_logins.clone(),
+                            entry.username.clone(),
                         )
                     })
+                };
+
+                let depth_check: Result<(), JmcpError> = match inventory_lookup {
+                    Err(lookup_error) => Err(lookup_error),
+                    Ok((authority, plane_commit_logins, device_login)) => {
+                        if !authority.is_plane_owned() || *rollback == 0 {
+                            Ok(())
+                        } else if *rollback == 1 {
+                            // Re-read entry 0 fresh, inside the candidate lock, rather
+                            // than trusting the plan's create-time snapshot (MEC-1880,
+                            // §5.5 TOCTOU binding): a commit can land on the device
+                            // between create and apply. The NETCONF candidate lock is
+                            // device-side RPC state independent of this
+                            // `ConfigManager` handle's lifetime (lock/unlock are
+                            // explicit RPCs, not a `Drop` effect — it borrows `dev`
+                            // but carries no `Drop` impl of its own), so ending its
+                            // borrow here to free `dev` for a plain CLI read does
+                            // not release the device-side lock.
+                            let _ = cfg;
+                            let log = dev.cli("show system commit").await;
+                            let fresh_cfg = match dev.config() {
+                                Ok(fresh) => fresh,
+                                Err(error) => {
+                                    // No candidate-manager handle to revert or unlock
+                                    // through; the session is already non-reusable
+                                    // (`prevent_reuse` above) and stays that way.
+                                    // Failing hard here is fail-closed: we cannot
+                                    // reconstruct the shared cleanup path below
+                                    // without a `cfg` to call it on.
+                                    return Err(error.into());
+                                }
+                            };
+                            cfg = fresh_cfg;
+
+                            let fresh_entry = log.ok().and_then(|log| {
+                                crate::commit_attribution::parse_newest_entry(&log)
+                            });
+
+                            // Re-check both the binding and the classification,
+                            // not just the binding, and distinguish the two
+                            // refusal reasons (F3, Percy review rustjunosmcp#495):
+                            // a binding mismatch means the commit log moved since
+                            // approval, while a binding match that now fails
+                            // classification means the allowlist or log changed,
+                            // not that the log moved.
+                            use crate::commit_attribution::RollbackOneApplyOutcome;
+                            match crate::commit_attribution::rollback_one_apply_check(
+                                actions[loaded].commit0.as_ref(),
+                                fresh_entry.as_ref(),
+                                &plane_commit_logins,
+                                &device_login,
+                            ) {
+                                RollbackOneApplyOutcome::Permitted => Ok(()),
+                                RollbackOneApplyOutcome::CommitLogMoved => {
+                                    Err(JmcpError::CommitLogMoved {
+                                        tool: "apply_junos_change_set",
+                                        device: self.router.clone(),
+                                    })
+                                }
+                                RollbackOneApplyOutcome::ClassRefused(class) => {
+                                    Err(JmcpError::PlaneOwnedRollbackOneRefused {
+                                        tool: "apply_junos_change_set",
+                                        device: self.router.clone(),
+                                        authority: authority.as_str().to_string(),
+                                        class: class.as_str(),
+                                    })
+                                }
+                            }
+                        } else {
+                            crate::helpers::check_plane_owned_rollback_deep_depth(
+                                "apply_junos_change_set",
+                                &self.router,
+                                &authority,
+                                *rollback,
+                            )
+                        }
+                    }
                 };
 
                 if let Err(depth_error) = depth_check {
@@ -1532,6 +1631,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source,
+            ..Default::default()
         }
     }
 
@@ -1545,6 +1645,7 @@ mod tests {
                 mode: Some(mode.to_owned()),
             }),
             rollback_source: None,
+            ..Default::default()
         }
     }
 
@@ -1573,6 +1674,19 @@ mod tests {
     fn config_payload_spec_mode_defaults_to_none() {
         let spec: ConfigPayloadSpec = serde_json::from_str(r#"{"text":"set x"}"#).unwrap();
         assert_eq!(spec.mode, None);
+    }
+
+    /// `#[schemars(skip)]` on `commit0` hides it from the tool's advertised
+    /// input schema (rustjunosmcp#495 F1) but must not become `#[serde(skip)]`
+    /// by mistake — `create_junos_change_set` still has to see and reject a
+    /// caller-supplied value rather than silently drop it.
+    #[test]
+    fn commit0_still_deserializes_despite_being_hidden_from_the_schema() {
+        let action: JunosAction = serde_json::from_str(
+            r#"{"rollback_source":1,"commit0":{"sequence":0,"timestamp":"t","user":"u","client":"c","comment_sha256":""}}"#,
+        )
+        .unwrap();
+        assert!(action.commit0.is_some());
     }
 
     /// `payload` and `rollback_source` are mutually exclusive. Staging both
