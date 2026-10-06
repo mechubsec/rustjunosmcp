@@ -528,7 +528,7 @@ pub async fn create_change_set(
 
 /// Cancellable variant of `create_change_set` for use in transport shutdown paths.
 pub async fn create_change_set_with_cancel(
-    args: CreateChangeSetArgs,
+    mut args: CreateChangeSetArgs,
     dm: Arc<DeviceManager>,
     coordinator: Arc<ChangesetCoordinator>,
     policy: Arc<Policy>,
@@ -572,6 +572,11 @@ pub async fn create_change_set_with_cancel(
         }
     }
 
+    // Set when this create classifies commit 0 for a guarded `rollback_source:
+    // 1` (MEC-1880, §5.6): the redacted, length-capped attribution shown to
+    // the creator, threaded into both response branches below.
+    let mut commit0_output: Option<Value> = None;
+
     // Rollback-depth guard on plane-owned devices (MEC-1879, P5a). Checked
     // before the override/lab-mode gate below and before policy, since it
     // must refuse unconditionally — no flag or lab-mode waiver may bypass it.
@@ -605,22 +610,62 @@ pub async fn create_change_set_with_cancel(
                 });
             }
 
-            // args.actions.len() == 1 (checked above) and rollback_count > 0
-            // (checked above): the sole action is the rollback. Depth >= 1 is
-            // refused unconditionally on a plane-owned device until
-            // commit-origin attribution (MEC-1880, P5b) exists to tell this
-            // server's own commits from the plane's — depth 0 is a no-op
-            // load and needs no attribution, so it is allowed through.
+            // rollback_count == args.actions.len() (checked above): there is
+            // exactly one action, and it is the rollback. Depth 0 is a no-op
+            // load and needs no attribution. Depth >= 2 is refused
+            // unconditionally regardless of attribution (greater blast radius
+            // than commit-0 attribution can speak to). Depth 1 is the one case
+            // commit-0 attribution (MEC-1880, P5b) can positively clear: only
+            // when the device's own commit log shows the current running
+            // config was not committed by the owning plane.
             let depth = args.actions[0]
                 .rollback_source
                 .expect("args.actions.len() == 1 and rollback_count > 0 imply the sole action carries rollback_source");
 
-            crate::helpers::check_plane_owned_rollback_depth(
-                "create_junos_change_set",
-                &args.device,
-                &config_authority,
-                depth,
-            )?;
+            if depth == 1 {
+                let (device_login, plane_commit_logins) = {
+                    let inv = dm.inventory();
+                    let entry = inv.get(&args.device)?;
+                    (entry.username.clone(), entry.plane_commit_logins.clone())
+                };
+                let (class, entry) = crate::commit_attribution::classify_commit_zero_for_router(
+                    &dm,
+                    &args.device,
+                    &plane_commit_logins,
+                    &device_login,
+                )
+                .await;
+
+                if !class.allows_rollback_one() {
+                    return Err(JmcpError::PlaneOwnedRollbackOneRefused {
+                        tool: "create_junos_change_set",
+                        device: args.device.clone(),
+                        authority: config_authority.as_str().to_string(),
+                        class: class.as_str(),
+                    });
+                }
+
+                commit0_output = Some(crate::commit_attribution::commit0_attribution_output(
+                    entry.as_ref(),
+                    class,
+                ));
+
+                // Bind commit 0 into the plan so apply time can detect the
+                // commit log moving underneath it (MEC-1880, §5.5 TOCTOU
+                // binding). `entry` is always `Some` here: `Unreadable` (the
+                // only class that can have a `None` entry) never reaches this
+                // line because it fails `allows_rollback_one` above.
+                args.actions[0].commit0 = entry
+                    .as_ref()
+                    .map(crate::commit_attribution::CommitZeroBinding::from_entry);
+            } else {
+                crate::helpers::check_plane_owned_rollback_deep_depth(
+                    "create_junos_change_set",
+                    &args.device,
+                    &config_authority,
+                    depth,
+                )?;
+            }
         }
     }
 
@@ -715,22 +760,36 @@ pub async fn create_change_set_with_cancel(
             .await
             .map_err(|e| JmcpError::Validation(e.to_string()))?;
 
-        return Ok(json!({
+        let mut waived_result = json!({
             "change_set_id": waived.change_set_id,
             "plan_digest": waived.digest,
             "state": format!("{:?}", waived.state),
             "approver": waived.approver,
             "approval_waiver": waived.approval_waiver,
             "message": "change set created and approval waived: this server runs in lab mode, so no second principal reviewed it"
-        }));
+        });
+        if let Some(commit0) = commit0_output {
+            waived_result
+                .as_object_mut()
+                .expect("json! macro produces an object here")
+                .insert("commit0_attribution".to_string(), commit0);
+        }
+        return Ok(waived_result);
     }
 
-    Ok(json!({
+    let mut created_result = json!({
         "change_set_id": result.change_set_id,
         "plan_digest": result.digest,
         "state": format!("{:?}", result.state),
         "message": "change set created; awaiting approval by a second principal"
-    }))
+    });
+    if let Some(commit0) = commit0_output {
+        created_result
+            .as_object_mut()
+            .expect("json! macro produces an object here")
+            .insert("commit0_attribution".to_string(), commit0);
+    }
+    Ok(created_result)
 }
 
 /// Approve a change set (second principal).
@@ -825,6 +884,38 @@ pub async fn cancel_change_set_with_cancel(
     }))
 }
 
+/// Attach commit-0 attribution, the confirm deadline, and the fixed advisory
+/// text (MEC-1880, §5.6) to a guarded plane-owned `rollback_source: 1`
+/// apply's response. Never attaches anything implying the device is "in
+/// sync" with the owning plane — this server has no way to verify that.
+fn attach_commit_zero_advisory(
+    result: &mut Value,
+    binding: &crate::commit_attribution::CommitZeroBinding,
+    confirm_deadline_unix: Option<u64>,
+) {
+    let obj = result
+        .as_object_mut()
+        .expect("json! macro produces an object here");
+    obj.insert(
+        "commit0_attribution".to_string(),
+        json!({
+            "class": "non_plane",
+            "sequence": binding.sequence,
+            "timestamp": binding.timestamp,
+            "user": binding.user,
+            "client": binding.client,
+        }),
+    );
+    obj.insert(
+        "confirm_deadline_unix".to_string(),
+        json!(confirm_deadline_unix),
+    );
+    obj.insert(
+        "advisory".to_string(),
+        json!(crate::commit_attribution::PLANE_OWNED_ROLLBACK_ADVISORY),
+    );
+}
+
 /// Apply an approved change set.
 pub async fn apply_change_set(
     args: ApplyChangeSetArgs,
@@ -907,9 +998,18 @@ pub async fn apply_change_set_with_cancel(
     // hardcoding "merge" (Percy review, rustjunosmcp#425 F4: an override
     // apply used to be logged as a merge).
     let mut resolved_modes: Vec<&'static str> = Vec::new();
+    // Set when this change set is a guarded plane-owned `rollback_source: 1`
+    // (MEC-1880, §5.6): carries the commit-0 binding through to the response
+    // built after commit, so the approver-facing output can say what commit 0
+    // was attributed to without re-deriving it or re-reading the device.
+    let mut guarded_rollback_commit0: Option<crate::commit_attribution::CommitZeroBinding> = None;
     for action_value in &change_set_record.actions {
         let action: JunosAction = serde_json::from_value(action_value.clone())
             .map_err(|e| JmcpError::Validation(format!("failed to deserialize action: {e}")))?;
+
+        if action.rollback_source == Some(1) && device_entry.config_authority.is_plane_owned() {
+            guarded_rollback_commit0 = action.commit0.clone();
+        }
 
         if let Some(payload) = &action.payload {
             let format = payload.format.as_deref().unwrap_or("set");
@@ -946,6 +1046,20 @@ pub async fn apply_change_set_with_cancel(
         }
         // Rollback actions do not need policy checks and carry no load mode.
     }
+
+    // The deadline this apply requested via `confirm_timeout_mins` (MEC-45's
+    // commit-confirmed default), surfaced alongside `commit0_attribution` on a
+    // guarded rollback (§5.6) so the approver sees the same window whichever
+    // commit-outcome arm below actually returns. `AwaitingConfirmation`'s own
+    // `rollback_deadline_unix` is more authoritative when present and is used
+    // instead in that arm.
+    let requested_confirm_deadline_unix = confirm_mins_used.map(|(_, secs)| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_secs())
+            .unwrap_or(0);
+        now + u64::from(secs)
+    });
 
     // Build the transaction backend.
     let transaction = JunosTransaction::new(dm.clone(), args.device.clone());
@@ -1162,6 +1276,9 @@ pub async fn apply_change_set_with_cancel(
                     .expect("json! macro produces an object here")
                     .insert("config_authority_warning".to_string(), json!(warning));
             }
+            if let Some(binding) = &guarded_rollback_commit0 {
+                attach_commit_zero_advisory(&mut result, binding, requested_confirm_deadline_unix);
+            }
             Ok(result)
         }
         // A device that refuses the commit reports it as an *outcome*, not an
@@ -1233,6 +1350,9 @@ pub async fn apply_change_set_with_cancel(
                     .expect("json! macro produces an object here")
                     .insert("config_authority_warning".to_string(), json!(warning));
             }
+            if let Some(binding) = &guarded_rollback_commit0 {
+                attach_commit_zero_advisory(&mut result, binding, requested_confirm_deadline_unix);
+            }
             Ok(result)
         }
         CommitOutcome::AwaitingConfirmation {
@@ -1254,6 +1374,11 @@ pub async fn apply_change_set_with_cancel(
                     .as_object_mut()
                     .expect("json! macro produces an object here")
                     .insert("config_authority_warning".to_string(), json!(warning));
+            }
+            if let Some(binding) = &guarded_rollback_commit0 {
+                // The device's own deadline is authoritative here, unlike the
+                // requested-at-apply-time fallback used in the other two arms.
+                attach_commit_zero_advisory(&mut result, binding, Some(rollback_deadline_unix));
             }
             Ok(result)
         }
@@ -2652,6 +2777,7 @@ mod tests {
                 actions: vec![JunosAction {
                     payload: None,
                     rollback_source: None,
+                    ..Default::default()
                 }],
             },
             dm.clone(),
@@ -2685,6 +2811,7 @@ mod tests {
                         mode: None,
                     }),
                     rollback_source: None,
+                    ..Default::default()
                 }],
             },
             dm,
@@ -2726,6 +2853,7 @@ mod tests {
                             mode: None,
                         }),
                         rollback_source: Some(1),
+                        ..Default::default()
                     }],
                 },
                 dm,
@@ -2750,6 +2878,7 @@ mod tests {
         JunosAction {
             payload: None,
             rollback_source: Some(depth),
+            ..Default::default()
         }
     }
 
@@ -2761,6 +2890,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         }
     }
 
@@ -2808,15 +2938,17 @@ mod tests {
         );
     }
 
-    /// MEC-1879 P5a: `rollback_source: 1` on a plane-owned device is refused
-    /// at create, fail-closed, until commit-origin attribution (MEC-1880,
-    /// P5b) exists.
+    /// MEC-1880 P5b: `rollback_source: 1` on a plane-owned device is refused
+    /// at create when commit-0 attribution cannot positively clear it. This
+    /// fixture's device has no `plane_commit_logins` declared and is
+    /// unreachable, so the classifier fails closed to `unreadable` — the
+    /// no-evidence default, not `non_plane`.
     #[tokio::test]
     async fn create_change_set_refuses_rollback_depth_one_on_plane_owned_device() {
         let r = create_on_plane_owned_device("mist", vec![rollback_action(1)], false).await;
         match r {
-            Err(JmcpError::PlaneOwnedRollbackDepthRefused { depth, .. }) => {
-                assert_eq!(depth, 1);
+            Err(JmcpError::PlaneOwnedRollbackOneRefused { class, .. }) => {
+                assert_eq!(class, "unreadable");
             }
             other => panic!("expected depth 1 to be refused, got {other:?}"),
         }
@@ -2947,6 +3079,7 @@ mod tests {
                         mode: Some("override".into()),
                     }),
                     rollback_source: None,
+                    ..Default::default()
                 }],
             },
             dm,
@@ -2988,6 +3121,7 @@ mod tests {
                         mode: None,
                     }),
                     rollback_source: None,
+                    ..Default::default()
                 }],
             },
             dm,
@@ -3032,6 +3166,7 @@ mod tests {
                         mode: Some("wipe".into()),
                     }),
                     rollback_source: None,
+                    ..Default::default()
                 }],
             },
             dm.clone(),
@@ -3058,6 +3193,7 @@ mod tests {
                         mode: None,
                     }),
                     rollback_source: None,
+                    ..Default::default()
                 }],
             },
             dm,
@@ -3099,6 +3235,7 @@ mod tests {
                         mode: Some("override".into()),
                     }),
                     rollback_source: None,
+                    ..Default::default()
                 }],
             },
             dm,
@@ -3140,6 +3277,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create_result =
             create_change_set(
@@ -3212,6 +3350,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create_result =
             create_change_set(
@@ -3282,6 +3421,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create_result =
             create_change_set(
@@ -3359,6 +3499,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let r1_result = create_change_set(
             CreateChangeSetArgs {
@@ -3382,6 +3523,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let r2_result = create_change_set(
             CreateChangeSetArgs {
@@ -3479,6 +3621,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create_result = create_change_set(
             CreateChangeSetArgs {
@@ -3524,6 +3667,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create2 = create_change_set(
             CreateChangeSetArgs {
@@ -3565,6 +3709,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create_result = create_change_set(
             CreateChangeSetArgs {
@@ -3635,6 +3780,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source: None,
+            ..Default::default()
         };
         let create_result = create_change_set(
             CreateChangeSetArgs {
