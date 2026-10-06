@@ -1,0 +1,37 @@
+{
+  "date_utc": "2026-10-06T00:28:27Z",
+  "target": "lab",
+  "target_junos_version": "26.2R1.7",
+  "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+  "logical_cpus": 32,
+  "mem_gib": 124.9,
+  "kernel": "7.2.9-1-cachyos",
+  "harness_python": "3.13.15",
+  "servers": {
+    "rustjunosmcp-0.27.2": {
+      "flavour": "rustjunosmcp",
+      "version": "0.27.2",
+      "commit": "864ca6cb4ea0f91e2435c10914532ca5a067b889"
+    },
+    "juniper-1.1.1": {
+      "flavour": "juniper",
+      "version": "1.1.1",
+      "commit": "0fe6354dfc209a11e491f23e5cc1ecfa050ed069"
+    },
+    "shigechika-0.18.0": {
+      "flavour": "shigechika",
+      "version": "0.18.0",
+      "commit": "ecec068bf5cfeb53625cc35e9b36a946d9a19166"
+    },
+    "shigechika-0.22.0": {
+      "flavour": "shigechika",
+      "version": "0.22.0",
+      "commit": "af4f84aed6687d1c2819263c4c5b32dbd0184daf"
+    }
+  },
+  "workload": {
+    "calls_per_op": 30,
+    "pace_ms": 2000,
+    "settle_s": 70
+  }
+}

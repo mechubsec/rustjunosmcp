@@ -33,18 +33,25 @@ Drop-in on `devices.json` and the core tools — plus a lot the Python/PyEZ serv
 
 ## Performance
 
-Benchmarked against [Juniper/junos-mcp-server](https://github.com/Juniper/junos-mcp-server)
-(Python/PyEZ) on the same vSRX lab devices, same network path.
+Benchmarked on 2026-10-05 against [Juniper/junos-mcp-server](https://github.com/Juniper/junos-mcp-server)
+1.1.1 and [shigechika/junos-mcp](https://github.com/shigechika/junos-mcp) 0.18.0 / 0.22.0
+with the same read-only workload on a vSRX lab device (Junos 26.2R1.7), 3 runs × 30 calls per operation, 0 failed calls.
+Medians across runs:
 
-| Test | rust-junosmcp (v0.3.0) | junos-mcp (Python) | Speedup |
-|------|------------------------|--------------------|---------|
-| 5 sequential commands | 30.4s (6.1s/cmd) | 52.2s (10.4s/cmd) | **1.7x** |
-| 5 parallel commands | 8.1s (1.6s/cmd) | 11.1s (2.2s/cmd) | **1.4x** |
-| 4 routers x 3 commands (batch) | 16.1s (1.3s/cmd) | N/A | Rust-only |
+| | rust-junosmcp 0.27.2 | Juniper 1.1.1 | shigechika 0.22.0 |
+|---|---|---|---|
+| Cold start | 6 ms | 264 ms | 392 ms |
+| Peak memory (RSS) | 20 MiB | 129 MiB | 98 MiB |
+| SSH connections per run | 1 | 121 | 1 |
+| `show version`, p50 | 216 ms | 878 ms | 228 ms |
+| config RPC (access-denied reply¹), p50 | 11 ms | 776 ms | 21 ms |
 
-Session pooling (`PooledDevice`) eliminates SSH/NETCONF handshake overhead
-on sequential commands to the same router. The batch tool runs routers in
-parallel with a configurable concurrency cap.
+¹ the read-only bench login has no configuration view, so this measures a
+round trip with a ~400-byte reply, not a full config fetch. See
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
+Full results, the mock-target overhead numbers, method and reproduction steps:
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 > ## v0.10.0 released — read before upgrading
 >
