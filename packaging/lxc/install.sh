@@ -431,8 +431,8 @@ fi
 # Deliberately left out of the ownership transfer above (see the fallback
 # comment near legacy_tokens_file below), so unlike the rest of this block its
 # mode fix still runs as root: chmod_as_service_user would fail whenever this
-# file is not already service-account-owned, which is expected here. That
-# root chmod keeps a narrower, pre-existing TOCTOU window on this one path.
+# file is not already service-account-owned, which is expected here. Not part
+# of the ownership transfer above, so its mode is fixed as root.
 if [[ -e "$legacy_tokens_file" ]]; then
     require_regular_file "$legacy_tokens_file"
     chmod 0600 "$legacy_tokens_file"
