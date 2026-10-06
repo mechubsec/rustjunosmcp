@@ -15,6 +15,19 @@ fail() {
     exit 1
 }
 
+# install(1) a secret file at mode 0600, owned by the service account —
+# except under JMCP_INSTALL_SKIP_USER=1 (staged smoke tests, non-root
+# development installs), where that account was never created and -o/-g
+# would fail with "invalid user".
+install_secret() {
+    local src="$1" dst="$2"
+    if [[ "$SKIP_USER_SETUP" != "1" ]]; then
+        install -m 0600 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$src" "$dst"
+    else
+        install -m 0600 "$src" "$dst"
+    fi
+}
+
 target_path() {
     local relative="${1#/}"
     if [[ "$INSTALL_ROOT" == "/" ]]; then
@@ -259,7 +272,7 @@ if [[ ! -e "$state_tokens_file" ]]; then
     else
         tokens_tmp=$(mktemp)
         printf '%s\n' '{"version":1,"tokens":[]}' >"$tokens_tmp"
-        install -m 0600 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$tokens_tmp" "$state_tokens_file"
+        install_secret "$tokens_tmp" "$state_tokens_file"
         rm -f "$tokens_tmp"
     fi
 fi
@@ -288,7 +301,7 @@ if [[ ! -e "$audit_key" ]]; then
         echo ">> WARNING: audit log will not be tamper-evident until the key is created" >&2
     fi
     if [[ -s "$audit_key_tmp" ]]; then
-        install -m 0600 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$audit_key_tmp" "$audit_key"
+        install_secret "$audit_key_tmp" "$audit_key"
     fi
     rm -f "$audit_key_tmp"
 fi
