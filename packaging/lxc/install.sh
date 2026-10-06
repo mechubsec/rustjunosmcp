@@ -67,14 +67,7 @@ require_plain_dir() {
     fi
 }
 
-# Set the mode on a pre-existing file as the service account rather than as
-# root. These files live under directories the service account owns, so
-# chmod-as-root is a check-then-act race: a swap between require_regular_file
-# and this call would make root chmod whatever the swap points at. Running the
-# chmod as the service account makes winning that race gain nothing the
-# account could not already do, because chmod requires the caller to own the
-# target (or be root). Newly created files already get their mode and owner
-# atomically from install_owned; this only covers files that pre-date this run.
+# Fix modes as the owning account, not as root.
 chmod_as_service_user() {
     local mode="$1" path="$2"
     if [[ "$SKIP_USER_SETUP" == "1" ]]; then
@@ -283,12 +276,30 @@ remove_legacy_runtime() {
     rm -f "$legacy_binary" "$legacy_unit"
 }
 
-for dir in "$BIN_DIR" "$UNIT_DIR" "$CONFIG_DIR" "$STATE_DIR" "$JUNOS_STAGING_DIR" "$SRX_STAGING_DIR" "$DEVICE_LEASE_DIR"; do
+for dir in "$BIN_DIR" "$UNIT_DIR" "$CONFIG_DIR" "$STATE_DIR"; do
     require_plain_dir "$dir"
 done
 install -d -m 0755 "$BIN_DIR" "$UNIT_DIR"
-install -d -m 0750 "$CONFIG_DIR" "$STATE_DIR" "$JUNOS_STAGING_DIR" "$SRX_STAGING_DIR"
-install -d -m 0700 "$DEVICE_LEASE_DIR"
+install -d -m 0750 "$CONFIG_DIR" "$STATE_DIR"
+
+# Create subdirectories as the owning account, not as root.
+if [[ "$SKIP_USER_SETUP" != "1" ]]; then
+    require_plain_dir "$STATE_DIR"
+    chown -R "$SERVICE_USER:$SERVICE_GROUP" "$STATE_DIR"
+fi
+
+for dir in "$JUNOS_STAGING_DIR" "$SRX_STAGING_DIR" "$DEVICE_LEASE_DIR"; do
+    require_plain_dir "$dir"
+done
+if [[ "$SKIP_USER_SETUP" != "1" ]]; then
+    runuser -u "$SERVICE_USER" -- install -d -m 0750 "$JUNOS_STAGING_DIR" "$SRX_STAGING_DIR" \
+        || fail "cannot create staging directories under $STATE_DIR as $SERVICE_USER"
+    runuser -u "$SERVICE_USER" -- install -d -m 0700 "$DEVICE_LEASE_DIR" \
+        || fail "cannot create device-lease directory under $STATE_DIR as $SERVICE_USER"
+else
+    install -d -m 0750 "$JUNOS_STAGING_DIR" "$SRX_STAGING_DIR"
+    install -d -m 0700 "$DEVICE_LEASE_DIR"
+fi
 
 remove_legacy_runtime
 
@@ -395,12 +406,10 @@ if [[ "$SKIP_USER_SETUP" != "1" ]]; then
     fi
     require_regular_file "$known_hosts_file"
     chown -h "$SERVICE_USER:$SERVICE_GROUP" "$known_hosts_file"
-    # chown -R covers device-leases/, staging/, and srx-staging/ subdirs,
-    # plus changeset-state.json, tokens.json, and audit-hmac.key. GNU chown -R
-    # does not follow symlinks while recursing by default, so an entry under
-    # this directory is re-owned by its own name, not by whatever it resolves to.
-    require_plain_dir "$STATE_DIR"
-    chown -R "$SERVICE_USER:$SERVICE_GROUP" "$STATE_DIR"
+    # STATE_DIR itself and its subdirectories were already transferred to the
+    # service account before they were created, above; the files under it
+    # (tokens.json, changeset-state.json, audit-hmac.key) are created already
+    # service-account-owned via install_owned. Nothing further to chown here.
 fi
 
 # Set modes on files that exist. devices.json may not exist on first install.
