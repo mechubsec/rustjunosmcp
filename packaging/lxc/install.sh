@@ -15,6 +15,14 @@ fail() {
     exit 1
 }
 
+# Remove any generated-content temp file left behind by a failed run. The
+# variables are plain (non-local) globals set just before each mktemp use, so
+# this is safe to call before any of them are assigned.
+cleanup_tmp_files() {
+    rm -f "${tokens_tmp:-}" "${known_hosts_tmp:-}" "${changeset_state_tmp:-}" "${audit_key_tmp:-}"
+}
+trap cleanup_tmp_files EXIT
+
 target_path() {
     local relative="${1#/}"
     if [[ "$INSTALL_ROOT" == "/" ]]; then
@@ -32,6 +40,24 @@ require_regular_file() {
     if [[ -L "$path" ]] || { [[ -e "$path" ]] && [[ ! -f "$path" ]]; }; then
         fail "$path is not a regular file; refusing"
     fi
+    # A staged smoke test (JMCP_INSTALL_SKIP_USER=1) has no service account
+    # and no privilege boundary between the installer and whatever created
+    # these paths, so the hard-link/ownership check below does not apply.
+    [[ "$SKIP_USER_SETUP" == "1" ]] && return 0
+    [[ -e "$path" ]] || return 0
+    local nlink owner_uid
+    nlink="$(stat -c %h -- "$path")" || fail "cannot stat $path"
+    owner_uid="$(stat -c %u -- "$path")" || fail "cannot stat $path"
+    if [[ "$nlink" != "1" ]]; then
+        fail "$path has $nlink hard links; refusing"
+    fi
+    if [[ "$owner_uid" != "0" ]]; then
+        local service_uid
+        service_uid="$(id -u "$SERVICE_USER" 2>/dev/null || true)"
+        if [[ -z "$service_uid" || "$owner_uid" != "$service_uid" ]]; then
+            fail "$path is not owned by root or $SERVICE_USER; refusing"
+        fi
+    fi
 }
 
 require_plain_dir() {
@@ -39,6 +65,25 @@ require_plain_dir() {
     if [[ -L "$path" ]] || { [[ -e "$path" ]] && [[ ! -d "$path" ]]; }; then
         fail "$path is not a directory; refusing"
     fi
+}
+
+# Set the mode on a pre-existing file as the service account rather than as
+# root. These files live under directories the service account owns, so
+# chmod-as-root is a check-then-act race: a swap between require_regular_file
+# and this call would make root chmod whatever the swap points at. Running the
+# chmod as the service account makes winning that race gain nothing the
+# account could not already do, because chmod requires the caller to own the
+# target (or be root). Newly created files already get their mode and owner
+# atomically from install_owned; this only covers files that pre-date this run.
+chmod_as_service_user() {
+    local mode="$1" path="$2"
+    if [[ "$SKIP_USER_SETUP" == "1" ]]; then
+        chmod "$mode" "$path"
+        return
+    fi
+    runuser -u "$SERVICE_USER" -- chmod "$mode" "$path" \
+        || fail "cannot set mode $mode on $path as $SERVICE_USER" \
+            "(expected it to already be owned by $SERVICE_USER; chown it manually and re-run)"
 }
 
 # Install generated content ($tmp) at $target with a fixed owner and mode.
@@ -334,52 +379,66 @@ if [[ ! -e "$audit_key_file" ]]; then
     rm -f "$audit_key_tmp"
 fi
 
-# Set modes on files that exist. devices.json may not exist on first install.
-# Each path is re-checked with require_regular_file immediately before the
-# chmod/chown that follows it, rather than trusting an earlier check or the
-# fact that install(1) just created it.
-if [[ -e "$CONFIG_DIR/devices.json" ]]; then
-    require_regular_file "$CONFIG_DIR/devices.json"
-    chmod 0600 "$CONFIG_DIR/devices.json"
-fi
-# The legacy /etc store is hardened too, when present. It is not vestigial: under
-# the migration fallback it is the store the service actually reads, so leaving it
-# at whatever mode it happened to have is a live credential exposure. Dropping
-# this when the primary moved to /var/lib was a regression the distribution smoke
-# test caught by asserting mode 600 on /etc/jmcp/tokens.json.
-if [[ -e "$legacy_tokens_file" ]]; then
-    require_regular_file "$legacy_tokens_file"
-    chmod 0600 "$legacy_tokens_file"
-fi
-if [[ -e "$state_tokens_file" ]]; then
-    require_regular_file "$state_tokens_file"
-    chmod 0600 "$state_tokens_file"
-fi
-require_regular_file "$known_hosts_file"
-chmod 0644 "$known_hosts_file"
-require_regular_file "$changeset_state_file"
-chmod 0600 "$changeset_state_file"
-if [[ -e "$audit_key_file" ]]; then
-    require_regular_file "$audit_key_file"
-    chmod 0600 "$audit_key_file"
-fi
-
+# Transfer ownership before fixing modes below, so the mode fix on every path
+# this installer actually owns can run as the service account instead of as
+# root (see chmod_as_service_user). This block runs first deliberately: on an
+# upgrade a preserved devices.json can still be root-owned (an operator may
+# have copied it in directly), and chmod-as-service-user needs that transfer
+# to have already happened to succeed on such a file.
 if [[ "$SKIP_USER_SETUP" != "1" ]]; then
     require_plain_dir "$CONFIG_DIR"
-    chown "$SERVICE_USER:$SERVICE_GROUP" "$CONFIG_DIR"
+    chown -h "$SERVICE_USER:$SERVICE_GROUP" "$CONFIG_DIR"
     # chown only files that exist. devices.json may not exist on first install.
     if [[ -e "$CONFIG_DIR/devices.json" ]]; then
         require_regular_file "$CONFIG_DIR/devices.json"
-        chown "$SERVICE_USER:$SERVICE_GROUP" "$CONFIG_DIR/devices.json"
+        chown -h "$SERVICE_USER:$SERVICE_GROUP" "$CONFIG_DIR/devices.json"
     fi
     require_regular_file "$known_hosts_file"
-    chown "$SERVICE_USER:$SERVICE_GROUP" "$known_hosts_file"
+    chown -h "$SERVICE_USER:$SERVICE_GROUP" "$known_hosts_file"
     # chown -R covers device-leases/, staging/, and srx-staging/ subdirs,
     # plus changeset-state.json, tokens.json, and audit-hmac.key. GNU chown -R
     # does not follow symlinks while recursing by default, so an entry under
     # this directory is re-owned by its own name, not by whatever it resolves to.
     require_plain_dir "$STATE_DIR"
     chown -R "$SERVICE_USER:$SERVICE_GROUP" "$STATE_DIR"
+fi
+
+# Set modes on files that exist. devices.json may not exist on first install.
+# Each path is re-checked with require_regular_file immediately before the
+# chmod/chown that follows it, rather than trusting an earlier check or the
+# fact that install(1) just created it. Every path here except the legacy
+# token store (below) is owned by the service account by this point, so the
+# mode fix runs as that account rather than as root.
+if [[ -e "$CONFIG_DIR/devices.json" ]]; then
+    require_regular_file "$CONFIG_DIR/devices.json"
+    chmod_as_service_user 0600 "$CONFIG_DIR/devices.json"
+fi
+# The legacy /etc store is hardened too, when present. It is not vestigial: under
+# the migration fallback it is the store the service actually reads, so leaving it
+# at whatever mode it happened to have is a live credential exposure. Dropping
+# this when the primary moved to /var/lib was a regression the distribution smoke
+# test caught by asserting mode 600 on /etc/jmcp/tokens.json.
+#
+# Deliberately left out of the ownership transfer above (see the fallback
+# comment near legacy_tokens_file below), so unlike the rest of this block its
+# mode fix still runs as root: chmod_as_service_user would fail whenever this
+# file is not already service-account-owned, which is expected here. That
+# root chmod keeps a narrower, pre-existing TOCTOU window on this one path.
+if [[ -e "$legacy_tokens_file" ]]; then
+    require_regular_file "$legacy_tokens_file"
+    chmod 0600 "$legacy_tokens_file"
+fi
+if [[ -e "$state_tokens_file" ]]; then
+    require_regular_file "$state_tokens_file"
+    chmod_as_service_user 0600 "$state_tokens_file"
+fi
+require_regular_file "$known_hosts_file"
+chmod_as_service_user 0644 "$known_hosts_file"
+require_regular_file "$changeset_state_file"
+chmod_as_service_user 0600 "$changeset_state_file"
+if [[ -e "$audit_key_file" ]]; then
+    require_regular_file "$audit_key_file"
+    chmod_as_service_user 0600 "$audit_key_file"
 fi
 
 if [[ "$INSTALL_ROOT" == "/" && "$SKIP_SYSTEMD_RELOAD" != "1" ]]; then

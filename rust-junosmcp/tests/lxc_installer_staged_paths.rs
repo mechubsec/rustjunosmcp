@@ -1,16 +1,6 @@
 #![allow(clippy::unwrap_used)]
 #![allow(missing_docs)]
-//! Behavioural coverage for `packaging/lxc/install.sh`'s state-file
-//! provisioning. The installer must refuse to continue when a path it is
-//! about to create, chmod, or chown is not a plain file (or directory), and
-//! it must leave whatever that path currently points at untouched rather
-//! than writing or re-owning through it.
-//!
-//! This runs the real installer twice in a staged root
-//! (`JMCP_INSTALL_ROOT`, `JMCP_INSTALL_SKIP_USER=1`): once to produce a
-//! normal first install, then a second time after replacing one of its
-//! state files with a stand-in pointing outside the staged root, which is
-//! the shape an upgrade run would see.
+//! Behavioural coverage for installer file provisioning.
 
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -211,4 +201,21 @@ fn second_install_refuses_a_hijacked_devices_file() {
         b"untouched",
         "devices.json pointed at {canary:?}; the installer must never chmod/chown through it"
     );
+}
+
+/// Every per-file `chown` the installer runs as root must use `-h` so a
+/// symlink swapped in after the preceding check is re-owned itself rather
+/// than followed.
+#[test]
+fn per_file_chown_calls_do_not_follow_symlinks() {
+    let script = fs::read_to_string(repo_root().join("packaging/lxc/install.sh")).unwrap();
+    for line in script.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("chown ") && !trimmed.contains("-R") {
+            assert!(
+                trimmed.starts_with("chown -h "),
+                "expected `chown -h` (symlink-safe) for a non-recursive chown, found: {trimmed}"
+            );
+        }
+    }
 }
