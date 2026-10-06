@@ -24,6 +24,36 @@ target_path() {
     fi
 }
 
+# Refuse to operate on a path that is not a plain file or directory, so a
+# caller never chmod/chown/writes through whatever unexpected entry happens
+# to sit at a destination this installer does not fully control.
+require_regular_file() {
+    local path="$1"
+    if [[ -L "$path" ]] || { [[ -e "$path" ]] && [[ ! -f "$path" ]]; }; then
+        fail "$path is not a regular file; refusing"
+    fi
+}
+
+require_plain_dir() {
+    local path="$1"
+    if [[ -L "$path" ]] || { [[ -e "$path" ]] && [[ ! -d "$path" ]]; }; then
+        fail "$path is not a directory; refusing"
+    fi
+}
+
+# Install generated content ($tmp) at $target with a fixed owner and mode.
+# install(1) replaces an existing non-regular destination rather than writing
+# through it, so pair this with a require_regular_file check immediately
+# beforehand rather than relying on install(1) alone.
+install_owned() {
+    local mode="$1" tmp="$2" target="$3"
+    if [[ "$SKIP_USER_SETUP" != "1" ]]; then
+        install -m "$mode" -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$tmp" "$target"
+    else
+        install -m "$mode" "$tmp" "$target"
+    fi
+}
+
 # Resolve the journald drop-in directory and prove it is safe to touch.
 #
 # Echoes the canonical directory, or nothing when it does not exist. Fails
@@ -208,6 +238,9 @@ remove_legacy_runtime() {
     rm -f "$legacy_binary" "$legacy_unit"
 }
 
+for dir in "$BIN_DIR" "$UNIT_DIR" "$CONFIG_DIR" "$STATE_DIR" "$JUNOS_STAGING_DIR" "$SRX_STAGING_DIR" "$DEVICE_LEASE_DIR"; do
+    require_plain_dir "$dir"
+done
 install -d -m 0755 "$BIN_DIR" "$UNIT_DIR"
 install -d -m 0750 "$CONFIG_DIR" "$STATE_DIR" "$JUNOS_STAGING_DIR" "$SRX_STAGING_DIR"
 install -d -m 0700 "$DEVICE_LEASE_DIR"
@@ -235,10 +268,17 @@ install -m 0644 "$PACKAGE_ROOT/etc/systemd/system/rust-junosmcp.service" "$UNIT_
 #
 # The file is never copied automatically — that would leave a duplicate secret
 # behind, which is exactly what the stale-secret scan exists to flag.
-if [[ ! -e "$STATE_DIR/tokens.json" ]]; then
-    if [[ -e "$CONFIG_DIR/tokens.json" ]]; then
-        printf '%s\n' ">> Not creating $STATE_DIR/tokens.json: a token store already exists at"
-        printf '%s\n' ">> $CONFIG_DIR/tokens.json. The server reads it via the legacy fallback and warns."
+state_tokens_file="$STATE_DIR/tokens.json"
+legacy_tokens_file="$CONFIG_DIR/tokens.json"
+known_hosts_file="$CONFIG_DIR/known_hosts"
+changeset_state_file="$STATE_DIR/changeset-state.json"
+audit_key_file="$STATE_DIR/audit-hmac.key"
+
+require_regular_file "$state_tokens_file"
+if [[ ! -e "$state_tokens_file" ]]; then
+    if [[ -e "$legacy_tokens_file" ]]; then
+        printf '%s\n' ">> Not creating $state_tokens_file: a token store already exists at"
+        printf '%s\n' ">> $legacy_tokens_file. The server reads it via the legacy fallback and warns."
         printf '%s\n' ">>"
         printf '%s\n' ">> Migrate it deliberately. The service must be RESTARTED, not reloaded:"
         printf '%s\n' ">> the token store is bound to the path resolved at startup, so SIGHUP"
@@ -248,57 +288,95 @@ if [[ ! -e "$STATE_DIR/tokens.json" ]]; then
         printf '%s\n' ">> stopped rather than have its endpoint exposed by the migration."
         printf '>>   install -m 0600 -o %s -g %s %s %s\n' \
             "$SERVICE_USER" "$SERVICE_GROUP" \
-            "$CONFIG_DIR/tokens.json" "$STATE_DIR/tokens.json"
+            "$legacy_tokens_file" "$state_tokens_file"
         printf '%s\n' ">>   systemctl try-restart rust-junosmcp   # restarts ONLY if already running"
         printf '%s\n' ">>   systemctl status rust-junosmcp        # confirm state is what you expect"
-        printf '%s\n' ">>   shred -u $CONFIG_DIR/tokens.json  # secure erase, per packaging/FILESYSTEM.md"
+        printf '%s\n' ">>   shred -u $legacy_tokens_file  # secure erase, per packaging/FILESYSTEM.md"
     else
-        printf '%s\n' '{"version":1,"tokens":[]}' >"$STATE_DIR/tokens.json"
-        chmod 0600 "$STATE_DIR/tokens.json"
+        tokens_tmp=$(mktemp)
+        printf '%s\n' '{"version":1,"tokens":[]}' >"$tokens_tmp"
+        install_owned 0600 "$tokens_tmp" "$state_tokens_file"
+        rm -f "$tokens_tmp"
     fi
 fi
 
-if [[ ! -e "$CONFIG_DIR/known_hosts" ]]; then
-    : >"$CONFIG_DIR/known_hosts"
+require_regular_file "$known_hosts_file"
+if [[ ! -e "$known_hosts_file" ]]; then
+    known_hosts_tmp=$(mktemp)
+    install_owned 0644 "$known_hosts_tmp" "$known_hosts_file"
+    rm -f "$known_hosts_tmp"
 fi
-if [[ ! -e "$STATE_DIR/changeset-state.json" ]]; then
-    printf '%s\n' '{"version":1,"state":{"operations":{},"change_sets":{}}}' >"$STATE_DIR/changeset-state.json"
+
+require_regular_file "$changeset_state_file"
+if [[ ! -e "$changeset_state_file" ]]; then
+    changeset_state_tmp=$(mktemp)
+    printf '%s\n' '{"version":1,"state":{"operations":{},"change_sets":{}}}' >"$changeset_state_tmp"
+    install_owned 0600 "$changeset_state_tmp" "$changeset_state_file"
+    rm -f "$changeset_state_tmp"
 fi
 
 # Generate audit HMAC key if it does not exist. Do NOT regenerate on upgrade —
 # a new key breaks verification of every prior record (#334).
-if [[ ! -e "$STATE_DIR/audit-hmac.key" ]]; then
+require_regular_file "$audit_key_file"
+if [[ ! -e "$audit_key_file" ]]; then
+    audit_key_tmp=$(mktemp)
     if command -v openssl >/dev/null 2>&1; then
-        openssl rand -hex 32 >"$STATE_DIR/audit-hmac.key"
+        openssl rand -hex 32 >"$audit_key_tmp"
     elif command -v head >/dev/null 2>&1 && [[ -e /dev/urandom ]]; then
-        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' >"$STATE_DIR/audit-hmac.key"
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' >"$audit_key_tmp"
     else
         echo ">> WARNING: cannot generate audit-hmac.key (no openssl or /dev/urandom)" >&2
         echo ">> WARNING: audit log will not be tamper-evident until the key is created" >&2
     fi
+    if [[ -s "$audit_key_tmp" ]]; then
+        install_owned 0600 "$audit_key_tmp" "$audit_key_file"
+    fi
+    rm -f "$audit_key_tmp"
 fi
 
 # Set modes on files that exist. devices.json may not exist on first install.
-[[ -e "$CONFIG_DIR/devices.json" ]] && chmod 0600 "$CONFIG_DIR/devices.json"
-[[ -e "$STATE_DIR/tokens.json" ]] && chmod 0600 "$STATE_DIR/tokens.json"
+# Each path is re-checked with require_regular_file immediately before the
+# chmod/chown that follows it, rather than trusting an earlier check or the
+# fact that install(1) just created it.
+if [[ -e "$CONFIG_DIR/devices.json" ]]; then
+    require_regular_file "$CONFIG_DIR/devices.json"
+    chmod 0600 "$CONFIG_DIR/devices.json"
+fi
 # The legacy /etc store is hardened too, when present. It is not vestigial: under
 # the migration fallback it is the store the service actually reads, so leaving it
 # at whatever mode it happened to have is a live credential exposure. Dropping
 # this when the primary moved to /var/lib was a regression the distribution smoke
 # test caught by asserting mode 600 on /etc/jmcp/tokens.json.
-[[ -e "$CONFIG_DIR/tokens.json" ]] && chmod 0600 "$CONFIG_DIR/tokens.json"
-chmod 0644 "$CONFIG_DIR/known_hosts"
-chmod 0600 "$STATE_DIR/changeset-state.json"
-[[ -e "$STATE_DIR/audit-hmac.key" ]] && chmod 0600 "$STATE_DIR/audit-hmac.key"
+if [[ -e "$legacy_tokens_file" ]]; then
+    require_regular_file "$legacy_tokens_file"
+    chmod 0600 "$legacy_tokens_file"
+fi
+require_regular_file "$state_tokens_file"
+chmod 0600 "$state_tokens_file"
+require_regular_file "$known_hosts_file"
+chmod 0644 "$known_hosts_file"
+require_regular_file "$changeset_state_file"
+chmod 0600 "$changeset_state_file"
+if [[ -e "$audit_key_file" ]]; then
+    require_regular_file "$audit_key_file"
+    chmod 0600 "$audit_key_file"
+fi
 
 if [[ "$SKIP_USER_SETUP" != "1" ]]; then
+    require_plain_dir "$CONFIG_DIR"
     chown "$SERVICE_USER:$SERVICE_GROUP" "$CONFIG_DIR"
     # chown only files that exist. devices.json may not exist on first install.
-    [[ -e "$CONFIG_DIR/devices.json" ]] && \
+    if [[ -e "$CONFIG_DIR/devices.json" ]]; then
+        require_regular_file "$CONFIG_DIR/devices.json"
         chown "$SERVICE_USER:$SERVICE_GROUP" "$CONFIG_DIR/devices.json"
-    chown "$SERVICE_USER:$SERVICE_GROUP" "$CONFIG_DIR/known_hosts"
+    fi
+    require_regular_file "$known_hosts_file"
+    chown "$SERVICE_USER:$SERVICE_GROUP" "$known_hosts_file"
     # chown -R covers device-leases/, staging/, and srx-staging/ subdirs,
-    # plus changeset-state.json, tokens.json, and audit-hmac.key.
+    # plus changeset-state.json, tokens.json, and audit-hmac.key. GNU chown -R
+    # does not follow symlinks while recursing by default, so an entry under
+    # this directory is re-owned by its own name, not by whatever it resolves to.
+    require_plain_dir "$STATE_DIR"
     chown -R "$SERVICE_USER:$SERVICE_GROUP" "$STATE_DIR"
 fi
 
