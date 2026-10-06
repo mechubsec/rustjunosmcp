@@ -2929,9 +2929,7 @@ mod tests {
                     "got: {msg}"
                 );
             }
-            other => panic!(
-                "expected create to reject a caller-supplied commit0, got {other:?}"
-            ),
+            other => panic!("expected create to reject a caller-supplied commit0, got {other:?}"),
         }
     }
 
@@ -2954,9 +2952,7 @@ mod tests {
             Err(JmcpError::Validation(msg)) => {
                 assert!(msg.contains("commit0"), "got: {msg}");
             }
-            other => panic!(
-                "expected create to reject a caller-supplied commit0, got {other:?}"
-            ),
+            other => panic!("expected create to reject a caller-supplied commit0, got {other:?}"),
         }
     }
 
