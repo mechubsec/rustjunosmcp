@@ -235,9 +235,13 @@ install -m 0644 "$PACKAGE_ROOT/etc/systemd/system/rust-junosmcp.service" "$UNIT_
 #
 # The file is never copied automatically — that would leave a duplicate secret
 # behind, which is exactly what the stale-secret scan exists to flag.
-if [[ ! -e "$STATE_DIR/tokens.json" ]]; then
+state_tokens_file="$STATE_DIR/tokens.json"
+if [[ -L "$state_tokens_file" ]] || { [[ -e "$state_tokens_file" ]] && [[ ! -f "$state_tokens_file" ]]; }; then
+    fail "$state_tokens_file is not a regular file; refusing"
+fi
+if [[ ! -e "$state_tokens_file" ]]; then
     if [[ -e "$CONFIG_DIR/tokens.json" ]]; then
-        printf '%s\n' ">> Not creating $STATE_DIR/tokens.json: a token store already exists at"
+        printf '%s\n' ">> Not creating $state_tokens_file: a token store already exists at"
         printf '%s\n' ">> $CONFIG_DIR/tokens.json. The server reads it via the legacy fallback and warns."
         printf '%s\n' ">>"
         printf '%s\n' ">> Migrate it deliberately. The service must be RESTARTED, not reloaded:"
@@ -248,13 +252,15 @@ if [[ ! -e "$STATE_DIR/tokens.json" ]]; then
         printf '%s\n' ">> stopped rather than have its endpoint exposed by the migration."
         printf '>>   install -m 0600 -o %s -g %s %s %s\n' \
             "$SERVICE_USER" "$SERVICE_GROUP" \
-            "$CONFIG_DIR/tokens.json" "$STATE_DIR/tokens.json"
+            "$CONFIG_DIR/tokens.json" "$state_tokens_file"
         printf '%s\n' ">>   systemctl try-restart rust-junosmcp   # restarts ONLY if already running"
         printf '%s\n' ">>   systemctl status rust-junosmcp        # confirm state is what you expect"
         printf '%s\n' ">>   shred -u $CONFIG_DIR/tokens.json  # secure erase, per packaging/FILESYSTEM.md"
     else
-        printf '%s\n' '{"version":1,"tokens":[]}' >"$STATE_DIR/tokens.json"
-        chmod 0600 "$STATE_DIR/tokens.json"
+        tokens_tmp=$(mktemp)
+        printf '%s\n' '{"version":1,"tokens":[]}' >"$tokens_tmp"
+        install -m 0600 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$tokens_tmp" "$state_tokens_file"
+        rm -f "$tokens_tmp"
     fi
 fi
 
@@ -267,20 +273,30 @@ fi
 
 # Generate audit HMAC key if it does not exist. Do NOT regenerate on upgrade —
 # a new key breaks verification of every prior record (#334).
-if [[ ! -e "$STATE_DIR/audit-hmac.key" ]]; then
+audit_key="$STATE_DIR/audit-hmac.key"
+if [[ -L "$audit_key" ]] || { [[ -e "$audit_key" ]] && [[ ! -f "$audit_key" ]]; }; then
+    fail "$audit_key is not a regular file; refusing"
+fi
+if [[ ! -e "$audit_key" ]]; then
+    audit_key_tmp=$(mktemp)
     if command -v openssl >/dev/null 2>&1; then
-        openssl rand -hex 32 >"$STATE_DIR/audit-hmac.key"
+        openssl rand -hex 32 >"$audit_key_tmp"
     elif command -v head >/dev/null 2>&1 && [[ -e /dev/urandom ]]; then
-        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' >"$STATE_DIR/audit-hmac.key"
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' >"$audit_key_tmp"
     else
         echo ">> WARNING: cannot generate audit-hmac.key (no openssl or /dev/urandom)" >&2
         echo ">> WARNING: audit log will not be tamper-evident until the key is created" >&2
     fi
+    if [[ -s "$audit_key_tmp" ]]; then
+        install -m 0600 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$audit_key_tmp" "$audit_key"
+    fi
+    rm -f "$audit_key_tmp"
 fi
 
 # Set modes on files that exist. devices.json may not exist on first install.
+# tokens.json and audit-hmac.key get their owner and mode from install(1)
+# above; they are not chmod'd again here.
 [[ -e "$CONFIG_DIR/devices.json" ]] && chmod 0600 "$CONFIG_DIR/devices.json"
-[[ -e "$STATE_DIR/tokens.json" ]] && chmod 0600 "$STATE_DIR/tokens.json"
 # The legacy /etc store is hardened too, when present. It is not vestigial: under
 # the migration fallback it is the store the service actually reads, so leaving it
 # at whatever mode it happened to have is a live credential exposure. Dropping
@@ -289,7 +305,6 @@ fi
 [[ -e "$CONFIG_DIR/tokens.json" ]] && chmod 0600 "$CONFIG_DIR/tokens.json"
 chmod 0644 "$CONFIG_DIR/known_hosts"
 chmod 0600 "$STATE_DIR/changeset-state.json"
-[[ -e "$STATE_DIR/audit-hmac.key" ]] && chmod 0600 "$STATE_DIR/audit-hmac.key"
 
 if [[ "$SKIP_USER_SETUP" != "1" ]]; then
     chown "$SERVICE_USER:$SERVICE_GROUP" "$CONFIG_DIR"
