@@ -60,6 +60,9 @@ PROTOCOL_VERSION = "2025-03-26"
 # the response text must match for the call to count as ok. The match is done
 # in memory; the text is then dropped.
 JUNOS_VERSION_RE = r"\b\d{2}\.\d+[RXI]\d"
+# A read-only login class without configuration view gets the same per-stanza
+# ACCESS-DENIED reply from every server; that still is a device config reply.
+CONFIG_RE = r"host-name|/\* ACCESS-DENIED \*/"
 OPS = ["router_list", "facts", "show_version", "interfaces_terse", "config"]
 FLAVOURS = {
     "rustjunosmcp": {
@@ -69,7 +72,7 @@ FLAVOURS = {
                     r"Junos:"),
         "interfaces_terse": ("execute_junos_command", {"router_name": DEVICE_ALIAS, "command": "show interfaces terse"},
                     r"ge-0/0/0|fxp0"),
-        "config": ("get_junos_config", {"router_name": DEVICE_ALIAS}, r"host-name"),
+        "config": ("get_junos_config", {"router_name": DEVICE_ALIAS}, CONFIG_RE),
     },
     "juniper": {
         "router_list": ("get_router_list", {}, DEVICE_ALIAS),
@@ -78,7 +81,7 @@ FLAVOURS = {
                     r"Junos:"),
         "interfaces_terse": ("execute_junos_command", {"router_name": DEVICE_ALIAS, "command": "show interfaces terse"},
                     r"ge-0/0/0|fxp0"),
-        "config": ("get_junos_config", {"router_name": DEVICE_ALIAS}, r"host-name"),
+        "config": ("get_junos_config", {"router_name": DEVICE_ALIAS}, CONFIG_RE),
     },
     "shigechika": {
         "router_list": ("get_router_list", {}, DEVICE_ALIAS),
@@ -87,7 +90,7 @@ FLAVOURS = {
                     r"Junos:"),
         "interfaces_terse": ("run_show_command", {"hostname": DEVICE_ALIAS, "command": "show interfaces terse"},
                     r"ge-0/0/0|fxp0"),
-        "config": ("get_config", {"hostname": DEVICE_ALIAS}, r"host-name"),
+        "config": ("get_config", {"hostname": DEVICE_ALIAS}, CONFIG_RE),
     },
 }
 
@@ -369,7 +372,7 @@ def vm_hwm_kib(pid: int) -> int:
 
 
 async def bench_server(name: str, spec: dict, target: Target, calls: int, run: int,
-                       raw: list, debug_dir: Path | None) -> dict:
+                       raw: list, debug_dir: Path | None, pace_s: float = 0.0) -> dict:
     flavour = spec["flavour"]
     ops = FLAVOURS[flavour]
     proxy = CountingProxy(target)
@@ -433,6 +436,10 @@ async def bench_server(name: str, spec: dict, target: Target, calls: int, run: i
         conns_before = proxy.connections
         for seq in range(1, calls + 1):
             for op in OPS:
+                if pace_s and op != "router_list":
+                    # Untimed gap before each device call, the same for every
+                    # server, to stay under the target's SSH session rate limit.
+                    await asyncio.sleep(pace_s)
                 await call(op, seq)
         row["steady_ssh_conns"] = proxy.connections - conns_before
         row["peak_rss_mib"] = round(vm_hwm_kib(proc.pid) / 1024, 1)
@@ -524,9 +531,13 @@ async def cmd_run(args: argparse.Namespace) -> int:
         order = names[k:] + names[:k]
         raw: list = []
         rows = []
-        for name in order:
+        for i, name in enumerate(order):
+            if i and args.settle_s:
+                # Let the previous server's sessions age out of the rate limit.
+                await asyncio.sleep(args.settle_s)
             print(f"bench: run {args.run_index} {name} ...", file=sys.stderr, flush=True)
-            r = await bench_server(name, servers[name], target, args.calls, args.run_index, raw, debug_dir)
+            r = await bench_server(name, servers[name], target, args.calls, args.run_index, raw, debug_dir,
+                                   args.pace_ms / 1000)
             print(f"bench:   cold={r['cold_start_ms']}ms first={r['first_call_ms']}ms "
                   f"rss={r['peak_rss_mib']}MiB conns={r['ssh_conns']} failed={r['failed']}/{r['calls']}",
                   file=sys.stderr, flush=True)
@@ -537,7 +548,9 @@ async def cmd_run(args: argparse.Namespace) -> int:
         if not env_path.exists():
             if args.junos_version:
                 target.junos_version = args.junos_version
-            env_path.write_text(json.dumps(host_environment(servers, target), indent=2) + "\n")
+            env = host_environment(servers, target)
+            env["workload"] = {"calls_per_op": args.calls, "pace_ms": args.pace_ms, "settle_s": args.settle_s}
+            env_path.write_text(json.dumps(env, indent=2) + "\n")
         failed = sum(r["failed"] for r in rows)
         return 1 if (failed and args.strict) else 0
     finally:
@@ -628,6 +641,9 @@ def main() -> int:
     r.add_argument("--run-index", type=int, default=1)
     r.add_argument("--calls", type=int, default=30, help="steady-state calls per op")
     r.add_argument("--junos-version", default="", help="recorded in environment.json for lab runs")
+    r.add_argument("--pace-ms", type=int, default=0,
+                   help="untimed pause before each steady-state device call, same for every server")
+    r.add_argument("--settle-s", type=int, default=0, help="idle seconds between servers")
     r.add_argument("--strict", action="store_true", help="exit 1 if any call failed")
     r.add_argument("--debug-dir", help="mock only: keep failing responses here for bring-up")
     s = sub.add_parser("summarize", help="merge per-run CSVs and write summary.md")
