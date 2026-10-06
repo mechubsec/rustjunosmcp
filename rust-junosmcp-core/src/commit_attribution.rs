@@ -9,11 +9,9 @@
 //! into the approved plan so apply time can detect the log moving underneath
 //! it (§5.5 TOCTOU binding).
 //!
-//! Input is `show system commit`'s text rendering, not `<get-commit-information/>`'s
-//! XML shape: the XML form is documented by the vendor but no fixture of it has
-//! been captured against a live device yet (MEC-1876 design doc, G14; tracked as
-//! follow-up F1). The text form is already parsed elsewhere in this crate
-//! (`changeset_recovery.rs`), so this reuses the same entry-grouping approach.
+//! Input is `show system commit`'s text rendering, already parsed elsewhere
+//! in this crate (`changeset_recovery.rs`); this module reuses the same
+//! entry-grouping approach.
 //!
 //! Classification is fail-closed by construction: every condition in
 //! [`classify_commit_zero`] that cannot positively prove a non-plane commit
@@ -210,12 +208,9 @@ pub fn classify_commit_zero(
             .iter()
             .any(|login| login == device_login);
     let no_login_session = entry.user == "root" && entry.client == "other";
-    // Allowlist, not denylist (MEC-1880 review F4): only client forms this
-    // module can positively attribute to an interactive or NETCONF session
-    // clear the gate. Anything else — an automated client form, a future
-    // Junos client string, or a header with a trailing annotation this
-    // parser doesn't recognise — falls to `Ambiguous` rather than being
-    // assumed non-plane by default.
+    // Only client forms this module can positively attribute to an
+    // interactive or NETCONF session clear the gate; everything else falls
+    // to `Ambiguous`.
     let attributable_client = matches!(entry.client.as_str(), "cli" | "netconf" | "junoscript");
 
     if logins_unusable || no_login_session || !attributable_client {
@@ -288,20 +283,14 @@ impl CommitZeroBinding {
     }
 }
 
-/// Apply-time re-check for a guarded plane-owned `rollback_source: 1` (MEC-1880
-/// §5.5, review F3).
+/// Apply-time re-check for a guarded plane-owned `rollback_source: 1`
+/// (MEC-1880 §5.5).
 ///
-/// Two independent things must both still hold at apply time, not just one:
-/// `binding` must still describe the device's current entry 0 (the log did
-/// not move underneath the approved plan), *and* a fresh classification of
-/// that same entry must still clear the gate (the operator did not edit
-/// `plane_commit_logins` between create and apply in a way that would have
-/// changed the create-time verdict). Checking only the binding match would
-/// miss an inventory edit that re-tags a log entry the plan already bound to;
-/// checking only the classification would miss the log moving to a different
-/// entry that happens to classify the same way. `fresh_entry` is `None` when
-/// the device did not answer or the log did not parse, which fails closed
-/// through the `Option` match below.
+/// Two independent things must both still hold at apply time: `binding` must
+/// still describe the device's current entry 0, and a fresh classification
+/// of that same entry must still clear the gate. `fresh_entry` is `None`
+/// when the device did not answer or the log did not parse, which fails
+/// closed through the `Option` match below.
 pub fn rollback_one_still_permitted(
     binding: Option<&CommitZeroBinding>,
     fresh_entry: Option<&CommitLogEntry>,
@@ -560,9 +549,7 @@ mod tests {
         );
     }
 
-    /// F4: an unrecognised or future client string must not clear the gate
-    /// just because it isn't one of the three automated forms this module
-    /// already knew about. Allowlist, not denylist.
+    /// An unrecognised or future client string must not clear the gate.
     #[test]
     fn classify_ambiguous_for_unrecognised_client_forms() {
         for client in ["snmp", "other", "j-web", "rest-api"] {
@@ -582,10 +569,8 @@ mod tests {
         }
     }
 
-    /// F4: only entry 0 is ever attributed. A caller that somehow hands the
-    /// classifier a non-zero sequence (e.g. a future caller of this function
-    /// that didn't go through `parse_newest_entry`) must not get a positive
-    /// verdict out of it.
+    /// Only entry 0 is ever attributed; a non-zero sequence must not get a
+    /// positive verdict out of the classifier.
     #[test]
     fn classify_ambiguous_when_sequence_is_not_zero() {
         let entry = CommitLogEntry {
@@ -712,8 +697,8 @@ mod tests {
         ));
     }
 
-    /// F3: the log entry itself didn't move, but the operator added its user
-    /// to `plane_commit_logins` between create and apply. The binding still
+    /// The log entry itself didn't move, but the operator added its user to
+    /// `plane_commit_logins` between create and apply. The binding still
     /// matches, but the fresh classification must now refuse.
     #[test]
     fn rollback_one_refused_when_allowlist_edited_after_create() {

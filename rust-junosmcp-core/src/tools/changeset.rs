@@ -559,11 +559,9 @@ pub async fn create_change_set_with_cancel(
             .validate_shape(index)
             .map_err(JmcpError::Validation)?;
 
-        // `commit0` is server-computed only (MEC-1880, §5.5): it is the
-        // commit-0 attribution binding the plane-owned rollback guard below
-        // assigns itself, after classifying the device's own commit log. A
-        // caller-supplied value would let a plan forge that classification
-        // and defeat the apply-time TOCTOU re-check this binding exists for.
+        // `commit0` is server-computed only: it is the commit-0 attribution
+        // binding the plane-owned rollback guard below assigns itself, after
+        // classifying the device's own commit log.
         if action.commit0.is_some() {
             return Err(JmcpError::Validation(format!(
                 "action {index}: `commit0` is server-computed and must not be supplied"
@@ -2902,13 +2900,8 @@ mod tests {
         )
     }
 
-    /// MEC-1880 review F2: `commit0` is documented as server-computed only —
-    /// `create_junos_change_set` must reject a caller-supplied value outright,
-    /// on every device, not only on a plane-owned one where the guard below
-    /// happens to overwrite it anyway. Otherwise a caller-forged binding on a
-    /// `local` device (which never runs the classifier at all) would pass
-    /// straight through, and the apply-time binding comparison would compare
-    /// the fresh log against a classification the server never performed.
+    /// `create_junos_change_set` must reject a caller-supplied `commit0`
+    /// outright, on every device, not only on a plane-owned one.
     #[tokio::test]
     async fn create_change_set_rejects_caller_supplied_commit0_on_local_device() {
         let r = create_on_plane_owned_device(

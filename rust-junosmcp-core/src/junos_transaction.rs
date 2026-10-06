@@ -552,11 +552,7 @@ impl DeviceTransaction for JunosTransaction {
                             .and_then(|log| crate::commit_attribution::parse_newest_entry(&log));
 
                         // Re-check both the binding and the classification,
-                        // not just the binding (MEC-1880 review F3): an
-                        // operator can edit `plane_commit_logins` between
-                        // create and apply, and a binding captured when the
-                        // log's user was not on the allowlist must not
-                        // survive that edit.
+                        // not just the binding.
                         if crate::commit_attribution::rollback_one_still_permitted(
                             actions[loaded].commit0.as_ref(),
                             fresh_entry.as_ref(),
