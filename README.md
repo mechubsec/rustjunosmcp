@@ -44,7 +44,11 @@ Medians across runs:
 | Peak memory (RSS) | 20 MiB | 129 MiB | 98 MiB |
 | SSH connections per run | 1 | 121 | 1 |
 | `show version`, p50 | 216 ms | 878 ms | 228 ms |
-| config, p50 | 11 ms | 776 ms | 21 ms |
+| config RPC (access-denied reply¹), p50 | 11 ms | 776 ms | 21 ms |
+
+¹ the read-only bench login has no configuration view, so this measures a
+round trip with a ~400-byte reply, not a full config fetch. See
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 Full results, the mock-target overhead numbers, method and reproduction steps:
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md).

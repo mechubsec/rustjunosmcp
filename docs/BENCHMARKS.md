@@ -177,9 +177,10 @@ for the read-only exception). The match runs in memory.
   harness writes, and gets an inventory allowlist containing exactly the
   workload's three CLI commands (it denies commands by default). The Python
   servers use PyEZ's defaults.
-- **Lab safety.** `--target lab` connects only to a device named in
-  `LAB_DEVICE_ALLOWLIST` (`bench.py`). The harness refuses to start unless
-  all of these hold:
+- **Lab safety.** `--target lab` requires the credential-file entry name to
+  be in `LAB_DEVICE_ALLOWLIST` (`bench.py`); the pinned host key verified in
+  pre-flight below is what actually binds the run to a device. The harness
+  refuses to start unless all of these hold:
   - The credential file and private key are mode 0600 and owned by the user.
   - The entry has a pinned host key.
   - A pre-flight SSH login, made directly rather than through the proxy,
