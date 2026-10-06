@@ -471,6 +471,17 @@
               ],
               "format": "uint32",
               "minimum": 0
+            },
+            "commit0": {
+              "description": "Commit-0 attribution binding for a guarded plane-owned\n`rollback_source: 1` (MEC-1880, P5b TOCTOU binding, §5.5).\n\n**Reserved: server-computed only.** `create_junos_change_set` rejects\nany caller-supplied value outright before this field is ever trusted.\nIt exists on the wire type only because the change-set plan is stored\nand re-read as this same type, and the approval digest must cover it —\na caller allowed to set it directly could forge the server's own\ncommit-0 classification and defeat the TOCTOU re-check this binding\nexists for.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CommitZeroBinding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "additionalProperties": false
@@ -501,6 +512,41 @@
           "additionalProperties": false,
           "required": [
             "text"
+          ]
+        },
+        "CommitZeroBinding": {
+          "description": "The commit-0 identity bound into an approved change-set plan (§5.5).\n\nPersisted as part of the plan's `commit0`-attributed rollback action, so the\napproval digest covers it. Re-derived at apply time from a fresh read of\nentry 0 and compared with [`CommitZeroBinding::matches`]; a mismatch means\nthe commit log moved between create and apply and the apply is refused with\n`commit_log_moved` rather than trusting a plan that no longer describes the\ndevice.",
+          "type": "object",
+          "properties": {
+            "sequence": {
+              "description": "Entry-0 sequence number at the time of classification (always 0; kept\nexplicit because a reply shaped differently would be a bug worth seeing\nin the comparison, not assumed away).",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "timestamp": {
+              "description": "Entry-0 timestamp text at classification time.",
+              "type": "string"
+            },
+            "user": {
+              "description": "Entry-0 user at classification time.",
+              "type": "string"
+            },
+            "client": {
+              "description": "Entry-0 client at classification time.",
+              "type": "string"
+            },
+            "comment_sha256": {
+              "description": "SHA-256 of the entry's raw comment (empty string if there was none).\nHashed rather than stored verbatim because the comment is untrusted free\ntext (MEC-1870 R10) and the binding only needs to detect change, not\nredisplay it.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sequence",
+            "timestamp",
+            "user",
+            "client",
+            "comment_sha256"
           ]
         }
       },

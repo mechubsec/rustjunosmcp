@@ -32,6 +32,31 @@ pub struct JunosAction {
     /// Exactly one of `payload` or `rollback_source` must be set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rollback_source: Option<u32>,
+    /// Commit-0 attribution binding for a guarded plane-owned
+    /// `rollback_source: 1` (MEC-1880, P5b TOCTOU binding, §5.5).
+    ///
+    /// **Reserved: server-computed only.** `create_junos_change_set` rejects
+    /// any caller-supplied value outright before this field is ever trusted.
+    /// It exists on the wire type only because the change-set plan is stored
+    /// and re-read as this same type, and the approval digest must cover it —
+    /// a caller allowed to set it directly could forge the server's own
+    /// commit-0 classification and defeat the TOCTOU re-check this binding
+    /// exists for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit0: Option<crate::commit_attribution::CommitZeroBinding>,
+}
+
+impl Default for JunosAction {
+    /// All-`None` default, so existing test literals that predate `commit0`
+    /// can opt in with `..Default::default()` instead of being rewritten one
+    /// by one.
+    fn default() -> Self {
+        Self {
+            payload: None,
+            rollback_source: None,
+            commit0: None,
+        }
+    }
 }
 
 impl JunosAction {
@@ -482,17 +507,73 @@ impl DeviceTransaction for JunosTransaction {
             // plane-owned in `devices.json` between create and apply; reading
             // the inventory fresh on every staged action closes that window.
             if let ResolvedAction::Rollback(rollback) = &resolved {
-                let depth_check: Result<(), JmcpError> = {
+                let (authority, plane_commit_logins, device_login) = {
                     let inv = self.device_manager.inventory();
-                    inv.get(&self.router).and_then(|entry| {
-                        crate::helpers::check_plane_owned_rollback_depth(
+                    let entry = inv.get(&self.router)?;
+                    (
+                        entry.config_authority.clone(),
+                        entry.plane_commit_logins.clone(),
+                        entry.username.clone(),
+                    )
+                };
+
+                let depth_check: Result<(), JmcpError> =
+                    if !authority.is_plane_owned() || *rollback == 0 {
+                        Ok(())
+                    } else if *rollback == 1 {
+                        // Re-read entry 0 fresh, inside the candidate lock, rather
+                        // than trusting the plan's create-time snapshot (MEC-1880,
+                        // §5.5 TOCTOU binding): a commit can land on the device
+                        // between create and apply. The NETCONF candidate lock is
+                        // device-side RPC state independent of this
+                        // `ConfigManager` handle's lifetime (lock/unlock are
+                        // explicit RPCs, not a `Drop` effect — it borrows `dev`
+                        // but carries no `Drop` impl of its own), so ending its
+                        // borrow here to free `dev` for a plain CLI read does
+                        // not release the device-side lock.
+                        let _ = cfg;
+                        let log = dev.cli("show system commit").await;
+                        let fresh_cfg = match dev.config() {
+                            Ok(fresh) => fresh,
+                            Err(error) => {
+                                // No candidate-manager handle to revert or unlock
+                                // through; the session is already non-reusable
+                                // (`prevent_reuse` above) and stays that way.
+                                // Failing hard here is fail-closed: we cannot
+                                // reconstruct the shared cleanup path below
+                                // without a `cfg` to call it on.
+                                return Err(error.into());
+                            }
+                        };
+                        cfg = fresh_cfg;
+
+                        let fresh_entry = log
+                            .ok()
+                            .and_then(|log| crate::commit_attribution::parse_newest_entry(&log));
+
+                        // Re-check both the binding and the classification,
+                        // not just the binding.
+                        if crate::commit_attribution::rollback_one_still_permitted(
+                            actions[loaded].commit0.as_ref(),
+                            fresh_entry.as_ref(),
+                            &plane_commit_logins,
+                            &device_login,
+                        ) {
+                            Ok(())
+                        } else {
+                            Err(JmcpError::CommitLogMoved {
+                                tool: "apply_junos_change_set",
+                                device: self.router.clone(),
+                            })
+                        }
+                    } else {
+                        crate::helpers::check_plane_owned_rollback_deep_depth(
                             "apply_junos_change_set",
                             &self.router,
-                            &entry.config_authority,
+                            &authority,
                             *rollback,
                         )
-                    })
-                };
+                    };
 
                 if let Err(depth_error) = depth_check {
                     // Same cleanup contract as a load failure below, but the
@@ -1532,6 +1613,7 @@ mod tests {
                 mode: None,
             }),
             rollback_source,
+            ..Default::default()
         }
     }
 
@@ -1545,6 +1627,7 @@ mod tests {
                 mode: Some(mode.to_owned()),
             }),
             rollback_source: None,
+            ..Default::default()
         }
     }
 
