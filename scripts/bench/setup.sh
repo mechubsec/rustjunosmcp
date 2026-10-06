@@ -42,6 +42,20 @@ checkout_pinned() { # dir url tag sha
     exit 1
   fi
   git -C "$dir" checkout -q --detach "$sha"
+  verify_tree "$dir" "$sha"
+}
+
+verify_tree() { # dir sha: refuse to build anything but a clean tree at sha
+  local dir=$1 sha=$2 head
+  head=$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)
+  if [ "$head" != "$sha" ]; then
+    echo "setup: $dir is at ${head:-no commit}, expected $sha; remove it and rerun" >&2
+    exit 1
+  fi
+  if [ -n "$(git -C "$dir" status --porcelain --untracked-files=no)" ]; then
+    echo "setup: $dir has local changes to tracked files; remove it and rerun" >&2
+    exit 1
+  fi
 }
 
 # rust-junosmcp, from this repository's history.
@@ -50,6 +64,7 @@ if [ "$(git -C "$REPO" rev-parse "$RUST_TAG^{commit}")" != "$RUST_SHA" ]; then
   exit 1
 fi
 [ -d "$WORK/rust-junosmcp" ] || git -C "$REPO" worktree add -q --detach "$WORK/rust-junosmcp" "$RUST_SHA"
+verify_tree "$WORK/rust-junosmcp" "$RUST_SHA"
 (cd "$WORK/rust-junosmcp" && CARGO_TARGET_DIR="$WORK/target" "$CARGO" build --release --locked -p rust-junosmcp)
 
 # Juniper/junos-mcp-server, from its own uv.lock.
