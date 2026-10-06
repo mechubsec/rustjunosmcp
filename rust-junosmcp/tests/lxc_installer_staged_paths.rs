@@ -108,9 +108,8 @@ fn a_fresh_install_creates_plain_state_files_with_the_right_mode() {
         ("var/lib/jmcp/audit-hmac.key", 0o600),
     ] {
         let path = staged.path(relative);
-        let meta = fs::symlink_metadata(&path).unwrap_or_else(|e| {
-            panic!("{relative} must exist after a fresh install: {e}")
-        });
+        let meta = fs::symlink_metadata(&path)
+            .unwrap_or_else(|e| panic!("{relative} must exist after a fresh install: {e}"));
         assert!(
             meta.file_type().is_file(),
             "{relative} must be a plain file, got {:?}",

@@ -351,8 +351,10 @@ if [[ -e "$legacy_tokens_file" ]]; then
     require_regular_file "$legacy_tokens_file"
     chmod 0600 "$legacy_tokens_file"
 fi
-require_regular_file "$state_tokens_file"
-chmod 0600 "$state_tokens_file"
+if [[ -e "$state_tokens_file" ]]; then
+    require_regular_file "$state_tokens_file"
+    chmod 0600 "$state_tokens_file"
+fi
 require_regular_file "$known_hosts_file"
 chmod 0644 "$known_hosts_file"
 require_regular_file "$changeset_state_file"
