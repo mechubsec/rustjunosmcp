@@ -63,10 +63,55 @@ How to read it:
   0.9–1.0 s for the Python servers in our setup runs; rust-junosmcp was
   unchanged.
 
-### Lab device
+### Lab device (2026-10-05)
 
-In progress (runs 1–3 of the read-only workload on a vSRX lab device). The
-results table and raw CSV are added here when all three runs are complete.
+The same read-only workload against a vSRX lab device running Junos 26.2R1.7,
+reached over the lab network. These numbers include the device's own
+response time, so they show what a user of each server actually waits for.
+
+3 runs × 30 steady-state calls per operation per server, 0 failed calls out of
+1,812. Each cell is the median across the 3 runs, with the min–max range in
+brackets. Raw data: [`results/lab-2026-10-05/`](../scripts/bench/results/lab-2026-10-05/)
+(`summary.md` there is dated in UTC, which had already rolled over to
+2026-10-06).
+
+| Server | Cold start (ms) | First device call (ms) | Peak RSS (MiB) | SSH connections per run |
+|---|---|---|---|---|
+| rust-junosmcp 0.27.2 | 6.1 (5.8–7.4) | 805.5 (779.7–814.8) | 20.3 (20.2–20.4) | 1 |
+| Juniper 1.1.1 | 263.7 (251.9–278.6) | 866.7 (849.6–879.1) | 129.0 (128.8–129.3) | 121 |
+| shigechika 0.18.0 | 284.6 (283.8–296.8) | 769.3 (697.4–771.5) | 91.7 (91.4–92.3) | 1 |
+| shigechika 0.22.0 | 391.9 (378.8–596.0) | 803.9 (746.0–821.7) | 97.9 (97.6–97.9) | 1 |
+
+Steady-state latency, p50 / p95 in ms (median across runs):
+
+| Server | router list | facts | `show version` | `show interfaces terse` | config |
+|---|---|---|---|---|---|
+| rust-junosmcp 0.27.2 | 0.3 / 0.6 | 0.8 / 1.1 | 215.9 / 634.3 | 82.7 / 446.8 | 10.9 / 333.9 |
+| Juniper 1.1.1 | 1.6 / 1.9 | 2437.4 / 2801.4 | 877.8 / 1290.8 | 731.5 / 1136.6 | 775.5 / 1171.5 |
+| shigechika 0.18.0 | 1.5 / 2.2 | 3.2 / 5.6 | 292.8 / 649.9 | 92.7 / 372.9 | 20.4 / 182.9 |
+| shigechika 0.22.0 | 1.2 / 1.4 | 2.8 / 3.9 | 228.0 / 626.5 | 97.1 / 410.0 | 20.6 / 181.1 |
+
+The per-run p50/p95 ranges are in [`summary.md`](../scripts/bench/results/lab-2026-10-05/summary.md).
+
+How to read it:
+
+- **On a real device, the device dominates.** The first device call costs
+  about 0.8 s for every server, because SSH and NETCONF session setup on the
+  device outweighs everything else. For the pooled servers, steady-state p50
+  is close to the device's own reply time, and rust-junosmcp is at or below
+  shigechika on each operation.
+- **The p95 column mostly measures the device.** On every server, 2–4 of each
+  operation's 30 calls take 300–700 ms longer than the rest, and they recur
+  at similar intervals whichever server is running. With 30 samples, p95 is
+  the second-slowest call, so the p95 gaps between the pooled servers are
+  within that device-side variance and do not rank them.
+- **A new SSH session per call is what makes Juniper slow here.** Each of its
+  device calls pays the session setup the others pay once (121 connections
+  per run, as on the mock target), and its facts call also re-gathers the
+  full PyEZ fact set.
+- **Cold start and memory do not depend on the target.** They match the mock
+  run, except Juniper's peak RSS (129 MiB here, 89 MiB on the mock target).
+  The harness does not break that difference down.
 
 Lab-run differences from the mock run, the same for every server:
 
