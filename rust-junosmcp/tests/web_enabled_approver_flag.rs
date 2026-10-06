@@ -75,6 +75,7 @@ async fn default_server_status_has_no_actions() {
                     mode: None,
                 }),
                 rollback_source: None,
+                ..Default::default()
             }],
         },
         dm,
@@ -127,6 +128,7 @@ async fn flag_enabled_server_status_has_actions() {
                     mode: None,
                 }),
                 rollback_source: None,
+                ..Default::default()
             }],
         },
         dm,

@@ -393,18 +393,14 @@ pub fn check_plane_owned_operation(
 
 /// Refuse a rollback to depth `depth` on a plane-owned device.
 ///
-/// The single deterministic function the rollback-depth guard is built from
-/// (MEC-1879, P5a): every call site — `create_junos_change_set`,
-/// `JunosTransaction::stage`'s apply-time re-check, and the `RollbackRef::Archive`
-/// defense-in-depth path — calls this instead of repeating the depth logic, so
-/// the rule can only be changed in one place.
-///
-/// `depth` 0 is a no-op load (revert candidate to running config) and is
-/// always allowed. Any `depth >= 1` on a plane-owned device is refused
-/// unconditionally: depth 1 because commit-origin attribution (MEC-1880, P5b)
-/// does not exist yet to tell the server's own commits from the plane's, and
-/// depth 2+ because of the same risk at greater blast radius. No flag
-/// overrides this.
+/// Defense-in-depth guard for the `RollbackRef::Archive` path only (MEC-1879,
+/// H10): no caller reaches that variant today, but if a future mecmcp version
+/// starts calling `rollback()` directly, this refuses any depth >= 1 on a
+/// plane-owned device unconditionally, the same way the depth-1 commit-0
+/// classifier and [`check_plane_owned_rollback_deep_depth`] refuse the two
+/// reachable paths (`create_junos_change_set`, `JunosTransaction::stage`).
+/// There is no commit-0 attribution wired into the archive path, so it cannot
+/// selectively allow depth 1 the way the change-set path does.
 ///
 /// # Errors
 ///
@@ -417,6 +413,38 @@ pub fn check_plane_owned_rollback_depth(
     depth: u32,
 ) -> Result<(), JmcpError> {
     if depth >= 1 && authority.is_plane_owned() {
+        return Err(JmcpError::PlaneOwnedRollbackDepthRefused {
+            tool: tool_name,
+            device: device_name.to_string(),
+            authority: authority.as_str().to_string(),
+            depth,
+        });
+    }
+    Ok(())
+}
+
+/// The deterministic depth guard for the two reachable plane-owned rollback
+/// paths (MEC-1879/MEC-1880, P5a+P5b): `create_junos_change_set` and
+/// `JunosTransaction::stage`'s apply-time re-check call this for `depth >= 2`.
+/// `depth` 0 is a no-op load and `depth` 1 is not decided here at all —
+/// callers route depth 1 through the commit-0 attribution classifier
+/// (`crate::commit_attribution`) instead, since that is the one depth
+/// attribution can positively clear. `depth >= 2` is refused unconditionally
+/// regardless of attribution: a multi-commit rollback can discard more than
+/// one plane commit, and attribution only ever speaks to commit 0. No flag
+/// overrides this.
+///
+/// # Errors
+///
+/// Returns [`JmcpError::PlaneOwnedRollbackDepthRefused`] when the device is
+/// plane-owned and `depth >= 2`.
+pub fn check_plane_owned_rollback_deep_depth(
+    tool_name: &'static str,
+    device_name: &str,
+    authority: &crate::config_authority::JunosAuthority,
+    depth: u32,
+) -> Result<(), JmcpError> {
+    if depth >= 2 && authority.is_plane_owned() {
         return Err(JmcpError::PlaneOwnedRollbackDepthRefused {
             tool: tool_name,
             device: device_name.to_string(),
@@ -467,7 +495,10 @@ mod tests {
     }
 
     #[test]
-    fn plane_owned_rollback_depth_one_is_refused_pre_p5b() {
+    fn plane_owned_rollback_depth_one_is_refused_in_archive_path() {
+        // `check_plane_owned_rollback_depth` is the archive-path-only guard
+        // now (MEC-1880): it still refuses depth 1 unconditionally, since the
+        // archive path has no commit-0 attribution wired into it.
         use crate::config_authority::JunosAuthority;
         let r = check_plane_owned_rollback_depth("t", "r1", &JunosAuthority::Mist, 1);
         match r {
@@ -494,6 +525,56 @@ mod tests {
                 matches!(r, Err(JmcpError::PlaneOwnedRollbackDepthRefused { depth: d, .. }) if d == depth),
                 "expected depth {depth} to be refused, got {r:?}"
             );
+        }
+    }
+
+    #[test]
+    fn deep_depth_guard_allows_zero_and_one_for_plane_owned() {
+        // Depth 0 and 1 are not this function's job (MEC-1880): depth 0 is
+        // always a no-op, and depth 1 is decided by the commit-0 classifier at
+        // the call site, not here.
+        use crate::config_authority::JunosAuthority;
+        for depth in [0, 1] {
+            assert!(
+                check_plane_owned_rollback_deep_depth(
+                    "t",
+                    "r1",
+                    &JunosAuthority::SecurityDirectorCloud,
+                    depth
+                )
+                .is_ok(),
+                "depth {depth} must not be refused by the deep-depth guard"
+            );
+        }
+    }
+
+    #[test]
+    fn deep_depth_guard_refuses_two_or_more_on_plane_owned() {
+        use crate::config_authority::JunosAuthority;
+        for depth in [2, 5, 49] {
+            let r = check_plane_owned_rollback_deep_depth(
+                "t",
+                "r1",
+                &JunosAuthority::SecurityDirectorCloud,
+                depth,
+            );
+            assert!(
+                matches!(r, Err(JmcpError::PlaneOwnedRollbackDepthRefused { depth: d, .. }) if d == depth),
+                "expected depth {depth} to be refused, got {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn deep_depth_guard_allows_any_depth_for_local_and_unknown() {
+        use crate::config_authority::JunosAuthority;
+        for authority in [JunosAuthority::Local, JunosAuthority::Unknown] {
+            for depth in [0, 1, 2, 49] {
+                assert!(
+                    check_plane_owned_rollback_deep_depth("t", "r1", &authority, depth).is_ok(),
+                    "depth {depth} must be allowed for {authority:?}"
+                );
+            }
         }
     }
 
