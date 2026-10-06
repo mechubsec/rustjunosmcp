@@ -559,6 +559,17 @@ pub async fn create_change_set_with_cancel(
             .validate_shape(index)
             .map_err(JmcpError::Validation)?;
 
+        // `commit0` is server-computed only (MEC-1880, §5.5): it is the
+        // commit-0 attribution binding the plane-owned rollback guard below
+        // assigns itself, after classifying the device's own commit log. A
+        // caller-supplied value would let a plan forge that classification
+        // and defeat the apply-time TOCTOU re-check this binding exists for.
+        if action.commit0.is_some() {
+            return Err(JmcpError::Validation(format!(
+                "action {index}: `commit0` is server-computed and must not be supplied"
+            )));
+        }
+
         if let Some(payload) = &action.payload {
             let format = payload.format.as_deref().unwrap_or("set");
             // Validates the format alone; the text isn't needed for that, so
@@ -2879,6 +2890,73 @@ mod tests {
             payload: None,
             rollback_source: Some(depth),
             ..Default::default()
+        }
+    }
+
+    fn caller_supplied_commit0_binding() -> crate::commit_attribution::CommitZeroBinding {
+        crate::commit_attribution::CommitZeroBinding::from_entry(
+            &crate::commit_attribution::parse_newest_entry(
+                "0   2026-10-05 10:00:00 UTC by alice via cli\n",
+            )
+            .unwrap(),
+        )
+    }
+
+    /// MEC-1880 review F2: `commit0` is documented as server-computed only —
+    /// `create_junos_change_set` must reject a caller-supplied value outright,
+    /// on every device, not only on a plane-owned one where the guard below
+    /// happens to overwrite it anyway. Otherwise a caller-forged binding on a
+    /// `local` device (which never runs the classifier at all) would pass
+    /// straight through, and the apply-time binding comparison would compare
+    /// the fresh log against a classification the server never performed.
+    #[tokio::test]
+    async fn create_change_set_rejects_caller_supplied_commit0_on_local_device() {
+        let r = create_on_plane_owned_device(
+            "local",
+            vec![JunosAction {
+                payload: None,
+                rollback_source: Some(1),
+                commit0: Some(caller_supplied_commit0_binding()),
+            }],
+            false,
+        )
+        .await;
+
+        match r {
+            Err(JmcpError::Validation(msg)) => {
+                assert!(
+                    msg.contains("action 0") && msg.contains("commit0"),
+                    "got: {msg}"
+                );
+            }
+            other => panic!(
+                "expected create to reject a caller-supplied commit0, got {other:?}"
+            ),
+        }
+    }
+
+    /// Same rejection on a plane-owned device: a caller must not be able to
+    /// pre-seed the binding the classifier is supposed to compute itself.
+    #[tokio::test]
+    async fn create_change_set_rejects_caller_supplied_commit0_on_plane_owned_device() {
+        let r = create_on_plane_owned_device(
+            "mist",
+            vec![JunosAction {
+                payload: None,
+                rollback_source: Some(1),
+                commit0: Some(caller_supplied_commit0_binding()),
+            }],
+            false,
+        )
+        .await;
+
+        match r {
+            Err(JmcpError::Validation(msg)) => {
+                assert!(msg.contains("commit0"), "got: {msg}");
+            }
+            other => panic!(
+                "expected create to reject a caller-supplied commit0, got {other:?}"
+            ),
         }
     }
 

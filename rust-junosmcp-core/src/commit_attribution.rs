@@ -19,21 +19,8 @@
 //! [`classify_commit_zero`] that cannot positively prove a non-plane commit
 //! returns `Ambiguous` or a stricter class, never `NonPlane`.
 //!
-//! # Threat-model note: clustered-device residual window (MEC-1876 §12 Q3, open)
-//!
-//! The §5.5 TOCTOU binding re-reads entry 0 inside *this session's* candidate
-//! lock at apply time, which closes the race for a standalone device. On a
-//! chassis cluster, locking opens a *private* candidate configuration
-//! database scoped to the locking session (MEC-153); the commit log this
-//! module reads is the shared, committed history, not that private database.
-//! A second session on the other routing engine can commit — and overwrite
-//! entry 0 — after this module's apply-time re-read returns `Ok` but before
-//! this session's own commit lands, because the re-read and this session's
-//! commit are not atomic with respect to a commit from outside this lock.
-//! Closing that fully would require the shared-candidate behavior MEC-153
-//! describes, which this change does not implement. This residual window is
-//! accepted here, not fixed; it must be confirmed by Percy during review
-//! (MEC-1880 acceptance criteria) rather than treated as already closed.
+//! Chassis-cluster timing is tracked separately (MEC-153); see the MEC-1880
+//! Paperclip task for the detailed acceptance notes.
 
 use crate::helpers::excerpt;
 use crate::tools::transfer_file::hex32;
@@ -214,17 +201,24 @@ pub fn classify_commit_zero(
         return CommitZeroClass::PendingConfirm;
     }
 
+    if entry.sequence != 0 {
+        return CommitZeroClass::Ambiguous;
+    }
+
     let logins_unusable = plane_commit_logins.is_empty()
         || plane_commit_logins
             .iter()
             .any(|login| login == device_login);
     let no_login_session = entry.user == "root" && entry.client == "other";
-    let automated_client = matches!(
-        entry.client.as_str(),
-        "synchronize" | "autoinstall" | "button"
-    );
+    // Allowlist, not denylist (MEC-1880 review F4): only client forms this
+    // module can positively attribute to an interactive or NETCONF session
+    // clear the gate. Anything else — an automated client form, a future
+    // Junos client string, or a header with a trailing annotation this
+    // parser doesn't recognise — falls to `Ambiguous` rather than being
+    // assumed non-plane by default.
+    let attributable_client = matches!(entry.client.as_str(), "cli" | "netconf" | "junoscript");
 
-    if logins_unusable || no_login_session || automated_client {
+    if logins_unusable || no_login_session || !attributable_client {
         return CommitZeroClass::Ambiguous;
     }
 
@@ -291,6 +285,36 @@ impl CommitZeroBinding {
             && self.user == entry.user
             && self.client == entry.client
             && self.comment_sha256 == sha256_hex(entry.comment.as_deref().unwrap_or(""))
+    }
+}
+
+/// Apply-time re-check for a guarded plane-owned `rollback_source: 1` (MEC-1880
+/// §5.5, review F3).
+///
+/// Two independent things must both still hold at apply time, not just one:
+/// `binding` must still describe the device's current entry 0 (the log did
+/// not move underneath the approved plan), *and* a fresh classification of
+/// that same entry must still clear the gate (the operator did not edit
+/// `plane_commit_logins` between create and apply in a way that would have
+/// changed the create-time verdict). Checking only the binding match would
+/// miss an inventory edit that re-tags a log entry the plan already bound to;
+/// checking only the classification would miss the log moving to a different
+/// entry that happens to classify the same way. `fresh_entry` is `None` when
+/// the device did not answer or the log did not parse, which fails closed
+/// through the `Option` match below.
+pub fn rollback_one_still_permitted(
+    binding: Option<&CommitZeroBinding>,
+    fresh_entry: Option<&CommitLogEntry>,
+    plane_commit_logins: &[String],
+    device_login: &str,
+) -> bool {
+    match (fresh_entry, binding) {
+        (Some(fresh_entry), Some(binding)) => {
+            binding.matches(fresh_entry)
+                && classify_commit_zero(Some(fresh_entry), plane_commit_logins, device_login)
+                    .allows_rollback_one()
+        }
+        _ => false,
     }
 }
 
@@ -536,6 +560,48 @@ mod tests {
         );
     }
 
+    /// F4: an unrecognised or future client string must not clear the gate
+    /// just because it isn't one of the three automated forms this module
+    /// already knew about. Allowlist, not denylist.
+    #[test]
+    fn classify_ambiguous_for_unrecognised_client_forms() {
+        for client in ["snmp", "other", "j-web", "rest-api"] {
+            let entry = CommitLogEntry {
+                sequence: 0,
+                timestamp: "t".into(),
+                user: "alice".into(),
+                client: client.into(),
+                pending_confirm: false,
+                comment: None,
+            };
+            assert_eq!(
+                classify_commit_zero(Some(&entry), &["sdc-svc".into()], "rjm-netconf"),
+                CommitZeroClass::Ambiguous,
+                "client {client} must be ambiguous, not assumed non-plane"
+            );
+        }
+    }
+
+    /// F4: only entry 0 is ever attributed. A caller that somehow hands the
+    /// classifier a non-zero sequence (e.g. a future caller of this function
+    /// that didn't go through `parse_newest_entry`) must not get a positive
+    /// verdict out of it.
+    #[test]
+    fn classify_ambiguous_when_sequence_is_not_zero() {
+        let entry = CommitLogEntry {
+            sequence: 1,
+            timestamp: "t".into(),
+            user: "alice".into(),
+            client: "cli".into(),
+            pending_confirm: false,
+            comment: None,
+        };
+        assert_eq!(
+            classify_commit_zero(Some(&entry), &["sdc-svc".into()], "rjm-netconf"),
+            CommitZeroClass::Ambiguous
+        );
+    }
+
     #[test]
     fn only_non_plane_allows_rollback_one() {
         assert!(CommitZeroClass::NonPlane.allows_rollback_one());
@@ -603,5 +669,82 @@ mod tests {
         let entry = parse_newest_entry(REAL_LOG).unwrap();
         let out = commit0_attribution_output(Some(&entry), CommitZeroClass::NonPlane);
         assert_eq!(out["carries_request_id"], true);
+    }
+
+    fn non_plane_entry() -> CommitLogEntry {
+        CommitLogEntry {
+            sequence: 0,
+            timestamp: "2026-10-05 10:00:00 UTC".into(),
+            user: "alice".into(),
+            client: "cli".into(),
+            pending_confirm: false,
+            comment: None,
+        }
+    }
+
+    /// The ordinary case the create-time check already cleared: the binding
+    /// still matches the fresh entry, and the allowlist hasn't changed.
+    #[test]
+    fn rollback_one_still_permitted_when_binding_matches_and_still_non_plane() {
+        let entry = non_plane_entry();
+        let binding = CommitZeroBinding::from_entry(&entry);
+        assert!(rollback_one_still_permitted(
+            Some(&binding),
+            Some(&entry),
+            &["sdc-svc".into()],
+            "rjm-netconf",
+        ));
+    }
+
+    /// §5.5 TOCTOU binding: a commit landed between create and apply, so the
+    /// fresh entry no longer matches the plan's bound entry 0.
+    #[test]
+    fn rollback_one_refused_when_commit_log_moved() {
+        let entry = non_plane_entry();
+        let binding = CommitZeroBinding::from_entry(&entry);
+        let mut moved = entry.clone();
+        moved.comment = Some("a different commit landed".into());
+        assert!(!rollback_one_still_permitted(
+            Some(&binding),
+            Some(&moved),
+            &["sdc-svc".into()],
+            "rjm-netconf",
+        ));
+    }
+
+    /// F3: the log entry itself didn't move, but the operator added its user
+    /// to `plane_commit_logins` between create and apply. The binding still
+    /// matches, but the fresh classification must now refuse.
+    #[test]
+    fn rollback_one_refused_when_allowlist_edited_after_create() {
+        let entry = non_plane_entry();
+        let binding = CommitZeroBinding::from_entry(&entry);
+        assert!(!rollback_one_still_permitted(
+            Some(&binding),
+            Some(&entry),
+            &["sdc-svc".into(), "alice".into()],
+            "rjm-netconf",
+        ));
+    }
+
+    /// A missing binding (should never happen on a plan this server created,
+    /// but the check must fail closed anyway) or a missing fresh entry (the
+    /// device didn't answer) both refuse.
+    #[test]
+    fn rollback_one_refused_when_binding_or_fresh_entry_missing() {
+        let entry = non_plane_entry();
+        let binding = CommitZeroBinding::from_entry(&entry);
+        assert!(!rollback_one_still_permitted(
+            None,
+            Some(&entry),
+            &["sdc-svc".into()],
+            "rjm-netconf",
+        ));
+        assert!(!rollback_one_still_permitted(
+            Some(&binding),
+            None,
+            &["sdc-svc".into()],
+            "rjm-netconf",
+        ));
     }
 }

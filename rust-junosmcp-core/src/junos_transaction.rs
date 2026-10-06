@@ -507,9 +507,14 @@ impl DeviceTransaction for JunosTransaction {
             // plane-owned in `devices.json` between create and apply; reading
             // the inventory fresh on every staged action closes that window.
             if let ResolvedAction::Rollback(rollback) = &resolved {
-                let authority = {
+                let (authority, plane_commit_logins, device_login) = {
                     let inv = self.device_manager.inventory();
-                    inv.get(&self.router)?.config_authority.clone()
+                    let entry = inv.get(&self.router)?;
+                    (
+                        entry.config_authority.clone(),
+                        entry.plane_commit_logins.clone(),
+                        entry.username.clone(),
+                    )
                 };
 
                 let depth_check: Result<(), JmcpError> =
@@ -545,14 +550,25 @@ impl DeviceTransaction for JunosTransaction {
                         let fresh_entry = log
                             .ok()
                             .and_then(|log| crate::commit_attribution::parse_newest_entry(&log));
-                        match (&fresh_entry, actions[loaded].commit0.as_ref()) {
-                            (Some(fresh_entry), Some(binding)) if binding.matches(fresh_entry) => {
-                                Ok(())
-                            }
-                            _ => Err(JmcpError::CommitLogMoved {
+
+                        // Re-check both the binding and the classification,
+                        // not just the binding (MEC-1880 review F3): an
+                        // operator can edit `plane_commit_logins` between
+                        // create and apply, and a binding captured when the
+                        // log's user was not on the allowlist must not
+                        // survive that edit.
+                        if crate::commit_attribution::rollback_one_still_permitted(
+                            actions[loaded].commit0.as_ref(),
+                            fresh_entry.as_ref(),
+                            &plane_commit_logins,
+                            &device_login,
+                        ) {
+                            Ok(())
+                        } else {
+                            Err(JmcpError::CommitLogMoved {
                                 tool: "apply_junos_change_set",
                                 device: self.router.clone(),
-                            }),
+                            })
                         }
                     } else {
                         crate::helpers::check_plane_owned_rollback_deep_depth(
