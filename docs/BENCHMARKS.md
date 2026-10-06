@@ -65,8 +65,24 @@ How to read it:
 
 ### Lab device
 
-Pending. The same workload will run against a vSRX 24.4 lab device, and the
-results and raw CSV will be added here.
+In progress (runs 1–3 of the read-only workload on a vSRX lab device). The
+results table and raw CSV are added here when all three runs are complete.
+
+Lab-run differences from the mock run, the same for every server:
+
+- **Pacing.** The lab device rate-limits new SSH sessions, and the Juniper
+  server opens one session per call. Each steady-state device call is
+  preceded by an untimed 2 s pause (`--pace-ms 2000`), and the harness idles
+  70 s between servers (`--settle-s 70`). Neither pause is counted in any
+  latency. Idle gaps can still change behaviour that depends on time, such as
+  a pooled session idling out; the raw CSV shows any such call.
+- **Device software.** The device runs Junos 26.2R1.7, not the 24.4 named in
+  the original plan.
+- **Config check.** The bench login class is read-only and has no
+  configuration view, so the device answers `get-configuration` with
+  per-stanza `/* ACCESS-DENIED */` markers. The config operation therefore
+  measures a full device round trip for a reply of that shape. It counts as
+  ok when the reply contains either `host-name` or that marker.
 
 ## Method
 
@@ -95,7 +111,8 @@ The harness lives in [`scripts/bench/`](../scripts/bench/).
   not measured.
 - **Correctness check.** A call counts only if it returns without a JSON-RPC
   or tool error and its text matches an expected pattern, such as a Junos
-  version string for facts or `host-name` for config. The match runs in memory.
+  version string for facts or `host-name` for config (see the lab notes above
+for the read-only exception). The match runs in memory.
   Response bodies are never written anywhere. `raw.csv` holds latency, an ok
   flag, a fixed failure class and the reply size in bytes.
 - **Metrics.**
@@ -164,7 +181,9 @@ file:
             "private_key_path": "…", "host_key": "ssh-ed25519 AAAA…"}}
 ```
 
-Use a read-only Junos login class. Results never contain the device's
+Use a read-only Junos login class. If the device rate-limits SSH
+sessions, add `--pace-ms 2000 --settle-s 70` (the values used for our lab
+run). Results never contain the device's
 address or name: every server sees the target as `bench` on `127.0.0.1`.
 
 Dependency locks for the harness and shigechika are in
