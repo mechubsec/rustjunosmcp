@@ -81,6 +81,7 @@ mod tests {
             token_verified_fields: TokenVerifiedFields::none(),
             approver: None,
             change_set_id: None,
+            verified_approver: None,
         }
     }
 

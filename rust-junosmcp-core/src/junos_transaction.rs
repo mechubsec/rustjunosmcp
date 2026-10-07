@@ -2043,6 +2043,7 @@ mod tests {
             token_verified_fields: mecmcp_audit::TokenVerifiedFields::none(),
             approver: None,
             change_set_id: None,
+            verified_approver: None,
         };
         let formatted = format_attribution(&attribution);
         assert!(formatted.contains("CHG0012345"));
@@ -2070,6 +2071,7 @@ mod tests {
             token_verified_fields: mecmcp_audit::TokenVerifiedFields::none(),
             approver: approver.map(str::to_owned),
             change_set_id: change_set_id.map(str::to_owned),
+            verified_approver: None,
         }
     }
 
@@ -2178,6 +2180,7 @@ mod tests {
             token_verified_fields: mecmcp_audit::TokenVerifiedFields::none(),
             approver: Some(long),
             change_set_id: Some("86324b20a3ecbfde732b981a8c69a664d44b176c29b5cdaf".into()),
+            verified_approver: None,
         };
 
         let formatted = format_attribution(&attribution);

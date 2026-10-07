@@ -8,9 +8,10 @@ use crate::server::JmcpHandler;
 use anyhow::{Context, Result};
 use mecmcp_auth::BearerSyntax;
 use mecmcp_transport::{
-    BearerAuthenticator, BearerBoundary, BearerResponseProfile, HostOriginPolicy,
-    HttpTransportConfig, InsecureBindAcknowledgement, LimitsConfig, NoAuthAcknowledgement,
-    ServePlan, TransportIdentity, build_streamable_http_router, serve_router,
+    ApproverAssertionVerifier, BearerAuthenticator, BearerBoundary, BearerResponseProfile,
+    HostOriginPolicy, HttpTransportConfig, InsecureBindAcknowledgement, LimitsConfig,
+    NoAuthAcknowledgement, ServePlan, TransportIdentity, build_streamable_http_router,
+    serve_router,
 };
 use rust_junosmcp_auth::{CallerCtx, TokenStoreFile};
 use serde_json::Value;
@@ -172,6 +173,7 @@ pub fn build_http_router(
     enable_metrics: bool,
     allow_insecure_bind: bool,
     shutdown: CancellationToken,
+    approver_assertion: Option<Arc<ApproverAssertionVerifier>>,
 ) -> Result<ServePlan> {
     // Junos transport identity: metric prefix, server label, bearer realm, target keys.
     let identity = TransportIdentity::new(
@@ -190,6 +192,13 @@ pub fn build_http_router(
         });
         let boundary = BearerBoundary::new(authenticator, BearerResponseProfile::detailed("jmcp"))
             .with_preflight(JunosPreflight);
+        // Step-up approver-assertion verification (MEC-994/MEC-995), only
+        // meaningful in authenticated mode: `Mecmcp-Approver-Assertion` binds
+        // to a bearer-token caller, and unauthenticated mode has none.
+        let boundary = match approver_assertion {
+            Some(verifier) => boundary.with_approver_assertion(verifier),
+            None => boundary,
+        };
         HttpTransportConfig::authenticated(
             identity.clone(),
             limits.clone(),
@@ -245,6 +254,7 @@ pub async fn serve_http(
     allow_insecure_bind: bool,
     shutdown: CancellationToken,
     shutdown_timeout: std::time::Duration,
+    approver_assertion: Option<Arc<ApproverAssertionVerifier>>,
 ) -> Result<()> {
     let plan = build_http_router(
         handler,
@@ -255,6 +265,7 @@ pub async fn serve_http(
         enable_metrics,
         allow_insecure_bind,
         shutdown,
+        approver_assertion,
     )?;
     // Readiness marker. Three test harnesses block on this exact string, and
     // `--tls-cert` callers on the "(TLS)" suffix, so it is a contract rather

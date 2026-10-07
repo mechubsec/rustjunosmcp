@@ -54,6 +54,7 @@ fn test_attribution() -> mecmcp_audit::Attribution {
         token_verified_fields: mecmcp_audit::TokenVerifiedFields::none(),
         approver: None,
         change_set_id: None,
+        verified_approver: None,
     }
 }
 
@@ -82,6 +83,7 @@ async fn default_server_status_has_no_actions() {
         coordinator.clone(),
         policy,
         test_attribution(),
+        None,
     )
     .await
     .expect("create_change_set failed");
@@ -135,6 +137,7 @@ async fn flag_enabled_server_status_has_actions() {
         coordinator.clone(),
         policy,
         test_attribution(),
+        None,
     )
     .await
     .expect("create_change_set failed");

@@ -74,9 +74,11 @@ rust-junosmcp-auth = { version = "0.27.4", path = "../rust-junosmcp-auth" }
 mecmcp-audit = { workspace = true }
 mecmcp-auth = { workspace = true }
 mecmcp-changeset = { workspace = true }
-mecmcp-transport = { workspace = true }
+mecmcp-transport = { workspace = true, features = ["verified-approver"] }
 mecmcp-runtime = { workspace = true }
 mecmcp-redact = { workspace = true }
+mecmcp-oidc = { workspace = true }
+mecmcp-http = { workspace = true }
 rust-junosmcp-srx-core = { version = "0.27.4", path = "../rust-junosmcp-srx-core", optional = true }
 tokio              = { workspace = true }
 tokio-util         = { workspace = true }

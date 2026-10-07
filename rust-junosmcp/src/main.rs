@@ -127,6 +127,15 @@ async fn main() -> Result<()> {
         warnings,
     } = env_compat::parse();
 
+    // `mecmcp-http`'s `HttpClient` (via `HttpKeySource`, used only when
+    // `--oidc-issuer` is configured below) requires a process-wide rustls
+    // `CryptoProvider`. Installed unconditionally and ignored if already
+    // installed: `install_default` is a one-shot, and every other rustls use
+    // in this binary (TLS serving) builds and passes its own provider
+    // explicitly rather than relying on the global default, so this cannot
+    // conflict with it.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     if let Some(key_path) = args.audit_hmac_key_file.as_deref() {
         ensure_audit_hmac_key(key_path).context("pre-provisioning audit HMAC key file")?;
     }
@@ -187,11 +196,17 @@ async fn main() -> Result<()> {
         otel_endpoint: None,
         otel_service_name: "mecmcp".to_string(),
         evidence: args.evidence.clone(),
-        // Not exposed as a rust-junosmcp CLI flag yet; no approval-digest
-        // coordinator is wired into this binary, so there is no key to pass.
-        approval_digest_key_file: None,
+        approval_digest_key_file: args.approval_digest_key_file.clone(),
     };
     mecmcp_runtime::cli_validate::validate(&shared_cli).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // Cross-check the verified-approver flags against this binary's own
+    // --approval-digest-key-file and --lab-mode, which `VerifiedApproverArgs`
+    // cannot see on its own (mecmcp-runtime has no dependency on
+    // mecmcp-changeset and does not know this server's lab-mode flag).
+    args.verified_approver
+        .validate(args.approval_digest_key_file.is_some(), args.lab_mode)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // Vendor-specific validation.
     //
@@ -471,11 +486,69 @@ async fn main() -> Result<()> {
         Err(error) => anyhow::bail!("SSDF evidence configuration: {error}"),
     };
 
-    let mut changeset_coordinator = mecmcp_changeset::ChangesetCoordinator::load(
+    // Keyed approval digest (MEC-457). Loaded here, before the coordinator
+    // reads the state file, so any on-disk v6-digested approval is verified
+    // against it at load time rather than only on new approvals
+    // (`load_with_key`'s whole reason for existing over `with_approval_digest_key`).
+    let approval_digest_key = args
+        .approval_digest_key_file
+        .as_deref()
+        .map(mecmcp_changeset::ApprovalDigestKey::load_from_file)
+        .transpose()
+        .context("loading --approval-digest-key-file")?;
+
+    // Step-up approver-assertion verifier (MEC-994/MEC-995), when an issuer
+    // is configured. `None` behaves identically to a server with no OIDC
+    // support at all: `mecmcp-transport`'s bearer boundary refuses a
+    // presented `Mecmcp-Approver-Assertion` header with 400 rather than
+    // silently accepting it.
+    let approver_assertion_verifier = args
+        .verified_approver
+        .oidc_issuer
+        .as_deref()
+        .map(|issuer| -> Result<_> {
+            let audience = args
+                .verified_approver
+                .oidc_audience
+                .clone()
+                .context("--oidc-issuer requires --oidc-audience (checked above)")?;
+            let http_client =
+                mecmcp_http::HttpClient::new(mecmcp_http::HttpClientConfig::default())
+                    .context("building the OIDC discovery/JWKS HTTP client")?;
+            let key_source: std::sync::Arc<dyn mecmcp_oidc::KeySource> =
+                std::sync::Arc::new(mecmcp_oidc::HttpKeySource::new(http_client));
+            let oidc_config = mecmcp_oidc::OidcConfig::new(
+                issuer,
+                audience,
+                args.verified_approver.oidc_role_claim.clone(),
+            );
+            let token_verifier =
+                std::sync::Arc::new(mecmcp_oidc::TokenVerifier::new(oidc_config, key_source));
+            let policy = args
+                .verified_approver
+                .approver_policy()
+                .context("--oidc-issuer is set, so approver_policy() must be Some")?;
+            Ok(std::sync::Arc::new(
+                mecmcp_transport::ApproverAssertionVerifier::new(token_verifier, issuer, policy),
+            ))
+        })
+        .transpose()
+        .context("configuring the verified-approver assertion verifier")?;
+    if args.verified_approver.require_verified_approver {
+        tracing::warn!(
+            target: "audit",
+            "strict verified-approver mode enabled: approve_junos_change_set requires a fresh \
+             IdP-verified approver assertion, and create_junos_change_set requires the owner's \
+             token to carry an oidc_subject binding."
+        );
+    }
+
+    let mut changeset_coordinator = mecmcp_changeset::ChangesetCoordinator::load_with_key(
         Some(&args.changeset_state_file),
         mecmcp_changeset::OperationLimits::default(),
         std::time::Duration::from_secs(args.changeset_approval_timeout_secs),
         args.lab_mode,
+        approval_digest_key,
     )
     .with_context(|| {
         format!(
@@ -486,6 +559,8 @@ async fn main() -> Result<()> {
     if let Some(service) = &evidence {
         changeset_coordinator = changeset_coordinator.with_evidence(service.recorder());
     }
+    changeset_coordinator = changeset_coordinator
+        .with_require_verified_approver(args.verified_approver.require_verified_approver);
     let coordinator = std::sync::Arc::new(changeset_coordinator);
 
     // #370: settle commits this process's predecessor died in the middle of.
@@ -718,6 +793,7 @@ async fn main() -> Result<()> {
                 args.allow_insecure_bind,
                 shutdown_token,
                 shutdown_timeout,
+                approver_assertion_verifier,
             )
             .await?;
         }

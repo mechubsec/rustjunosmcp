@@ -1354,6 +1354,8 @@ mod scope_tests {
     fn wildcard_scopes_allow_every_srx_tool_and_router() {
         let handler = make_handler(true);
         let wildcard_ctx = CallerCtx {
+            oidc_subject: None,
+            verified_approver: None,
             token_name: "srx-admin".into(),
             client_name: None,
             model_id: None,
@@ -1394,6 +1396,8 @@ mod scope_tests {
 
         // Explicit allowlist should still grant write tools
         let explicit_ctx = CallerCtx {
+            oidc_subject: None,
+            verified_approver: None,
             token_name: "srx-write".into(),
             client_name: None,
             model_id: None,
