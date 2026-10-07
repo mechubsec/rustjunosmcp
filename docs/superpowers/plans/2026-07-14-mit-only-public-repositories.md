@@ -10,10 +10,10 @@
 
 ## Global Constraints
 
-- Public repository scope is exactly `firewallintentconverter`, `fwconfigsantizer`, `fwskillsshare`, `rustez`, `rustjunosmcp`, `rustnetconf`, `rustpanosmcp`, and `srxsync`.
+- Public repository scope is exactly `firewallintentconverter`, `fwconfigsanitizer`, `fwskillsshare`, `rustez`, `rustjunosmcp`, `rustnetconf`, `rustpanosmcp`, and `srxsync`.
 - Process repositories sequentially. Merge and clean up one repository worktree before creating the next repository worktree.
 - Use project-local `.worktrees/mit-only-license` directories on branch `agent/mit-only-license`.
-- Before creating a project-local worktree, verify `.worktrees/` is ignored. For `fwconfigsantizer`, `fwskillsshare`, and `srxsync`, commit `.worktrees/` to `.gitignore` before creating the worktree.
+- Before creating a project-local worktree, verify `.worktrees/` is ignored. For `fwconfigsanitizer`, `fwskillsshare`, and `srxsync`, commit `.worktrees/` to `.gitignore` before creating the worktree.
 - Preserve each repository's existing `LICENSE-MIT` text and copyright line by renaming it to `LICENSE`; do not synthesize new copyright holders.
 - Delete the project-owned `LICENSE-APACHE` and change current project-owned metadata, README text, badges, contribution terms, OCI labels, and packaging to `MIT`.
 - Preserve historical plans/specifications and third-party dependency license records and allowlists, including Apache-2.0 dependency entries in npm lockfiles and Rust `deny.toml` files.
@@ -31,7 +31,7 @@
 - `rustnetconf`: `LICENSE`, three crate manifests, `README.md`, and `TODOS.md` define package and current release-tracking licensing.
 - `rustpanosmcp`: `LICENSE`, workspace/fuzz manifests, `Dockerfile`, `README.md`, and `scripts/build-release.sh` define crate, image, documentation, and release-archive licensing.
 - `firewallintentconverter`: `LICENSE`, npm metadata, root lockfile metadata, and `README.md` define web-package and documentation licensing.
-- `fwconfigsantizer`: `LICENSE`, `README.md`, and `CONTRIBUTING.md` define the project's current licensing and contribution terms.
+- `fwconfigsanitizer`: `LICENSE`, `README.md`, and `CONTRIBUTING.md` define the project's current licensing and contribution terms.
 - `srxsync`: `LICENSE`, `pyproject.toml`, and `README.md` define Python source/distribution and contribution licensing.
 - `fwskillsshare`: `LICENSE`, `README.md`, installer inventory, package validator, retained cross-skill metadata, and the `skills/` directory define the distributable catalog. Fourteen named subtrees and `NOTICE` are removed.
 - `mechubsite`: `index.html` publishes license copy and badges; `test_links.py` prevents the active site from returning to mixed-license wording.
@@ -715,9 +715,9 @@ Expected: the PR is merged and local state is clean.
 
 ---
 
-### Task 6: Relicense `fwconfigsantizer`
+### Task 6: Relicense `fwconfigsanitizer`
 
-**Repository:** `/home/mharman/Projects/fwconfigsantizer`
+**Repository:** `/home/mharman/Projects/fwconfigsanitizer`
 
 **Files:**
 - Modify prerequisite: `.gitignore`
@@ -735,7 +735,7 @@ Expected: the PR is merged and local state is clean.
 Run:
 
 ```bash
-cd /home/mharman/Projects/fwconfigsantizer
+cd /home/mharman/Projects/fwconfigsanitizer
 git status -sb
 git pull --ff-only origin main
 ```
@@ -830,10 +830,10 @@ Run:
 
 ```bash
 git push -u origin agent/mit-only-license
-gh pr create --repo mechubsec/fwconfigsantizer --base main --head agent/mit-only-license --title "chore: adopt MIT-only licensing" --body "Adds the required project-worktree ignore and makes MIT the sole current source and contribution license. Runtime application code is unchanged."
-gh pr view --repo mechubsec/fwconfigsantizer --json url,mergeStateStatus,statusCheckRollup
-gh pr merge --repo mechubsec/fwconfigsantizer --merge --delete-branch
-cd /home/mharman/Projects/fwconfigsantizer
+gh pr create --repo mechubsec/fwconfigsanitizer --base main --head agent/mit-only-license --title "chore: adopt MIT-only licensing" --body "Adds the required project-worktree ignore and makes MIT the sole current source and contribution license. Runtime application code is unchanged."
+gh pr view --repo mechubsec/fwconfigsanitizer --json url,mergeStateStatus,statusCheckRollup
+gh pr merge --repo mechubsec/fwconfigsanitizer --merge --delete-branch
+cd /home/mharman/Projects/fwconfigsanitizer
 git pull --ff-only origin main
 git worktree remove .worktrees/mit-only-license
 git branch -d agent/mit-only-license
@@ -1308,7 +1308,7 @@ Run:
 gh repo list fastrevmd-lab --visibility public --limit 200 --json name,isFork,isArchived,licenseInfo --jq '
   map(select((.isFork | not) and (.isArchived | not)))
   | {count: length, repositories: map({name, license: .licenseInfo.key}), all_mit: (length == 8 and all(.licenseInfo.key == "mit"))}'
-for repo in firewallintentconverter fwconfigsantizer fwskillsshare rustez rustjunosmcp rustnetconf rustpanosmcp srxsync; do
+for repo in firewallintentconverter fwconfigsanitizer fwskillsshare rustez rustjunosmcp rustnetconf rustpanosmcp srxsync; do
   gh api "repos/fastrevmd-lab/$repo/contents/LICENSE" --jq '.name' | grep -Fx LICENSE
   if gh api "repos/fastrevmd-lab/$repo/contents/LICENSE-MIT" >/dev/null 2>&1; then exit 1; fi
   if gh api "repos/fastrevmd-lab/$repo/contents/LICENSE-APACHE" >/dev/null 2>&1; then exit 1; fi
@@ -1445,7 +1445,7 @@ gh pr list --repo mechubsec/rustez --state merged --search '"chore: adopt MIT-on
 gh pr list --repo mechubsec/rustnetconf --state merged --search '"chore: adopt MIT-only licensing" in:title' --limit 1 --json number,url,mergedAt
 gh pr list --repo mechubsec/rustpanosmcp --state merged --search '"chore: adopt MIT-only licensing" in:title' --limit 1 --json number,url,mergedAt
 gh pr list --repo mechubsec/firewallintentconverter --state merged --search '"chore: adopt MIT-only licensing" in:title' --limit 1 --json number,url,mergedAt
-gh pr list --repo mechubsec/fwconfigsantizer --state merged --search '"chore: adopt MIT-only licensing" in:title' --limit 1 --json number,url,mergedAt
+gh pr list --repo mechubsec/fwconfigsanitizer --state merged --search '"chore: adopt MIT-only licensing" in:title' --limit 1 --json number,url,mergedAt
 gh pr list --repo mechubsec/srxsync --state merged --search '"chore: adopt MIT-only licensing" in:title' --limit 1 --json number,url,mergedAt
 gh pr list --repo mechubsec/fwskillsshare --state merged --search '"chore: publish MIT-only skill catalog" in:title' --limit 1 --json number,url,mergedAt
 gh pr list --repo fastrevmd-lab/mechubsite --state merged --search '"docs: show MIT-only repository licensing" in:title' --limit 1 --json number,url,mergedAt
