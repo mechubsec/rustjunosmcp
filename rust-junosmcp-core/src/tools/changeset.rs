@@ -10,7 +10,9 @@ use crate::helpers::excerpt;
 use crate::junos_transaction::{JunosAction, JunosTransaction};
 use crate::policy::{Decision, Policy};
 use mecmcp_audit::Attribution;
-use mecmcp_changeset::{ChangesetCoordinator, CommitOptions, DeviceTransaction as _};
+use mecmcp_changeset::{
+    ApproverIdentity, ChangesetCoordinator, CommitOptions, DeviceTransaction as _, OwnerSubject,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -514,6 +516,7 @@ pub async fn create_change_set(
     coordinator: Arc<ChangesetCoordinator>,
     policy: Arc<Policy>,
     attribution: Attribution,
+    owner_subject: Option<rust_junosmcp_auth::OidcSubject>,
 ) -> Result<Value, JmcpError> {
     create_change_set_with_cancel(
         args,
@@ -521,18 +524,27 @@ pub async fn create_change_set(
         coordinator,
         policy,
         attribution,
+        owner_subject,
         CancellationToken::new(),
     )
     .await
 }
 
 /// Cancellable variant of `create_change_set` for use in transport shutdown paths.
+///
+/// `owner_subject` is the owner token's bound IdP identity (`--oidc-subject`
+/// at `token add` time), when it has one. It is NOT the verified-approver
+/// assertion — that only ever applies at approval time — but the durable
+/// record `approve_change_set` later checks a verified approver against, so
+/// the same human cannot propose and approve through two tokens bound to the
+/// same IdP identity (MEC-994 W2/W4).
 pub async fn create_change_set_with_cancel(
     mut args: CreateChangeSetArgs,
     dm: Arc<DeviceManager>,
     coordinator: Arc<ChangesetCoordinator>,
     policy: Arc<Policy>,
     attribution: Attribution,
+    owner_subject: Option<rust_junosmcp_auth::OidcSubject>,
     _ct: CancellationToken,
 ) -> Result<Value, JmcpError> {
     // Validate the device exists, and capture its config authority for the
@@ -743,6 +755,10 @@ pub async fn create_change_set_with_cancel(
             owner,
             args.expected_fingerprint,
             policy_signature,
+            owner_subject.map(|s| OwnerSubject {
+                issuer: s.issuer,
+                subject: s.subject,
+            }),
         )
         .await
         .map_err(|e| JmcpError::Validation(e.to_string()))?;
@@ -828,16 +844,20 @@ pub async fn approve_change_set_with_cancel(
     // Validate the device exists and is within scope.
     let _ = dm.inventory().get(&args.device)?;
 
-    // Derive the approver from the authenticated caller's principal.
-    let approver = attribution.principal.to_string();
+    // How the approver's identity was asserted: a verified IdP assertion if
+    // the caller presented a `Mecmcp-Approver-Assertion` header that passed
+    // `bind_approver` (MEC-994 W3), falling back to the token's declared
+    // actor type otherwise. Built from `Attribution`, never by hand — see
+    // `ApproverIdentity::from_attribution`'s doc comment for why a tool
+    // argument can never construct `OidcVerified` directly.
+    let approver = ApproverIdentity::from_attribution(&attribution);
 
     let result = coordinator
         .approve_change_set(
             args.change_set_id.clone(),
             args.device,
-            approver,
+            &approver,
             args.expected_digest,
-            attribution.actor_type,
         )
         .await
         .map_err(|e| JmcpError::Validation(e.to_string()))?;
@@ -1992,6 +2012,7 @@ mod tests {
         ChangeSetRecord {
             id: id.to_owned(),
             owner: OWNER.to_owned(),
+            owner_subject: None,
             device: DEVICE.to_owned(),
             expected_candidate_fingerprint: format!("sha256:{FINGERPRINT_HEX}"),
             actions: vec![json!({"op": "set"})],
@@ -2611,6 +2632,7 @@ mod tests {
         mecmcp_changeset::ChangeSetRecord {
             id: "86324b20a3ecbfde".to_owned(),
             owner: "claude-test".to_owned(),
+            owner_subject: None,
             device: "vsrx-ci".to_owned(),
             expected_candidate_fingerprint: format!("sha256:{}", "b".repeat(64)),
             actions: vec![json!({"op": "set"})],
@@ -2632,6 +2654,9 @@ mod tests {
                     expires_at_unix: None,
                     ticket: None,
                 }),
+                mechanism: None,
+                issuer: None,
+                subject: None,
             }),
             expires_at_unix: 2_000,
             operation_id: None,
@@ -2694,6 +2719,7 @@ mod tests {
             token_verified_fields: mecmcp_audit::TokenVerifiedFields::none(),
             approver: None,
             change_set_id: None,
+            verified_approver: None,
         }
     }
 
@@ -2732,6 +2758,7 @@ mod tests {
                 coordinator,
                 policy,
                 test_attribution("alice"),
+                None,
             )
             .await;
 
@@ -2793,6 +2820,7 @@ mod tests {
             coordinator.clone(),
             policy.clone(),
             test_attribution("alice"),
+            None,
         )
         .await;
 
@@ -2827,6 +2855,7 @@ mod tests {
             coordinator,
             policy,
             test_attribution("alice"),
+            None,
         )
         .await;
 
@@ -2869,6 +2898,7 @@ mod tests {
                 coordinator,
                 policy,
                 test_attribution("alice"),
+                None,
             )
             .await;
 
@@ -2881,6 +2911,62 @@ mod tests {
             }
             other => panic!("expected create to reject a both-fields action, got {other:?}"),
         }
+    }
+
+    /// MEC-995: `create_change_set`'s `owner_subject` argument must land on
+    /// the persisted record as the equivalent `mecmcp_changeset::OwnerSubject`,
+    /// not be dropped — `approve_change_set`'s two-person check (and strict
+    /// verified-approver mode) can only compare against it if it survives
+    /// the owner-token-to-record hop.
+    #[tokio::test]
+    async fn create_change_set_persists_the_owner_subject() {
+        let inv = inv_with(
+            r#"{"r1":{"ip":"127.0.0.1","username":"u","auth":{"type":"password","password":"x"}}}"#,
+        );
+        let dm = Arc::new(DeviceManager::new(inv.clone()));
+        let policy = test_policy(inv);
+        let state_dir = TempDir::new().unwrap();
+        let coordinator = test_coordinator(&state_dir);
+
+        let result =
+            create_change_set(
+                CreateChangeSetArgs {
+                    device: "r1".into(),
+                    expected_fingerprint:
+                        "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                            .into(),
+                    actions: vec![JunosAction {
+                        payload: Some(ConfigPayloadSpec {
+                            text: "set system host-name test".into(),
+                            format: Some("set".into()),
+                            mode: None,
+                        }),
+                        rollback_source: None,
+                        ..Default::default()
+                    }],
+                },
+                dm,
+                coordinator.clone(),
+                policy,
+                test_attribution("alice"),
+                Some(rust_junosmcp_auth::OidcSubject {
+                    issuer: "https://idp.example.com".into(),
+                    subject: "alice-sub".into(),
+                }),
+            )
+            .await
+            .expect("create_change_set failed");
+
+        let change_set_id = result["change_set_id"]
+            .as_str()
+            .expect("change_set_id missing")
+            .to_string();
+        let record = coordinator.change_set(&change_set_id, "r1").await.unwrap();
+        let owner_subject = record
+            .owner_subject
+            .expect("owner_subject must be carried onto the persisted record");
+        assert_eq!(owner_subject.issuer, "https://idp.example.com");
+        assert_eq!(owner_subject.subject, "alice-sub");
     }
 
     fn rollback_action(depth: u32) -> JunosAction {
@@ -2990,7 +3076,8 @@ mod tests {
             coordinator,
             policy,
             test_attribution("alice"),
-        )
+                None,
+)
         .await
     }
 
@@ -3153,6 +3240,7 @@ mod tests {
             coordinator,
             policy,
             test_attribution("alice"),
+            None,
         )
         .await;
 
@@ -3195,6 +3283,7 @@ mod tests {
             coordinator,
             policy,
             test_attribution("alice"),
+            None,
         )
         .await;
 
@@ -3240,6 +3329,7 @@ mod tests {
             coordinator.clone(),
             policy.clone(),
             test_attribution("alice"),
+            None,
         )
         .await;
 
@@ -3267,6 +3357,7 @@ mod tests {
             coordinator,
             policy,
             test_attribution("alice"),
+            None,
         )
         .await;
 
@@ -3309,6 +3400,7 @@ mod tests {
             coordinator,
             policy,
             test_attribution("alice"),
+            None,
         )
         .await;
 
@@ -3359,6 +3451,7 @@ mod tests {
                 coordinator.clone(),
                 policy,
                 test_attribution("alice"),
+                None,
             )
             .await
             .unwrap();
@@ -3432,6 +3525,7 @@ mod tests {
                 coordinator.clone(),
                 policy,
                 test_attribution("alice"),
+                None,
             )
             .await
             .unwrap();
@@ -3503,6 +3597,7 @@ mod tests {
                 coordinator.clone(),
                 policy,
                 test_attribution("alice"),
+                None,
             )
             .await
             .unwrap();
@@ -3578,6 +3673,7 @@ mod tests {
             coordinator.clone(),
             policy.clone(),
             test_attribution("alice"),
+            None,
         )
         .await
         .unwrap();
@@ -3602,6 +3698,7 @@ mod tests {
             coordinator.clone(),
             policy.clone(),
             test_attribution("bob"),
+            None,
         )
         .await
         .unwrap();
@@ -3700,6 +3797,7 @@ mod tests {
             coordinator.clone(),
             policy.clone(),
             test_attribution("alice"),
+            None,
         )
         .await
         .unwrap();
@@ -3746,6 +3844,7 @@ mod tests {
             coordinator,
             policy,
             test_attribution("alice"),
+            None,
         )
         .await;
 
@@ -3788,6 +3887,7 @@ mod tests {
             coordinator.clone(),
             policy,
             test_attribution("alice"),
+            None,
         )
         .await
         .unwrap();
@@ -3859,6 +3959,7 @@ mod tests {
             coordinator.clone(),
             policy,
             test_attribution("alice"),
+            None,
         )
         .await
         .unwrap();

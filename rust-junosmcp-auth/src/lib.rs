@@ -7,8 +7,8 @@
 pub mod tower;
 
 pub use mecmcp_auth::{
-    CallerCtx, FileError as TokenStoreError, KnownNames, NoGrant, ScopeSet, StoreError,
-    TokenDigest, TokenEntry as SharedTokenEntry, TokenError, TokenSecret,
+    CallerCtx, FileError as TokenStoreError, KnownNames, NoGrant, OidcSubject, ScopeSet,
+    StoreError, TokenDigest, TokenEntry as SharedTokenEntry, TokenError, TokenSecret,
     TokenStore as SharedStore, TokenStoreFile as SharedFile, filter_device_names,
 };
 

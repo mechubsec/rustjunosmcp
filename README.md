@@ -561,11 +561,38 @@ What it does and does not change:
   real separation of duties.
 - The server warns loudly at startup whenever it is enabled.
 
-If you want solo write-testing *without* waiving the control, mint two tokens
-with different names and use one to plan and the other to approve: the
-principal is the token name, and self-approval is refused. That gives one
-person the complete lifecycle with the control intact, and is the better choice
-wherever the ceremony has any value.
+If you want solo write-testing *without* waiving the control, minting two
+tokens with different names and using one to plan and the other to approve
+is weaker than it looks: both tokens belong to the same human, so
+"two-person" review is really the same operator clicking approve on their
+own plan under a different name. The principal is the token name and
+self-approval is refused, so it exercises the plan→approve→apply API shape
+honestly — but it is not a real second reviewer.
+
+mecmcp 0.27.0 adds a verified human-approver flow (MEC-994/MEC-995) that
+closes that gap by binding the *approver's* identity to a fresh IdP login
+rather than a token name:
+
+- Bind the owner token to an IdP identity at creation time:
+  `token add --oidc-issuer https://idp.example.com --oidc-subject
+  alice@example.com ...`.
+- Start the server with `--oidc-issuer`, `--oidc-audience`, and
+  `--require-verified-approver` (plus `--approval-digest-key-file`, which
+  strict mode requires so the verified-approver fields are tamper-evident).
+- Approve with [`mecmcp-approve`](https://github.com/mechubsec/mecmcp/tree/main/crates/mecmcp-approve),
+  which drives a real OIDC login (PKCE by default) and attaches the
+  resulting assertion as a `Mecmcp-Approver-Assertion` header:
+  `mecmcp-approve --server-url https://junos01.example:8443/mcp
+  --approve-tool approve_junos_change_set --oidc-issuer
+  https://idp.example.com --oidc-client-id mecmcp-approve
+  --arg change_set_id=... --arg device=... --arg expected_digest=...`.
+- In strict mode, the coordinator refuses an approval whose verified subject
+  matches the owner's bound subject — the same human cannot satisfy both
+  sides of the two-person rule, no matter how many token names they hold.
+
+The two-token workaround above still has a place for pure functional
+testing of the plan→approve→apply flow when no IdP is available, but treat
+it as what it is: one operator exercising the API shape, not an approval.
 
 ### Enabling it
 

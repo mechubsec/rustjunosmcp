@@ -550,10 +550,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "combine"
+version = "4.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfc320937d09e6de266b31b9afb480f197d7a861be86be7cb2ea7e5d1bfffc5e"
+dependencies = [
+ "bytes",
+ "memchr",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+
+[[package]]
+name = "core-foundation"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
+]
 
 [[package]]
 name = "core-foundation-sys"
@@ -834,7 +854,7 @@ dependencies = [
  "digest",
  "elliptic-curve",
  "rfc6979",
- "signature",
+ "signature 3.0.0",
  "spki",
  "zeroize",
 ]
@@ -846,7 +866,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
 dependencies = [
  "pkcs8",
- "signature",
+ "signature 3.0.0",
 ]
 
 [[package]]
@@ -860,7 +880,7 @@ dependencies = [
  "rand_core 0.10.1",
  "serde",
  "sha2",
- "signature",
+ "signature 3.0.0",
  "subtle",
  "zeroize",
 ]
@@ -1591,6 +1611,55 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "jni"
+version = "0.22.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5efd9a482cf3a427f00d6b35f14332adc7902ce91efb778580e180ff90fa3498"
+dependencies = [
+ "cfg-if",
+ "combine",
+ "jni-macros",
+ "jni-sys",
+ "log",
+ "simd_cesu8",
+ "thiserror",
+ "walkdir",
+ "windows-link",
+]
+
+[[package]]
+name = "jni-macros"
+version = "0.22.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a00109accc170f0bdb141fed3e393c565b6f5e072365c3bd58f5b062591560a3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "simd_cesu8",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "jni-sys"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6377a88cb3910bee9b0fa88d4f42e1d2da8e79915598f65fb0c7ee14c878af2"
+dependencies = [
+ "jni-sys-macros",
+]
+
+[[package]]
+name = "jni-sys-macros"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38c0b942f458fe50cdac086d2f946512305e5631e720728f2a61aabcd47a6264"
+dependencies = [
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "jobserver"
 version = "0.1.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1609,6 +1678,24 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "jsonwebtoken"
+version = "11.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e75fe14a82d81e5f5af639997db37d8b96045938a7ac6ab18cdbe1c7467e05e1"
+dependencies = [
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "getrandom 0.2.17",
+ "js-sys",
+ "pem 3.0.6",
+ "serde",
+ "serde_json",
+ "signature 2.2.0",
+ "simple_asn1",
+ "zeroize",
 ]
 
 [[package]]
@@ -1723,8 +1810,8 @@ checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
 
 [[package]]
 name = "mecmcp-audit"
-version = "0.26.1"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -1753,8 +1840,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-auth"
-version = "0.26.1"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -1772,8 +1859,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-changeset"
-version = "0.26.1"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
 dependencies = [
  "async-trait",
  "getrandom 0.4.3",
@@ -1797,8 +1884,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-device"
-version = "0.26.1"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
 dependencies = [
  "async-trait",
  "rustix",
@@ -1812,9 +1899,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "mecmcp-http"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
+dependencies = [
+ "mecmcp-openapi",
+ "mecmcp-secret",
+ "reqwest 0.13.5",
+ "rustls",
+ "rustls-pki-types",
+ "rustls-webpki",
+ "thiserror",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "mecmcp-inventory"
-version = "0.26.1"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
 dependencies = [
  "mecmcp-secret",
  "serde",
@@ -1826,9 +1929,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "mecmcp-oidc"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
+dependencies = [
+ "async-trait",
+ "jsonwebtoken",
+ "mecmcp-http",
+ "serde",
+ "serde_json",
+ "subtle",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "mecmcp-openapi"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "mecmcp-policy"
-version = "0.26.1"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
 dependencies = [
  "globset",
  "quick-xml",
@@ -1838,8 +1966,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-redact"
-version = "0.26.1"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
 dependencies = [
  "hmac",
  "quick-xml",
@@ -1851,12 +1979,13 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-runtime"
-version = "0.26.1"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
 dependencies = [
  "anyhow",
  "clap",
  "getrandom 0.4.3",
+ "http",
  "mecmcp-audit",
  "mecmcp-auth",
  "mecmcp-secret",
@@ -1869,8 +1998,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-scp"
-version = "0.26.1"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1888,8 +2017,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-secret"
-version = "0.26.1"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
 dependencies = [
  "rustix",
  "thiserror",
@@ -1898,11 +2027,12 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-transport"
-version = "0.26.1"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
+version = "0.27.0"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.27.0#19401120439cd1420701bb59b6495bfdd3718b93"
 dependencies = [
  "axum",
  "axum-server",
+ "chrono",
  "dashmap",
  "futures",
  "http",
@@ -1911,6 +2041,7 @@ dependencies = [
  "ipnet",
  "mecmcp-audit",
  "mecmcp-auth",
+ "mecmcp-oidc",
  "metrics",
  "metrics-exporter-prometheus",
  "rmcp",
@@ -2148,6 +2279,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "openssl-probe"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
+
+[[package]]
 name = "p256"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2254,6 +2391,16 @@ checksum = "112d82ceb8c5bf524d9af484d4e4970c9fd5a0cc15ba14ad93dccd28873b0629"
 dependencies = [
  "digest",
  "hmac",
+]
+
+[[package]]
+name = "pem"
+version = "3.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
+dependencies = [
+ "base64 0.22.1",
+ "serde_core",
 ]
 
 [[package]]
@@ -2564,6 +2711,15 @@ dependencies = [
 
 [[package]]
 name = "rand_core"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+dependencies = [
+ "getrandom 0.2.17",
+]
+
+[[package]]
+name = "rand_core"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
@@ -2619,7 +2775,7 @@ version = "0.14.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8774e05a7d0de114588e6a28fe7e71694b82614ed569d86d8b389dfbc98b8ad8"
 dependencies = [
- "pem",
+ "pem 4.0.0",
  "ring",
  "rustls-pki-types",
  "time",
@@ -2723,6 +2879,40 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "webpki-roots 1.0.9",
+]
+
+[[package]]
+name = "reqwest"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
+dependencies = [
+ "base64 0.23.1",
+ "bytes",
+ "futures-core",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "js-sys",
+ "log",
+ "percent-encoding",
+ "pin-project-lite",
+ "rustls",
+ "rustls-pki-types",
+ "rustls-platform-verifier",
+ "sync_wrapper",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "tower-http 0.6.11",
+ "tower-service",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -2861,7 +3051,7 @@ dependencies = [
  "sha1",
  "sha2",
  "sha3 0.12.0",
- "signature",
+ "signature 3.0.0",
  "spki",
  "ssh-encoding",
  "ssh-key",
@@ -2910,6 +3100,8 @@ dependencies = [
  "mecmcp-audit",
  "mecmcp-auth",
  "mecmcp-changeset",
+ "mecmcp-http",
+ "mecmcp-oidc",
  "mecmcp-redact",
  "mecmcp-runtime",
  "mecmcp-transport",
@@ -2917,7 +3109,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "rand 0.10.3",
  "rcgen",
- "reqwest",
+ "reqwest 0.12.28",
  "rmcp",
  "rust-junosmcp-auth",
  "rust-junosmcp-core",
@@ -3095,6 +3287,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-native-certs"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dab5152771c58876a2146916e53e35057e1a4dfa2b9df0f0305b07f611fdea4d"
+dependencies = [
+ "openssl-probe",
+ "rustls-pki-types",
+ "schannel",
+ "security-framework",
+]
+
+[[package]]
 name = "rustls-pki-types"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3103,6 +3307,33 @@ dependencies = [
  "web-time",
  "zeroize",
 ]
+
+[[package]]
+name = "rustls-platform-verifier"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1167586491e2b18b8bfbb293e8180ec17c201c4f076d7cb3070ca964e7598f98"
+dependencies = [
+ "core-foundation",
+ "core-foundation-sys",
+ "jni",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-platform-verifier-android",
+ "rustls-webpki",
+ "security-framework",
+ "security-framework-sys",
+ "webpki-root-certs",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rustls-platform-verifier-android"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
@@ -3152,6 +3383,24 @@ checksum = "2f874456e72520ff1375a06c588eaf074b0f01f9e9e1aada45bd9b7954a6e42c"
 dependencies = [
  "cfg-if",
  "cipher",
+]
+
+[[package]]
+name = "same-file"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
+dependencies = [
+ "winapi-util",
+]
+
+[[package]]
+name = "schannel"
+version = "0.1.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91c1b7e4904c873ef0710c1f407dde2e6287de2bebc1bbbf7d430bb7cbffd939"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3216,6 +3465,29 @@ dependencies = [
  "hybrid-array",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "security-framework"
+version = "3.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7f4bc775c73d9a02cde8bf7b2ec4c9d12743edf609006c7facc23998404cd1d"
+dependencies = [
+ "bitflags",
+ "core-foundation",
+ "core-foundation-sys",
+ "libc",
+ "security-framework-sys",
+]
+
+[[package]]
+name = "security-framework-sys"
+version = "2.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
 ]
 
 [[package]]
@@ -3382,6 +3654,15 @@ dependencies = [
 
 [[package]]
 name = "signature"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
+dependencies = [
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "signature"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
@@ -3395,6 +3676,34 @@ name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
+name = "simd_cesu8"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11031e251abf8611c80f460e19dbdeb54a66db918e49c65a7065b46ac7aec520"
+dependencies = [
+ "rustc_version",
+ "simdutf8",
+]
+
+[[package]]
+name = "simdutf8"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "simple_asn1"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d585997b0ac10be3c5ee635f1bab02d512760d14b7c468801ac8a01d9ae5f1d"
+dependencies = [
+ "num-bigint 0.4.8",
+ "num-traits",
+ "thiserror",
+ "time",
+]
 
 [[package]]
 name = "sketches-ddsketch"
@@ -3504,7 +3813,7 @@ dependencies = [
  "sec1",
  "sha1",
  "sha2",
- "signature",
+ "signature 3.0.0",
  "ssh-cipher",
  "ssh-encoding",
  "zeroize",
@@ -4004,6 +4313,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "walkdir"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
+dependencies = [
+ "same-file",
+ "winapi-util",
+]
+
+[[package]]
 name = "want"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4103,6 +4422,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "webpki-root-certs"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "webpki-roots"
 version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4135,6 +4463,15 @@ name = "winapi-i686-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
+name = "winapi-util"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
+dependencies = [
+ "windows-sys 0.52.0",
+]
 
 [[package]]
 name = "winapi-x86_64-pc-windows-gnu"

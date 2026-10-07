@@ -15,12 +15,17 @@ pub fn run(action: TokenAction) -> Result<()> {
             provider_tier,
             on_behalf_of,
             actor_type,
+            oidc_issuer,
+            oidc_subject,
             server_pid,
         } => {
             // Convert to mecmcp-runtime's TokenAction format. The provenance
             // fields pass straight through: dropping them here is what made
             // every Junos commit log read `(unknown) on-behalf-of=self`, even
-            // though the attribution machinery downstream was working.
+            // though the attribution machinery downstream was working. The
+            // oidc_issuer/oidc_subject pair binds this token to an IdP
+            // identity (MEC-994/MEC-995) so a later `Mecmcp-Approver-Assertion`
+            // can be checked against it.
             let runtime_action = mecmcp_runtime::cli::TokenAction::Add {
                 tokens_file,
                 name,
@@ -30,6 +35,8 @@ pub fn run(action: TokenAction) -> Result<()> {
                 provider_tier,
                 on_behalf_of,
                 actor_type,
+                oidc_issuer,
+                oidc_subject,
                 server_pid,
             };
             mecmcp_runtime::token_cmd::run(
