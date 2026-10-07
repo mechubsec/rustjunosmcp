@@ -1115,6 +1115,7 @@ mod tests {
         "authentication-key",
         "authentication-password",
         "privacy-password",
+        "privacy-key",
         "password",
         "chap-secret",
         "default-chap-secret",
