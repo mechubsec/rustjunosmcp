@@ -57,5 +57,14 @@
                 "request system reboot"
             ]
         }
+    },
+    "r5": {
+        "ip": "ip",
+        "port": 22,
+        "username": "user",
+        "auth": {
+            "type": "password_env",
+            "password_env": "R5_PASSWORD"
+        }
     }
 }
