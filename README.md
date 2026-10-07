@@ -721,6 +721,69 @@ default `srx` feature, or 28 in a Junos-only build):
 
 ## Docker
 
+### Run with Docker
+
+The catalog-friendly stdio invocation replaces the image's HTTP CMD with
+`--transport stdio`. The ENTRYPOINT already supplies the inventory, state,
+known-hosts, lease, and token-file paths, so do not repeat those flags here.
+The state mount is a bind mount, so it starts out host-user-owned; it and
+`tokens.json` inside it must be owned by UID/GID `65532:65532` before the
+first start, with `tokens.json` at mode `0600`:
+
+```bash
+mkdir -p jmcp-state
+cat > jmcp-state/tokens.json <<'EOF'
+{
+  "version": 1,
+  "tokens": [
+    {
+      "name": "catalog",
+      "digest": "sha256:REPLACE_WITH_TOKEN_ADD_OUTPUT",
+      "devices": ["r1"],
+      "tools": ["gather_device_facts"],
+      "created_at": "2026-01-01T00:00:00Z"
+    }
+  ]
+}
+EOF
+sudo chown -R 65532:65532 jmcp-state
+sudo chmod 0700 jmcp-state
+sudo chmod 0600 jmcp-state/tokens.json
+sudo chown 65532:65532 devices.json
+sudo chmod 0600 devices.json
+
+docker run --rm -i \
+  -v "$PWD/devices.json:/etc/jmcp/devices.json:ro" \
+  -v "$PWD/keys:/etc/jmcp/keys:ro" \
+  -v "$PWD/jmcp-state:/var/lib/jmcp" \
+  ghcr.io/mechubsec/rustjunosmcp:latest \
+  --transport stdio
+```
+
+On rootless Docker or a userns-remapped host, UID 65532 inside the container
+maps to a different host UID; chown the mounts to whatever that mapped UID
+is instead of `65532` directly.
+
+For example, `devices.json` uses the server's inventory shape (replace the
+placeholder secret before use):
+
+```json
+{
+  "r1": {
+    "ip": "192.0.2.10",
+    "port": 22,
+    "username": "netconf-user",
+    "auth": {
+      "type": "password",
+      "password": "replace-with-device-password"
+    }
+  }
+}
+```
+
+This invocation leaves HTTP and TLS off because replacing the image CMD also
+removes its HTTP bind and TLS-related flags.
+
 > Running the two-person and lab-mode pair as containers, including the
 > published-vs-internal port trap that makes the allow-lists reject everything
 > with 421, is written up in
@@ -886,7 +949,7 @@ curl -LO "${base}/rust-junosmcp_${version}_amd64.tar.gz.cosign.bundle"
 sha256sum -c "rust-junosmcp_${version}_amd64.tar.gz.sha256"
 
 cosign verify-blob \
-  --certificate-identity "https://github.com/mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@8ede62a31917ad4d5f41ca2a664601280b2ddc41" \
+  --certificate-identity "https://github.com/mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@f927c820f39369b2601e11e31334cc5b504b1fd1" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   --certificate-github-workflow-repository "mechubsec/rustjunosmcp" \
   --certificate-github-workflow-trigger "release" \

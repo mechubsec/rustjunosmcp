@@ -65,13 +65,16 @@ JMCP_PACKAGE_SKIP_BUILD=1 ./scripts/package-lxc.sh
 ```
 
 The package is deliberately small — the binary, an example inventory, the
-systemd unit, and `install.sh`:
+systemd unit, `install.sh`, and a `BUILD-INFO` provenance file. Skip-build
+records `rustc=unknown (...)` rather than naming the workstation toolchain,
+and `binary_sha256` is always taken from the bytes in the archive.
 
 ```
 usr/local/bin/rust-junosmcp
 etc/jmcp/devices.json.example
 etc/systemd/system/rust-junosmcp.service
 install.sh
+BUILD-INFO
 ```
 
 > **Note.** Release tags do not currently carry this tarball as an asset, and CI

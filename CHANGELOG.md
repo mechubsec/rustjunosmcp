@@ -4,6 +4,30 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **LXC packages now ship an honest `BUILD-INFO`.** Skip-build
+  (`JMCP_PACKAGE_SKIP_BUILD=1`) records `rustc=unknown (...)` instead of a
+  local toolchain, and `binary_sha256` always matches the packed binary.
+  Shared packaging conformance treats that provenance as fatal.
+
+## [0.27.4] - 2026-10-07
+
+### Added
+
+- **Official MCP Registry listing.** The image now carries
+  `io.modelcontextprotocol.server.name="io.github.mechubsec/rustjunosmcp"`,
+  which the registry uses to verify image ownership, and the repo ships a
+  `server.json` describing the documented stdio container invocation.
+
+### Changed
+
+- Dependency and CI updates: distroless `cc-debian13` base image digest,
+  `cargo-minor-patch` group, and pinned `mecmcp` reusable workflows.
+- Docs: stdio container invocation and fwconfigsanitizer references.
+
 ## [0.27.3] - 2026-10-06
 
 ### Security

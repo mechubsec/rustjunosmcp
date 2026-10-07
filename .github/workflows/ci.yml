@@ -99,6 +99,10 @@ jobs:
         working-directory: RustJunosMCP
         run: ./scripts/package-lxc.sh
 
+      - name: Skip-build provenance
+        working-directory: RustJunosMCP
+        run: ./packaging/tests/skip-build-provenance.sh
+
       - name: Package and MCP endpoint smoke test
         working-directory: RustJunosMCP
         run: ./packaging/tests/package-smoke.sh dist/rust-junosmcp_*_amd64.tar.gz
@@ -139,14 +143,21 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build the release binary
-        run: cargo build --release --locked --bin rust-junosmcp
+      - name: Build the release package
+        run: ./scripts/package-lxc.sh
 
       - name: Stage the package
         run: |
           set -euo pipefail
           mkdir -p staging/bin
-          cp target/release/rust-junosmcp staging/bin/
+          mapfile -t archives < <(find dist -maxdepth 1 -type f -name 'rust-junosmcp_*_amd64.tar.gz')
+          test "${#archives[@]}" -eq 1
+          extract=$(mktemp -d)
+          tar -xzf "${archives[0]}" -C "$extract"
+          mapfile -t roots < <(find "$extract" -mindepth 1 -maxdepth 1 -type d)
+          test "${#roots[@]}" -eq 1
+          install -m 0755 "${roots[0]}/usr/local/bin/rust-junosmcp" staging/bin/rust-junosmcp
+          cp "${roots[0]}/BUILD-INFO" staging/BUILD-INFO
           cp -r packaging staging/packaging
           cp packaging/conformance.toml staging/
 
@@ -167,7 +178,7 @@ jobs:
         # Pinned past mecmcp#492, which adds the `audit_hmac_flag` manifest
         # key this repo's conformance.toml declares (MEC-1793). No mecmcp
         # tag covers it yet; repin to a tag once one is cut.
-        uses: mechubsec/mecmcp/packaging/conformance@373dc51cac90b97e728e20363b4b05d7b2c179a5
+        uses: mechubsec/mecmcp/packaging/conformance@f927c820f39369b2601e11e31334cc5b504b1fd1
         with:
           staging: staging
           manifest: staging/conformance.toml

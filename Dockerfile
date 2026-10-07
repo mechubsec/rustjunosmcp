@@ -10,7 +10,7 @@ WORKDIR /src
 # rustez / rustnetconf are crates.io dependencies now (no sibling checkout),
 # so the build context is just the repo root and this Dockerfile is
 # self-contained:
-#   docker build -t rust-junosmcp:0.27.3 .
+#   docker build -t rust-junosmcp:0.27.4 .
 COPY . .
 RUN cargo build --release --bin rust-junosmcp
 
@@ -36,9 +36,11 @@ RUN install -d -m 0750 -o 65532 -g 65532 \
 # glibc rule: builder generation must be <= runtime generation. The builder is
 # bookworm (glibc 2.36) and this is debian13 (glibc 2.41), so the direction is
 # safe. Moving the builder forward would require moving this first.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2
 LABEL org.opencontainers.image.source="https://github.com/mechubsec/rustjunosmcp"
 LABEL org.opencontainers.image.licenses="MIT"
+# Official MCP Registry ownership check: must equal server.json "name".
+LABEL io.modelcontextprotocol.server.name="io.github.mechubsec/rustjunosmcp"
 
 # CA certificates are shipped in gcr.io/distroless/cc-* at /etc/ssl/certs. The
 # binary makes outbound TLS calls (HTTPS requests for device APIs), and rustls
