@@ -628,6 +628,61 @@ default `srx` feature, or 28 in a Junos-only build):
 
 ## Docker
 
+### Run with Docker
+
+The catalog-friendly stdio invocation replaces the image's HTTP CMD with
+`--transport stdio`. The ENTRYPOINT already supplies the inventory, state,
+known-hosts, lease, and token-file paths, so do not repeat those flags here.
+The state mount must contain `tokens.json`, owned by UID/GID `65532:65532` and
+mode `0600`, alongside the writable state files:
+
+```bash
+mkdir -p jmcp-state
+cat > jmcp-state/tokens.json <<'EOF'
+{
+  "version": 1,
+  "tokens": [
+    {
+      "name": "catalog",
+      "digest": "sha256:REPLACE_WITH_TOKEN_ADD_OUTPUT",
+      "devices": ["r1"],
+      "tools": ["gather_device_facts"],
+      "created_at": "2026-01-01T00:00:00Z"
+    }
+  ]
+}
+EOF
+sudo chown 65532:65532 jmcp-state/tokens.json
+sudo chmod 0600 jmcp-state/tokens.json
+
+docker run --rm -i \
+  -v "$PWD/devices.json:/etc/jmcp/devices.json:ro" \
+  -v "$PWD/keys:/etc/jmcp/keys:ro" \
+  -v "$PWD/jmcp-state:/var/lib/jmcp" \
+  ghcr.io/mechubsec/rustjunosmcp:latest \
+  --transport stdio
+```
+
+For example, `devices.json` uses the server's inventory shape (replace the
+placeholder secret before use):
+
+```json
+{
+  "r1": {
+    "ip": "192.0.2.10",
+    "port": 22,
+    "username": "netconf-user",
+    "auth": {
+      "type": "password",
+      "password": "replace-with-device-password"
+    }
+  }
+}
+```
+
+This invocation leaves HTTP and TLS off because replacing the image CMD also
+removes its HTTP bind and TLS-related flags.
+
 > Running the two-person and lab-mode pair as containers, including the
 > published-vs-internal port trap that makes the allow-lists reject everything
 > with 421, is written up in

@@ -68,8 +68,6 @@ services:
       - "0.0.0.0"
       - "-p"
       - "30030"
-      - "--tokens-file"
-      - "/etc/jmcp/tokens.json"
       # Must match the address clients actually dial, or requests are rejected.
       - "--allowed-host"
       - "127.0.0.1"
