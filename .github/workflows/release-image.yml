@@ -36,7 +36,7 @@ jobs:
     with:
       # GHCR requires a lowercase image path; github.repository is already lowercase.
       image: ghcr.io/${{ github.repository }}
-      dockerhub-image: docker.io/mechubsec/rust-junosmcp
+      dockerhub-image: docker.io/mechub/rustjunosmcp
       description: 'Junos/SRX MCP server'
       version: ${{ github.event.inputs.version }}
       ref: ${{ github.event.inputs.ref }}

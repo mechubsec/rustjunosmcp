@@ -13,6 +13,22 @@ All notable user-facing changes are recorded here. Format loosely follows
   local toolchain, and `binary_sha256` always matches the packed binary.
   Shared packaging conformance treats that provenance as fatal.
 
+## [0.27.5] - 2026-10-07
+
+### Added
+
+- **Release images are also published to Docker Hub** as
+  `docker.io/mechub/rustjunosmcp` (same tags as GHCR: `X.Y.Z`, `X.Y`,
+  `latest`), signed and attested the same way (#517, #518).
+- **stdio no longer requires a bearer-token store**, and devices can take
+  their credential from an environment variable (#504).
+- mecmcp's verified-approver identity is wired through (MEC-995, #519).
+
+### Changed
+
+- Packaging emits an honest `BUILD-INFO` and treats provenance failures as
+  fatal (#514).
+
 ## [0.27.4] - 2026-10-07
 
 ### Added
