@@ -949,7 +949,7 @@ curl -LO "${base}/rust-junosmcp_${version}_amd64.tar.gz.cosign.bundle"
 sha256sum -c "rust-junosmcp_${version}_amd64.tar.gz.sha256"
 
 cosign verify-blob \
-  --certificate-identity "https://github.com/mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@8ede62a31917ad4d5f41ca2a664601280b2ddc41" \
+  --certificate-identity "https://github.com/mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@f927c820f39369b2601e11e31334cc5b504b1fd1" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   --certificate-github-workflow-repository "mechubsec/rustjunosmcp" \
   --certificate-github-workflow-trigger "release" \
