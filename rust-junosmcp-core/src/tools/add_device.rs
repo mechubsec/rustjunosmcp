@@ -2,6 +2,8 @@
 
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
+#[cfg(test)]
+use crate::inventory::AddDeviceAuth;
 use crate::inventory::AuthConfig;
 use crate::inventory::validation::{
     is_valid_auth_path, is_valid_device_name, is_valid_ip_or_hostname, is_valid_ssh_username,
@@ -85,10 +87,11 @@ pub fn validate(args: &AddDeviceArgs, dm: &DeviceManager) -> Result<ResolvedAdd,
         return Err(JmcpError::InvalidDevicePort(device_port));
     }
 
-    let auth = args
+    let auth: AuthConfig = args
         .auth
         .clone()
-        .expect("auth is Some: validated by early return");
+        .expect("auth is Some: validated by early return")
+        .into();
     if matches!(auth, AuthConfig::Password { .. }) && !dm.allow_password_auth_add() {
         return Err(JmcpError::PasswordAuthDisabled);
     }
@@ -228,7 +231,7 @@ mod tests {
             device_ip: Some("10.0.0.3".into()),
             device_port: Some(22),
             username: Some("automation".into()),
-            auth: Some(AuthConfig::SshKey {
+            auth: Some(AddDeviceAuth::SshKey {
                 private_key_path: "/etc/jmcp/keys/id".into(),
             }),
         }
@@ -308,7 +311,7 @@ mod tests {
     fn rejects_password_auth_when_flag_disabled() {
         let dm = dm_with(r#"{}"#, false, false);
         let mut a = args_full();
-        a.auth = Some(AuthConfig::Password {
+        a.auth = Some(AddDeviceAuth::Password {
             password: "x".into(),
         });
         let r = validate(&a, &dm);
@@ -319,7 +322,7 @@ mod tests {
     fn accepts_password_auth_when_flag_enabled() {
         let dm = dm_with(r#"{}"#, false, true);
         let mut a = args_full();
-        a.auth = Some(AuthConfig::Password {
+        a.auth = Some(AddDeviceAuth::Password {
             password: "x".into(),
         });
         validate(&a, &dm).unwrap();
@@ -350,7 +353,7 @@ mod tests {
     fn rejects_private_key_path_starting_with_dash() {
         let dm = dm_with(r#"{}"#, false, false);
         let mut a = args_full();
-        a.auth = Some(AuthConfig::SshKey {
+        a.auth = Some(AddDeviceAuth::SshKey {
             private_key_path: "-evil".into(),
         });
         let r = validate(&a, &dm);
@@ -389,7 +392,7 @@ mod tests {
 
         let key = tempfile::NamedTempFile::new().unwrap();
         let mut args = args_full();
-        args.auth = Some(AuthConfig::SshKey {
+        args.auth = Some(AddDeviceAuth::SshKey {
             private_key_path: key.path().to_path_buf(),
         });
         let policy = test_policy(&dm.inventory());
@@ -433,7 +436,7 @@ mod tests {
 
         let key = tempfile::NamedTempFile::new().unwrap();
         let mut args = args_full();
-        args.auth = Some(AuthConfig::SshKey {
+        args.auth = Some(AddDeviceAuth::SshKey {
             private_key_path: key.path().to_path_buf(),
         });
 

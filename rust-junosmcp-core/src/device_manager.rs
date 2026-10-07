@@ -735,6 +735,25 @@ impl DeviceManager {
                         })?;
                         builder.key_file(path_str)
                     }
+                    AuthConfig::PasswordEnv { password_env } => {
+                        // Read fresh on every connect, not cached on the
+                        // entry: a cached value would survive a credential
+                        // rotation until the next inventory reload, and the
+                        // whole point of `PasswordEnv` is that rotating the
+                        // variable (and restarting the container, or just
+                        // re-running `docker run` with a new secret) takes
+                        // effect without editing devices.json.
+                        let secret = mecmcp_secret::load_from_env(
+                            password_env,
+                            mecmcp_secret::SecretLimits::default(),
+                        )
+                        .map_err(|e| {
+                            JmcpError::InventoryInvalid(format!(
+                                "router '{router_name}': reading password_env {password_env}: {e}"
+                            ))
+                        })?;
+                        builder.password(secret.expose())
+                    }
                 };
 
                 Ok(builder.open().await?)

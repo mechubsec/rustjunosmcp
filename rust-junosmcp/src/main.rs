@@ -276,8 +276,20 @@ async fn main() -> Result<()> {
     );
 
     // Build the token store (or None for --allow-no-auth / stdio).
-    let token_store = match (&args.tokens_file, args.allow_no_auth) {
-        (Some(configured_path), _) => {
+    //
+    // Stdio never reaches `serve_http` (see the `Transport::Stdio` arm below),
+    // so a bearer-token store would be loaded only to sit unused -- at the
+    // cost of making a container's fixed `--tokens-file` path (baked into
+    // ENTRYPOINT so it still protects a manually-run HTTP server) a hard
+    // startup requirement for stdio too. A caller spawning the image for
+    // stdio with no tokens.json mounted would otherwise fail before ever
+    // reaching the MCP handshake, for a file that gates nothing it uses.
+    let token_store = match (&args.tokens_file, args.allow_no_auth, args.transport) {
+        (Some(_), _, Transport::Stdio) => {
+            tracing::info!("--tokens-file ignored: stdio has no bearer-token listener to protect");
+            None
+        }
+        (Some(configured_path), _, _) => {
             // See resolve_tokens: the legacy /etc fallback applies only to the
             // canonical path, never to an operator-supplied one.
             let resolved = resolve_tokens(configured_path)?;
@@ -302,11 +314,11 @@ async fn main() -> Result<()> {
             );
             Some(Arc::new(store_file))
         }
-        (None, true) => {
+        (None, true, _) => {
             tracing::warn!("--allow-no-auth: streamable-http will accept unauthenticated requests");
             None
         }
-        (None, false) if matches!(args.transport, Transport::StreamableHttp) => {
+        (None, false, Transport::StreamableHttp) => {
             unreachable!(
                 "mecmcp_runtime::cli_validate::validate should have refused this combination"
             );

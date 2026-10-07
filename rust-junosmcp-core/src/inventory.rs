@@ -76,6 +76,18 @@ pub(crate) mod validation {
         true
     }
 
+    /// Environment variable name: 1..=128 ASCII uppercase alnum + `_`, not
+    /// starting with a digit. Restrictive on purpose -- this name is never a
+    /// secret, so there is no reason to accept the exotic byte sequences the
+    /// path/username checks above must tolerate from real-world data.
+    pub fn is_valid_env_var_name(s: &str) -> bool {
+        if s.is_empty() || s.len() > 128 || s.starts_with(|c: char| c.is_ascii_digit()) {
+            return false;
+        }
+        s.chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -166,6 +178,28 @@ pub(crate) mod validation {
             assert!(!is_valid_auth_path(&PathBuf::from("-evil")));
             assert!(!is_valid_auth_path(&PathBuf::from("-oProxyCommand=foo")));
         }
+
+        #[test]
+        fn env_var_name_accepts_canonical_forms() {
+            for ok in ["R1_PASSWORD", "DEVICE_PW", "A", "A1_B2"] {
+                assert!(is_valid_env_var_name(ok), "should accept: {ok}");
+            }
+        }
+
+        #[test]
+        fn env_var_name_rejects_bad_forms() {
+            for bad in [
+                "",
+                "1LEADING_DIGIT",
+                "lower_case",
+                "has space",
+                "has-dash",
+                "has.dot",
+                &"X".repeat(129),
+            ] {
+                assert!(!is_valid_env_var_name(bad), "should reject: {bad:?}");
+            }
+        }
     }
 }
 
@@ -188,6 +222,17 @@ pub enum AuthConfig {
         /// Path to the SSH private key file.
         private_key_path: PathBuf,
     },
+    /// Authenticate with a plaintext password read from an environment
+    /// variable at connect time, named by `password_env`. The variable name
+    /// is validated at inventory load time; the variable itself is read
+    /// fresh on every connection (not cached), so rotating it takes effect
+    /// without a restart. Keeps the password out of `devices.json`, so an
+    /// inventory file that leaks (backup, bug report, `git add .`) carries no
+    /// credential, and out of argv entirely.
+    PasswordEnv {
+        /// Name of the environment variable holding the plaintext password.
+        password_env: String,
+    },
 }
 
 // Hand-written Debug to redact passwords. Never derive Debug on this enum.
@@ -202,7 +247,103 @@ impl std::fmt::Debug for AuthConfig {
                 .debug_struct("SshKey")
                 .field("private_key_path", private_key_path)
                 .finish(),
+            Self::PasswordEnv { password_env } => f
+                .debug_struct("PasswordEnv")
+                .field("password_env", password_env)
+                .finish(),
         }
+    }
+}
+
+/// Auth a caller of the model-facing `add_device` tool may set.
+///
+/// Deliberately a strict subset of [`AuthConfig`]: it omits `PasswordEnv`.
+/// `add_device` lets a model pick an arbitrary environment-variable name and
+/// have its value sent as an SSH password to a host the same call also
+/// chooses, which turns any server env var the operator has set into a
+/// credential-exfiltration channel. `password_env` stays available only by
+/// hand-editing `devices.json` directly, never through the tool call, so
+/// this type has no `PasswordEnv` variant for the model to request — making
+/// that misuse unrepresentable rather than merely checked for.
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AddDeviceAuth {
+    /// Authenticate with a plaintext password. Supported for NETCONF; not
+    /// supported for SCP-based file transfers.
+    Password {
+        /// Plaintext password for SSH authentication.
+        password: String,
+    },
+    /// Authenticate with an SSH private key. Path is validated at inventory
+    /// load time; the file must exist.
+    SshKey {
+        /// Path to the SSH private key file.
+        private_key_path: PathBuf,
+    },
+}
+
+// Hand-written Debug to redact passwords, mirroring `AuthConfig`.
+impl std::fmt::Debug for AddDeviceAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Password { .. } => f
+                .debug_struct("Password")
+                .field("password", &"<redacted>")
+                .finish(),
+            Self::SshKey { private_key_path } => f
+                .debug_struct("SshKey")
+                .field("private_key_path", private_key_path)
+                .finish(),
+        }
+    }
+}
+
+impl From<AddDeviceAuth> for AuthConfig {
+    fn from(auth: AddDeviceAuth) -> Self {
+        match auth {
+            AddDeviceAuth::Password { password } => AuthConfig::Password { password },
+            AddDeviceAuth::SshKey { private_key_path } => AuthConfig::SshKey { private_key_path },
+        }
+    }
+}
+
+#[cfg(test)]
+mod add_device_auth_tests {
+    use super::*;
+
+    #[test]
+    fn password_env_is_rejected_at_parse_time() {
+        let json = r#"{"type":"password_env","password_env":"R1_PASSWORD"}"#;
+        let err = serde_json::from_str::<AddDeviceAuth>(json).unwrap_err();
+        assert!(err.to_string().contains("password_env") || err.to_string().contains("type"));
+    }
+
+    #[test]
+    fn password_converts_to_auth_config() {
+        let auth: AuthConfig = AddDeviceAuth::Password {
+            password: "x".into(),
+        }
+        .into();
+        assert!(matches!(auth, AuthConfig::Password { .. }));
+    }
+
+    #[test]
+    fn ssh_key_converts_to_auth_config() {
+        let auth: AuthConfig = AddDeviceAuth::SshKey {
+            private_key_path: "/k.pem".into(),
+        }
+        .into();
+        assert!(matches!(auth, AuthConfig::SshKey { .. }));
+    }
+
+    #[test]
+    fn debug_redacts_password() {
+        let auth = AddDeviceAuth::Password {
+            password: "hunter2".into(),
+        };
+        let s = format!("{auth:?}");
+        assert!(!s.contains("hunter2"));
+        assert!(s.contains("redacted"));
     }
 }
 
@@ -249,6 +390,27 @@ mod auth_tests {
         match parsed {
             AuthConfig::SshKey { private_key_path } => {
                 assert_eq!(private_key_path, std::path::PathBuf::from("/k.pem"))
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn password_env_debug_shows_var_name_not_value() {
+        let auth = AuthConfig::PasswordEnv {
+            password_env: "R1_PASSWORD".into(),
+        };
+        let s = format!("{auth:?}");
+        assert!(s.contains("R1_PASSWORD"));
+    }
+
+    #[test]
+    fn deserialize_password_env() {
+        let json = r#"{"type":"password_env","password_env":"R1_PASSWORD"}"#;
+        let parsed: AuthConfig = serde_json::from_str(json).unwrap();
+        match parsed {
+            AuthConfig::PasswordEnv { password_env } => {
+                assert_eq!(password_env, "R1_PASSWORD")
             }
             _ => panic!("wrong variant"),
         }
@@ -540,6 +702,14 @@ impl Inventory {
                 if !private_key_path.exists() {
                     return Err(JmcpError::KeyFileMissing(private_key_path.clone()));
                 }
+            }
+            if let AuthConfig::PasswordEnv { password_env } = &entry.auth
+                && !is_valid_env_var_name(password_env)
+            {
+                return Err(JmcpError::InventoryInvalid(format!(
+                    "router '{name}': password_env is invalid (1-128 ASCII uppercase \
+                     alnum/underscore, must not start with a digit)"
+                )));
             }
             // `mode` selects the fail-open/fail-closed command engine for the
             // whole policy (mecmcp_policy::CommandMode is chosen once per
