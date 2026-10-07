@@ -25,9 +25,24 @@ for relative in \
     install.sh \
     usr/local/bin/rust-junosmcp \
     etc/jmcp/devices.json.example \
-    etc/systemd/system/rust-junosmcp.service; do
+    etc/systemd/system/rust-junosmcp.service \
+    BUILD-INFO; do
     [[ -s "$PACKAGE_ROOT/$relative" ]] || { echo "missing package file: $relative" >&2; exit 1; }
 done
+recorded_sha=$(sed -n 's/^binary_sha256=//p' "$PACKAGE_ROOT/BUILD-INFO")
+expected_sha=$(sha256sum "$PACKAGE_ROOT/usr/local/bin/rust-junosmcp" | cut -d' ' -f1)
+[[ "$recorded_sha" == "$expected_sha" ]] || {
+    echo "archive BUILD-INFO binary_sha256 does not match the shipped binary" >&2
+    exit 1
+}
+recorded_rustc=$(sed -n 's/^rustc=//p' "$PACKAGE_ROOT/BUILD-INFO")
+case "$recorded_rustc" in
+    rustc\ *) ;;
+    *)
+        echo "compile-path BUILD-INFO rustc should name the compiling toolchain; got: $recorded_rustc" >&2
+        exit 1
+        ;;
+esac
 [[ ! -e "$PACKAGE_ROOT/usr/local/bin/rust-srxmcp" ]]
 [[ ! -e "$PACKAGE_ROOT/etc/systemd/system/rust-srxmcp.service" ]]
 
