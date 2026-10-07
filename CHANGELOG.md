@@ -4,7 +4,14 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.27.3] - 2026-10-06
+
+### Security
+
+- **`mecmcp` bumped to 0.26.1**, picking up an upstream redaction-coverage
+  fix in `mecmcp-redact`'s Junos profile. This repo's own support-bundle
+  XML redaction test no longer needs to exclude any known Junos secret key
+  from XML-pass coverage.
 
 ### Changed
 

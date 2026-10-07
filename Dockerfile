@@ -10,7 +10,7 @@ WORKDIR /src
 # rustez / rustnetconf are crates.io dependencies now (no sibling checkout),
 # so the build context is just the repo root and this Dockerfile is
 # self-contained:
-#   docker build -t rust-junosmcp:0.27.2 .
+#   docker build -t rust-junosmcp:0.27.3 .
 COPY . .
 RUN cargo build --release --bin rust-junosmcp
 
