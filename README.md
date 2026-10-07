@@ -633,8 +633,9 @@ default `srx` feature, or 28 in a Junos-only build):
 The catalog-friendly stdio invocation replaces the image's HTTP CMD with
 `--transport stdio`. The ENTRYPOINT already supplies the inventory, state,
 known-hosts, lease, and token-file paths, so do not repeat those flags here.
-The state mount must contain `tokens.json`, owned by UID/GID `65532:65532` and
-mode `0600`, alongside the writable state files:
+The state mount is a bind mount, so it starts out host-user-owned; it and
+`tokens.json` inside it must be owned by UID/GID `65532:65532` before the
+first start, with `tokens.json` at mode `0600`:
 
 ```bash
 mkdir -p jmcp-state
@@ -652,8 +653,11 @@ cat > jmcp-state/tokens.json <<'EOF'
   ]
 }
 EOF
-sudo chown 65532:65532 jmcp-state/tokens.json
+sudo chown -R 65532:65532 jmcp-state
+sudo chmod 0700 jmcp-state
 sudo chmod 0600 jmcp-state/tokens.json
+sudo chown 65532:65532 devices.json
+sudo chmod 0600 devices.json
 
 docker run --rm -i \
   -v "$PWD/devices.json:/etc/jmcp/devices.json:ro" \
@@ -662,6 +666,10 @@ docker run --rm -i \
   ghcr.io/mechubsec/rustjunosmcp:latest \
   --transport stdio
 ```
+
+On rootless Docker or a userns-remapped host, UID 65532 inside the container
+maps to a different host UID; chown the mounts to whatever that mapped UID
+is instead of `65532` directly.
 
 For example, `devices.json` uses the server's inventory shape (replace the
 placeholder secret before use):

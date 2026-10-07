@@ -23,6 +23,11 @@ services:
     # server never writes them, and `add_device` is disabled by
     # --inventory-readonly below.
     #
+    # /etc/jmcp/tokens.json is now the legacy fallback location; the
+    # ENTRYPOINT's canonical --tokens-file points at /var/lib/jmcp/tokens.json
+    # in the state volume, and the server logs a migration warning each start
+    # while it keeps reading this mount instead.
+    #
     # BOTH FILES MUST BE OWNED BY 65532 AND tokens.json MUST BE MODE 0600.
     # A bind mount carries the host's uid straight through, so a tokens.json
     # created by your own user fails with:
