@@ -45,7 +45,7 @@ pub const DEFAULT_DEVICE_LEASE_DIR: &str = "/var/lib/jmcp/device-leases";
 
 pub use device_manager::DeviceManager;
 pub use error::JmcpError;
-pub use inventory::{AuthConfig, DeviceEntry, Inventory};
+pub use inventory::{AddDeviceAuth, AuthConfig, DeviceEntry, Inventory};
 pub use policy::Policy;
 pub use rustez::HostKeyVerification;
 pub use tools::transfer_file::{

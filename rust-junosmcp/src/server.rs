@@ -1288,9 +1288,8 @@ impl JmcpHandler {
         }
         if let Some(auth) = &args.auth {
             let auth_kind = match auth {
-                rust_junosmcp_core::inventory::AuthConfig::Password { .. } => "password",
-                rust_junosmcp_core::inventory::AuthConfig::SshKey { .. } => "ssh_key",
-                rust_junosmcp_core::inventory::AuthConfig::PasswordEnv { .. } => "password_env",
+                rust_junosmcp_core::inventory::AddDeviceAuth::Password { .. } => "password",
+                rust_junosmcp_core::inventory::AddDeviceAuth::SshKey { .. } => "ssh_key",
             };
             audit.meta("auth_kind", auth_kind);
         }

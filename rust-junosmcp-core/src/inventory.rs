@@ -255,6 +255,98 @@ impl std::fmt::Debug for AuthConfig {
     }
 }
 
+/// Auth a caller of the model-facing `add_device` tool may set.
+///
+/// Deliberately a strict subset of [`AuthConfig`]: it omits `PasswordEnv`.
+/// `add_device` lets a model pick an arbitrary environment-variable name and
+/// have its value sent as an SSH password to a host the same call also
+/// chooses, which turns any server env var the operator has set into a
+/// credential-exfiltration channel. `password_env` stays available only by
+/// hand-editing `devices.json` directly, never through the tool call, so
+/// this type has no `PasswordEnv` variant for the model to request — making
+/// that misuse unrepresentable rather than merely checked for.
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AddDeviceAuth {
+    /// Authenticate with a plaintext password. Supported for NETCONF; not
+    /// supported for SCP-based file transfers.
+    Password {
+        /// Plaintext password for SSH authentication.
+        password: String,
+    },
+    /// Authenticate with an SSH private key. Path is validated at inventory
+    /// load time; the file must exist.
+    SshKey {
+        /// Path to the SSH private key file.
+        private_key_path: PathBuf,
+    },
+}
+
+// Hand-written Debug to redact passwords, mirroring `AuthConfig`.
+impl std::fmt::Debug for AddDeviceAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Password { .. } => f
+                .debug_struct("Password")
+                .field("password", &"<redacted>")
+                .finish(),
+            Self::SshKey { private_key_path } => f
+                .debug_struct("SshKey")
+                .field("private_key_path", private_key_path)
+                .finish(),
+        }
+    }
+}
+
+impl From<AddDeviceAuth> for AuthConfig {
+    fn from(auth: AddDeviceAuth) -> Self {
+        match auth {
+            AddDeviceAuth::Password { password } => AuthConfig::Password { password },
+            AddDeviceAuth::SshKey { private_key_path } => AuthConfig::SshKey { private_key_path },
+        }
+    }
+}
+
+#[cfg(test)]
+mod add_device_auth_tests {
+    use super::*;
+
+    #[test]
+    fn password_env_is_rejected_at_parse_time() {
+        let json = r#"{"type":"password_env","password_env":"R1_PASSWORD"}"#;
+        let err = serde_json::from_str::<AddDeviceAuth>(json).unwrap_err();
+        assert!(err.to_string().contains("password_env") || err.to_string().contains("type"));
+    }
+
+    #[test]
+    fn password_converts_to_auth_config() {
+        let auth: AuthConfig = AddDeviceAuth::Password {
+            password: "x".into(),
+        }
+        .into();
+        assert!(matches!(auth, AuthConfig::Password { .. }));
+    }
+
+    #[test]
+    fn ssh_key_converts_to_auth_config() {
+        let auth: AuthConfig = AddDeviceAuth::SshKey {
+            private_key_path: "/k.pem".into(),
+        }
+        .into();
+        assert!(matches!(auth, AuthConfig::SshKey { .. }));
+    }
+
+    #[test]
+    fn debug_redacts_password() {
+        let auth = AddDeviceAuth::Password {
+            password: "hunter2".into(),
+        };
+        let s = format!("{auth:?}");
+        assert!(!s.contains("hunter2"));
+        assert!(s.contains("redacted"));
+    }
+}
+
 #[cfg(test)]
 mod auth_tests {
     use super::*;

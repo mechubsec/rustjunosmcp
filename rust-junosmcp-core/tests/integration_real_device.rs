@@ -302,7 +302,7 @@ async fn live_add_device_persists_then_reload() {
         device_ip: Some(host.clone()),
         device_port: Some(22),
         username: Some(user.clone()),
-        auth: Some(rust_junosmcp_core::inventory::AuthConfig::Password {
+        auth: Some(rust_junosmcp_core::inventory::AddDeviceAuth::Password {
             password: pass.clone(),
         }),
     };
