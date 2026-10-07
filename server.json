@@ -1,0 +1,81 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.mechubsec/rustjunosmcp",
+  "title": "rust-junosmcp",
+  "description": "Juniper Junos/SRX MCP server: scoped, audited, two-person change control. Rust.",
+  "version": "0.27.4",
+  "websiteUrl": "https://github.com/mechubsec/rustjunosmcp",
+  "repository": {
+    "url": "https://github.com/mechubsec/rustjunosmcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/mechubsec/rustjunosmcp:0.27.4",
+      "runtimeHint": "docker",
+      "runtimeArguments": [
+        {
+          "type": "positional",
+          "value": "--rm",
+          "isRequired": true
+        },
+        {
+          "type": "positional",
+          "value": "-i",
+          "isRequired": true
+        },
+        {
+          "type": "named",
+          "name": "-v",
+          "value": "{devices_file}:/etc/jmcp/devices.json:ro",
+          "isRequired": true,
+          "variables": {
+            "devices_file": {
+              "description": "Absolute host path to devices.json (Juniper/junos-mcp-server inventory format)",
+              "format": "filepath",
+              "isRequired": true
+            }
+          }
+        },
+        {
+          "type": "named",
+          "name": "-v",
+          "value": "{keys_dir}:/etc/jmcp/keys:ro",
+          "isRequired": true,
+          "variables": {
+            "keys_dir": {
+              "description": "Absolute host directory holding SSH private keys referenced by devices.json",
+              "format": "filepath",
+              "isRequired": true
+            }
+          }
+        },
+        {
+          "type": "named",
+          "name": "-v",
+          "value": "{state_dir}:/var/lib/jmcp",
+          "isRequired": true,
+          "variables": {
+            "state_dir": {
+              "description": "Absolute host directory for persistent state (known_hosts, leases, staging); must be owned by UID 65532",
+              "format": "filepath",
+              "isRequired": true
+            }
+          }
+        }
+      ],
+      "packageArguments": [
+        {
+          "type": "named",
+          "name": "--transport",
+          "value": "stdio",
+          "isRequired": true
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
