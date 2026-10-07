@@ -25,7 +25,7 @@ jobs:
   sbom:
     name: Generate SBOM, attach to release, attest on image
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
     permissions:
       contents: write # gh release upload
       packages: write # cosign attest pushes the attestation to GHCR
@@ -75,8 +75,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The image was already built and pushed by `Release image` before this
-      # workflow can run (see the file header). Resolve by the immutable
+      # The image is built and pushed by `Release image`, triggered by the
+      # tag push, while this workflow is triggered by the release being
+      # published -- two independent events with no ordering guarantee
+      # between them. A release published right after tagging can fire
+      # before the multi-arch build finishes pushing, so resolve by polling
+      # instead of a single lookup (MEC-2133). Resolve by the immutable
       # semver tag docker/metadata-action derived from this same release tag
       # (v1.2.3 -> 1.2.3), not `latest`, which a concurrent release could have
       # already moved.
@@ -96,8 +100,17 @@ jobs:
         run: |
           set -euo pipefail
           version="${TAG#v}"
-          digest=$(docker buildx imagetools inspect "${IMAGE}:${version}" --format '{{json .Manifest}}' | jq -r .digest)
-          [[ -n "$digest" && "$digest" != "null" ]] || { echo "could not resolve digest for ${IMAGE}:${version}" >&2; exit 1; }
+          digest=""
+          for attempt in $(seq 1 20); do
+            if resolved=$(docker buildx imagetools inspect "${IMAGE}:${version}" --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest) \
+              && [[ -n "$resolved" && "$resolved" != "null" ]]; then
+              digest="$resolved"
+              break
+            fi
+            echo "image ${IMAGE}:${version} not available yet (attempt ${attempt}/20); Release image may still be building -- waiting 60s"
+            sleep 60
+          done
+          [[ -n "$digest" ]] || { echo "could not resolve digest for ${IMAGE}:${version} after 20 attempts (~20 min)" >&2; exit 1; }
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: cosign attest SBOM (keyless)
