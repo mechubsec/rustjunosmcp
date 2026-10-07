@@ -1290,6 +1290,7 @@ impl JmcpHandler {
             let auth_kind = match auth {
                 rust_junosmcp_core::inventory::AuthConfig::Password { .. } => "password",
                 rust_junosmcp_core::inventory::AuthConfig::SshKey { .. } => "ssh_key",
+                rust_junosmcp_core::inventory::AuthConfig::PasswordEnv { .. } => "password_env",
             };
             audit.meta("auth_kind", auth_kind);
         }

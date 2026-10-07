@@ -751,7 +751,7 @@ async fn run(
         let inv = dm.inventory();
         let entry = inv.get(&args.device)?;
         match &entry.auth {
-            AuthConfig::Password { .. } => {
+            AuthConfig::Password { .. } | AuthConfig::PasswordEnv { .. } => {
                 return Err(JmcpError::UnsupportedAuth(args.device.clone()));
             }
             AuthConfig::SshKey { .. } => {}

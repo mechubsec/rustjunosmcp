@@ -286,9 +286,7 @@ async fn main() -> Result<()> {
     // reaching the MCP handshake, for a file that gates nothing it uses.
     let token_store = match (&args.tokens_file, args.allow_no_auth, args.transport) {
         (Some(_), _, Transport::Stdio) => {
-            tracing::info!(
-                "--tokens-file ignored: stdio has no bearer-token listener to protect"
-            );
+            tracing::info!("--tokens-file ignored: stdio has no bearer-token listener to protect");
             None
         }
         (Some(configured_path), _, _) => {

@@ -43,6 +43,24 @@
                 "type",
                 "private_key_path"
               ]
+            },
+            {
+              "description": "Authenticate with a plaintext password read from an environment\nvariable at connect time, named by `password_env`. The variable name\nis validated at inventory load time; the variable itself is read\nfresh on every connection (not cached), so rotating it takes effect\nwithout a restart. Keeps the password out of `devices.json`, so an\ninventory file that leaks (backup, bug report, `git add .`) carries no\ncredential, and out of argv entirely.",
+              "type": "object",
+              "properties": {
+                "password_env": {
+                  "description": "Name of the environment variable holding the plaintext password.",
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "password_env"
+                }
+              },
+              "required": [
+                "type",
+                "password_env"
+              ]
             }
           ]
         }
