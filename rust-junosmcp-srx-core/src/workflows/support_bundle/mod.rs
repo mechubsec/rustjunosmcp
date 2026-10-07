@@ -1115,6 +1115,7 @@ mod tests {
         "authentication-key",
         "authentication-password",
         "privacy-password",
+        "privacy-key",
         "password",
         "chap-secret",
         "default-chap-secret",
@@ -1125,16 +1126,9 @@ mod tests {
         "value",
     ];
 
-    // Keys covered by the text-redaction pass but not yet by the XML pass
-    // in the current `mecmcp_redact::junos` release; tracked upstream.
-    const XML_UNCOVERED_JUNOS_KEYS: &[&str] = &["privacy-key"];
-
     #[test]
     fn every_known_junos_secret_key_is_redacted_in_rpc_reply_xml() {
         for key in KNOWN_JUNOS_SECRET_KEYS {
-            if XML_UNCOVERED_JUNOS_KEYS.contains(key) {
-                continue;
-            }
             let leaked = format!("leak-{key}-value");
             let xml = format!("<rpc-reply><{key}>{leaked}</{key}></rpc-reply>");
             let (payload, changed) = redact_rpc_reply(&xml)
@@ -1149,10 +1143,7 @@ mod tests {
 
     #[test]
     fn every_known_junos_secret_key_is_redacted_in_generic_log_text() {
-        for key in KNOWN_JUNOS_SECRET_KEYS
-            .iter()
-            .chain(XML_UNCOVERED_JUNOS_KEYS.iter())
-        {
+        for key in KNOWN_JUNOS_SECRET_KEYS {
             let leaked = format!("leak{key}Value");
             // `set`-statement-aware config syntax, the same shape a
             // `request support information` tech-support dump or a syslog
