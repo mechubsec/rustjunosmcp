@@ -277,21 +277,79 @@ pub struct RuleSpec {
     pub pattern: String,
 }
 
+/// Which authorization model governs the `commands`/`pfe_commands` policy
+/// domains: fail-closed allowlist (default) or fail-open blocklist (legacy).
+/// Mirrors `mecmcp_policy::CommandMode`, which is chosen once per compiled
+/// `Policy` — this key is therefore only meaningful on `_blocklist_defaults`;
+/// setting it on a per-device `blocklist` is rejected at load time
+/// (`policy::Policy::build` / `Inventory::validate`) rather than silently
+/// ignored, so an operator can't believe they set a per-device mode that the
+/// underlying engine has no way to honour.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CommandModeConfig {
+    /// Fail-closed: a command is denied unless it matches a literal
+    /// token-prefix entry in `allow` (or `allowed_pipes` for stages after a
+    /// `|`). This is the default when `mode` is absent and there are no
+    /// legacy deny rules.
+    Allowlist,
+    /// Fail-open: the pre-MEC-92/93 behaviour. A command is denied only if it
+    /// matches a `deny` glob rule; everything else is allowed. Kept for
+    /// backward compatibility; see README.md for the migration path to
+    /// `allowlist`.
+    Blocklist,
+}
+
 /// Per-domain blocklist rules for a device or the global defaults.
 // `commands` gates `execute_junos_command`, `config` gates
 // `load_and_commit_config` (set-format only), and `pfe_commands` gates
 // `execute_junos_pfe_command`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct BlocklistRules {
-    /// Rules for operational CLI commands. Defaults to empty.
+    /// Rules for operational CLI commands. Defaults to empty. Only consulted
+    /// under `mode: blocklist`.
     #[serde(default)]
     pub commands: Vec<RuleSpec>,
     /// Rules for configuration loads (set-format only). Defaults to empty.
+    /// Always a fail-open blocklist; unaffected by `mode`.
     #[serde(default)]
     pub config: Vec<RuleSpec>,
-    /// Rules for PFE commands. Defaults to empty.
+    /// Rules for PFE commands. Defaults to empty. Only consulted under
+    /// `mode: blocklist`.
     #[serde(default)]
     pub pfe_commands: Vec<RuleSpec>,
+    /// Policy-wide command mode. Only valid on `_blocklist_defaults`; a
+    /// per-device value is a load-time validation error (see
+    /// `CommandModeConfig`). Defaults to `None`, meaning "infer at build
+    /// time" (see `policy::Policy::build`'s migration logic).
+    #[serde(default)]
+    pub mode: Option<CommandModeConfig>,
+    /// Token-prefix allowlist entries for the `commands` domain, consulted
+    /// under `mode: allowlist`. Each entry is whitespace-tokenized and must
+    /// match literal tokens — no globs (`*`, `?`, `[` are rejected at policy
+    /// build time). Merged with `_blocklist_defaults.allow` the same way
+    /// `commands` deny rules are merged: defaults ∪ this device's own list.
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// Token-prefix entries each `|`-separated pipe stage after the first
+    /// must match, under `mode: allowlist`. Defaults to empty, so a config
+    /// that doesn't set this refuses every piped command even if the first
+    /// stage is allowlisted. Merged the same way as `allow`.
+    #[serde(default)]
+    pub allowed_pipes: Vec<String>,
+    /// Token-prefix allowlist entries for the `pfe_commands` domain,
+    /// consulted under `mode: allowlist`. Same matching/merge rules as
+    /// `allow`, but independent of it — `execute_junos_pfe_command` is
+    /// gated by this list, not `allow`. Defaults to empty, so a config that
+    /// doesn't set this refuses every PFE command under allowlist mode
+    /// (fail-closed).
+    #[serde(default)]
+    pub pfe_allow: Vec<String>,
+    /// Token-prefix entries each `|`-separated pipe stage of a PFE command
+    /// after the first must match, under `mode: allowlist`. Defaults to
+    /// empty. Merged the same way as `allow`/`pfe_allow`.
+    #[serde(default)]
+    pub pfe_allowed_pipes: Vec<String>,
 }
 
 fn default_port() -> u16 {
@@ -335,6 +393,15 @@ pub struct DeviceEntry {
     /// See RustJunosMCP#292 and mecmcp#256.
     #[serde(default)]
     pub config_authority: crate::config_authority::JunosAuthority,
+    /// Declared logins the owning plane's own commit sessions use on this
+    /// device (MEC-1880, P5b). Used only by the commit-0 attribution
+    /// classifier that gates a guarded `rollback_source: 1` on a plane-owned
+    /// device.
+    ///
+    /// Absent or empty always classifies commit 0 as `ambiguous` — this field
+    /// is never inferred from device behaviour, only declared by the operator.
+    #[serde(default)]
+    pub plane_commit_logins: Vec<String>,
 }
 
 #[cfg(test)]
@@ -473,6 +540,20 @@ impl Inventory {
                 if !private_key_path.exists() {
                     return Err(JmcpError::KeyFileMissing(private_key_path.clone()));
                 }
+            }
+            // `mode` selects the fail-open/fail-closed command engine for the
+            // whole policy (mecmcp_policy::CommandMode is chosen once per
+            // compiled Policy, not per device); a per-device value has no way
+            // to be honoured, so reject it here rather than silently
+            // discarding it and letting an operator believe they set
+            // something that took effect.
+            if let Some(bl) = &entry.blocklist
+                && bl.mode.is_some()
+            {
+                return Err(JmcpError::InventoryInvalid(format!(
+                    "router '{name}': blocklist.mode is not allowed on a per-device blocklist; \
+                     'mode' is policy-wide and must be set only in _blocklist_defaults"
+                )));
             }
         }
         Ok(())
@@ -1022,14 +1103,19 @@ pub fn hash_file(path: &Path) -> std::io::Result<[u8; 32]> {
     }
 }
 
-/// Atomically write JSON to disk via same-filesystem rename.
+/// Write `value` (pretty-printed + trailing newline) to a temp file in the
+/// same directory as `path`, sync it, and return it without renaming it into
+/// place. Preserves `path`'s existing file mode bits on Unix. Accepts an
+/// arbitrary `serde_json::Value` rather than a typed struct so callers can
+/// preserve unknown top-level keys (`_blocklist_defaults`, future extensions).
 ///
-/// Writes `value` (pretty-printed + trailing newline) to a temp file in the
-/// same directory as `path`, syncs it, then renames over `path`. Preserves
-/// existing file mode bits on Unix. Accepts an arbitrary `serde_json::Value`
-/// rather than a typed struct so callers can preserve unknown top-level keys
-/// (`_blocklist_defaults`, future extensions). Used by `add_device`.
-pub fn write_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
+/// Lets a caller validate the staged content (e.g. re-parse it and rebuild
+/// the policy from it) before committing with [`NamedTempFile::persist`], so
+/// a validation failure never touches the file at `path`.
+pub fn stage_atomic(
+    path: &Path,
+    value: &serde_json::Value,
+) -> std::io::Result<tempfile::NamedTempFile> {
     let parent = path.parent().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -1063,6 +1149,16 @@ pub fn write_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<(
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(mode))?;
     }
 
+    Ok(tmp)
+}
+
+/// Atomically write JSON to disk via same-filesystem rename.
+///
+/// Stages `value` via [`stage_atomic`] and immediately persists it over
+/// `path` with no validation step. Used by callers that have already
+/// validated `value` is well-formed, or do not need to.
+pub fn write_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
+    let tmp = stage_atomic(path, value)?;
     // Surface the underlying io::Error from rename(2) (EXDEV, EACCES, ENOSPC,
     // …) untouched rather than stringifying through PersistError.
     tmp.persist(path).map_err(|e| e.error)?;

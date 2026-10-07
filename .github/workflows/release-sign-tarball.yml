@@ -1,18 +1,127 @@
 name: Sign release tarball
 
-# The LXC release tarball is uploaded to the GitHub release by hand as the
-# last step of the documented release process (see
+# Historically the LXC release tarball was uploaded to the GitHub release by
+# hand as the last step of the documented release process (see
 # docs/superpowers/specs/2026-07-16-v0.8.0-release-design.md), after the tag
-# push and the `Release image` workflow have already run. So this signs on
-# `release: published`, not on the tag push itself -- the tarball asset does
-# not exist yet at tag-push time. A release is only published by the board
-# user, so this never fires from a PR, a branch push, or an unreviewed tag.
+# push and the `Release image` workflow had already run. That manual step was
+# skipped for v0.27.1, so `sign` failed with "no assets to download" -- there
+# was nothing to sign (MEC-1066). `build-tarball` and `upload-tarball` below
+# replace the hand step: they build and attach the tarball so `sign` always
+# has something to work with.
+#
+# All three jobs trigger on `release: published`, not the tag push itself --
+# the release does not exist yet at tag-push time. A release is only
+# published by the board user, so this never fires from a PR, a branch push,
+# or an unreviewed tag.
 on:
   release:
     types: [published]
 
 jobs:
+  build-tarball:
+    name: Build LXC tarball (Debian 13)
+    runs-on: ubuntu-24.04
+    # The binary is tied to the build host's glibc (see README "The container
+    # MUST be Debian 13"): whatever glibc the build container ships becomes
+    # the floor a deployment host must meet. Building in a `debian:trixie`
+    # container makes that floor Debian 13's glibc 2.41 -- the LXC install
+    # target documented in the README -- instead of whatever glibc a GitHub-
+    # hosted `ubuntu-24.04` runner happens to ship, which is not a supported
+    # install target and could drift independently of this repo.
+    #
+    # Pinned by digest (2026-09-30) rather than the floating `debian:trixie`
+    # tag: a tag can move to a point release with a newer glibc at any time,
+    # which would silently raise the floor documented above. Repin
+    # deliberately when Debian 13 gets a point release worth adopting.
+    container:
+      image: debian:trixie@sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827a004585c
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      # git must exist before actions/checkout runs -- debian:trixie ships
+      # without it, and checkout should use a real git clone here rather
+      # than fall back to its no-git REST download path.
+      - name: Install build toolchain
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl git pkg-config
+
+      - name: Check out tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build release binary
+        # rustup auto-installs the toolchain pinned in rust-toolchain.toml
+        # (1.98.0) the first time cargo runs in this checkout.
+        run: cargo build --release --locked -p rust-junosmcp
+
+      - name: Package LXC tarball
+        run: JMCP_PACKAGE_SKIP_BUILD=1 ./scripts/package-lxc.sh
+
+      - name: Verify GLIBC ceiling
+        # Debian 13 ships glibc 2.41 (see README). A binary requiring
+        # anything newer could not have been produced by this container, so
+        # exceeding 2.41 here means the container image itself drifted --
+        # fail closed rather than ship a tarball that cannot install on the
+        # documented target.
+        run: |
+          set -euo pipefail
+          max_glibc=$(objdump -T target/release/rust-junosmcp \
+            | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC_//' | sort -Vu | tail -1)
+          echo ">> Binary requires glibc <= ${max_glibc}"
+          highest=$(printf '%s\n%s\n' "$max_glibc" "2.41" | sort -V | tail -1)
+          if [[ "$highest" != "2.41" ]]; then
+            echo "rust-junosmcp requires glibc ${max_glibc}, which exceeds Debian 13's 2.41" >&2
+            exit 1
+          fi
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lxc-tarball
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          retention-days: 1
+          if-no-files-found: error
+
+  upload-tarball:
+    name: Attach tarball to release
+    needs: build-tarball
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # gh release upload
+    timeout-minutes: 10
+    steps:
+      - name: Download tarball artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: lxc-tarball
+          path: dist
+
+      - name: Upload tarball to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        # --clobber: a re-run after a partial failure must be able to
+        # re-upload without deleting the assets by hand first (matches
+        # release-sbom.yml's SBOM upload for the same reason).
+        run: gh release upload "$TAG" dist/*.tar.gz dist/*.tar.gz.sha256 --repo "${{ github.repository }}" --clobber
+
   sign:
+    needs: upload-tarball
     permissions:
       contents: write
       # Keyless cosign signing exchanges this job's OIDC token for a
@@ -22,4 +131,4 @@ jobs:
       # mecmcp's docs/RELEASE-WORKFLOWS.md.
       id-token: write
     # Pinned to mecmcp main after #440 merged (squash). Repin to a mecmcp tag once one is cut.
-    uses: mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@e97d10bbe788b05201d592f1351168659756aa7b
+    uses: mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@8ede62a31917ad4d5f41ca2a664601280b2ddc41

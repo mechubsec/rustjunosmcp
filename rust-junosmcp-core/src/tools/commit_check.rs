@@ -74,6 +74,12 @@ pub async fn handle_with_cancel(
                 line_number,
             });
         }
+        Decision::DenyAllowlist { .. } => {
+            return Err(JmcpError::ConfigDomainAllowlistInvariant {
+                tool: "commit_check_config",
+                router: args.device.clone(),
+            });
+        }
     }
 
     // commit_check_config has no caller-facing `mode`; it always validates

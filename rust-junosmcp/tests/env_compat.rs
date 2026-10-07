@@ -15,6 +15,12 @@ fn legacy_port_warns_and_does_not_move_stdio_startup() {
             inventory.path().to_str().unwrap(),
             "--device-lease-dir",
             lease_dir.path().to_str().unwrap(),
+            "--state-file",
+            lease_dir
+                .path()
+                .join("changeset-state.json")
+                .to_str()
+                .unwrap(),
             "--transport",
             "stdio",
         ])

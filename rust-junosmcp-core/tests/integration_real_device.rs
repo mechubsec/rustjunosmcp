@@ -307,7 +307,11 @@ async fn live_add_device_persists_then_reload() {
         }),
     };
 
-    let r = rust_junosmcp_core::tools::add_device::handle(args, dm.clone())
+    let policy = Arc::new(arc_swap::ArcSwap::from(Arc::new(
+        rust_junosmcp_core::Policy::build(&dm.inventory()).unwrap(),
+    )));
+
+    let r = rust_junosmcp_core::tools::add_device::handle(args, dm.clone(), policy.clone())
         .await
         .expect("add_device handle ok");
     assert_eq!(r["added"], "live-test");
@@ -316,6 +320,7 @@ async fn live_add_device_persists_then_reload() {
     let r2 = rust_junosmcp_core::tools::reload_devices::handle(
         rust_junosmcp_core::tools::ReloadDevicesArgs::default(),
         dm.clone(),
+        policy,
     )
     .await
     .expect("reload ok");

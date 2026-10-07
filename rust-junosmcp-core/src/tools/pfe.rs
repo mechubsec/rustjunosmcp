@@ -2,8 +2,8 @@
 
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
-use crate::helpers::{excerpt, validate_input_length, validate_output_caps};
-use crate::policy::{Decision, Policy};
+use crate::helpers::{validate_input_length, validate_output_caps};
+use crate::policy::{Policy, enforce_decision};
 use crate::tools::ExecutePfeArgs;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -44,28 +44,12 @@ pub async fn handle(
     // Fail fast on unknown routers so the policy check has a valid target.
     let _ = dm.inventory().get(&args.device)?;
 
-    if let Decision::Deny { rule, source, .. } =
-        policy.check_pfe_command(&args.device, &args.pfe_command)
-    {
-        let pattern = rule.pattern.clone();
-        let source_str = source.as_str();
-        tracing::warn!(
-            tool = "execute_junos_pfe_command",
-            router = %args.device,
-            matched_rule = %pattern,
-            rule_source = %source_str,
-            input_excerpt = %excerpt(&args.pfe_command),
-            "blocklist denied request",
-        );
-        return Err(JmcpError::Denied {
-            tool: "execute_junos_pfe_command",
-            router: args.device.clone(),
-            pattern,
-            rule_source: source_str,
-            input_excerpt: excerpt(&args.pfe_command),
-            line_number: None,
-        });
-    }
+    enforce_decision(
+        policy.check_pfe_command(&args.device, &args.pfe_command),
+        "execute_junos_pfe_command",
+        &args.device,
+        &args.pfe_command,
+    )?;
 
     let timeout = Duration::from_secs(args.timeout);
     let fpc_target = args.fpc_target.clone();

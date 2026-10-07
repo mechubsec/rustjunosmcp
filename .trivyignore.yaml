@@ -1,3 +1,35 @@
+vulnerabilities:
+  # MEC-1031: HIGH CVEs in libssl3t64, a transitive package inside the pinned
+  # gcr.io/distroless/cc-debian13:nonroot runtime base image. No upstream fix
+  # exists yet: the nonroot/latest tags for that image resolve to the exact
+  # digest already pinned in the Dockerfile, so there is no patched digest to
+  # bump to. rust-junosmcp has no OpenSSL/native-tls dependency (see
+  # Cargo.lock: no openssl or native-tls crate); all TLS is rustls, using
+  # rustls-native-certs only for the system CA bundle. The distroless nonroot
+  # runtime has no shell and cannot exec `openssl` (PR #212 removed the last
+  # Command::new spawn), so libssl3t64 is never loaded by this binary. This is
+  # a time-boxed suppression, not a permanent risk acceptance: added
+  # 2026-09-30 with expired_at: 2026-11-30, so trivy stops honoring the
+  # ignore and the gate re-fails automatically on that date if no one has
+  # removed it. Remove sooner if gcr.io/distroless/cc-debian13:nonroot ships
+  # a digest with the patched package before then.
+  - id: CVE-2026-75804
+    expired_at: 2026-11-30
+    statement: >-
+      Unreachable: no OpenSSL/native-tls dependency in rust-junosmcp (rustls
+      only); distroless nonroot runtime has no shell to exec openssl.
+      Suppression added 2026-09-30 pending an upstream distroless rebuild
+      with the patched libssl3t64; tracked in MEC-1031. Expires 2026-11-30 so
+      trivy re-flags this for review if the upstream fix still hasn't shipped.
+  - id: CVE-2026-84782
+    expired_at: 2026-11-30
+    statement: >-
+      Unreachable: no OpenSSL/native-tls dependency in rust-junosmcp (rustls
+      only); distroless nonroot runtime has no shell to exec openssl.
+      Suppression added 2026-09-30 pending an upstream distroless rebuild
+      with the patched libssl3t64; tracked in MEC-1031. Expires 2026-11-30 so
+      trivy re-flags this for review if the upstream fix still hasn't shipped.
+
 misconfigurations:
   - id: AVD-DS-0026
     paths:

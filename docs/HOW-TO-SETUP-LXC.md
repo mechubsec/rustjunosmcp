@@ -43,12 +43,12 @@ the old binary has been replaced — an outage, not a build failure.
 Take the binary from the release image, which CI builds against the right glibc:
 
 ```bash
-docker create --name jx ghcr.io/mechubsec/rustjunosmcp:0.27.1
+docker create --name jx ghcr.io/mechubsec/rustjunosmcp:0.27.2
 docker cp jx:/usr/local/bin/rust-junosmcp ./rust-junosmcp
 docker rm jx
 ```
 
-No docker? `skopeo copy docker://ghcr.io/mechubsec/rustjunosmcp:0.27.1 dir:/tmp/img`
+No docker? `skopeo copy docker://ghcr.io/mechubsec/rustjunosmcp:0.27.2 dir:/tmp/img`
 then find the layer containing `usr/local/bin/rust-junosmcp` and untar it.
 
 ## 2. Assemble the install package
@@ -61,7 +61,7 @@ cd /path/to/RustJunosMCP
 mkdir -p target/release
 install -m 0755 ./rust-junosmcp target/release/rust-junosmcp
 JMCP_PACKAGE_SKIP_BUILD=1 ./scripts/package-lxc.sh
-# >> Wrote dist/rust-junosmcp_0.27.1_amd64.tar.gz
+# >> Wrote dist/rust-junosmcp_0.27.2_amd64.tar.gz
 ```
 
 The package is deliberately small — the binary, an example inventory, the
@@ -102,7 +102,7 @@ guest as safe to destroy, and the fleet's own safety rules key on it.
 ## 4. Install
 
 ```bash
-pct push 611 dist/rust-junosmcp_0.27.1_amd64.tar.gz /tmp/pkg.tar.gz
+pct push 611 dist/rust-junosmcp_0.27.2_amd64.tar.gz /tmp/pkg.tar.gz
 pct exec 611 -- bash -lc 'cd /tmp && tar xzf pkg.tar.gz && cd rust-junosmcp_*/ && ./install.sh'
 ```
 

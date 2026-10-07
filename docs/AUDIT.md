@@ -273,7 +273,7 @@ byte-for-byte unchanged.
 | Flag | Environment variable | Meaning |
 |------|-------------------|---------|
 | `--audit-redact` | `JMCP_AUDIT_REDACT` | Comma-separated `field=transform` map. Empty = disabled. |
-| `--audit-hmac-key-file` | `JMCP_AUDIT_HMAC_KEY_FILE` | Path to a file holding the HMAC key. Required if any field uses `hmac`. The key value is never a flag or env value. |
+| `--audit-hmac-key-file` | `JMCP_AUDIT_HMAC_KEY_FILE` | Path to a file holding the HMAC key. Required if any field uses `hmac`. The key value is never a flag or env value. If the path is absent or the file is empty, the server generates a key there on startup, the same way `packaging/lxc/install.sh` does at install time — this is why the flag is safe to pass unconditionally, even before redaction is turned on. A non-empty file is never rotated. |
 
 **Transforms:** `keep` (cleartext), `drop` (omit the field), `hmac` (emit `hmac:<hex>` = HMAC-SHA256 of the value under the key file's bytes). HMAC is deterministic, so a SIEM can still group events by a redacted identifier without learning it; it is keyed, so low-entropy values (IPs/hostnames) are not brute-force-reversible.
 

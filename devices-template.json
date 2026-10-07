@@ -1,14 +1,18 @@
 {
     "_blocklist_defaults": {
-        "commands": [
-            {"action": "deny", "pattern": "request system *"},
-            {"action": "deny", "pattern": "clear system commit"}
+        "mode": "allowlist",
+        "allow": [
+            "show version",
+            "show interfaces",
+            "show route",
+            "show security policies",
+            "show chassis"
+        ],
+        "pfe_allow": [
+            "show cos"
         ],
         "config": [
             {"action": "deny", "pattern": "delete *"}
-        ],
-        "pfe_commands": [
-            {"action": "deny", "pattern": "set *"}
         ]
     },
     "r1": {
@@ -49,8 +53,8 @@
             "password": "pwd"
         },
         "blocklist": {
-            "commands": [
-                {"action": "allow", "pattern": "request system reboot"}
+            "allow": [
+                "request system reboot"
             ]
         }
     }

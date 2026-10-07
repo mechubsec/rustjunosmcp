@@ -95,8 +95,12 @@ fn batch_router_scope_first_failure_rejects_call() {
 #[test]
 fn batch_returns_per_router_error_rows_on_unreachable_ips() {
     ensure_built();
+    // Explicit legacy `mode: blocklist` (fail-open, no rules): this test is
+    // about the runtime-unreachable-device path, not policy (MEC-93 made
+    // "no policy section at all" fail-closed by default).
     let inv = write_tmp(
         r#"{
+            "_blocklist_defaults":{"mode":"blocklist"},
             "r1":{"ip":"203.0.113.1","port":1,"username":"u","auth":{"type":"password","password":"x"}},
             "r2":{"ip":"203.0.113.2","port":1,"username":"u","auth":{"type":"password","password":"x"}}
         }"#,

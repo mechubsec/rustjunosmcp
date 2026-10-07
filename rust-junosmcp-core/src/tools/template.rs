@@ -201,6 +201,20 @@ pub async fn handle_with_cancel(
                 }));
                 continue;
             }
+            crate::policy::Decision::DenyAllowlist { .. } => {
+                tracing::warn!(
+                    tool = "render_and_apply_j2_template",
+                    router = %d,
+                    "policy invariant violated: check_config returned DenyAllowlist",
+                );
+                rows.push(json!({
+                    "router": d,
+                    "rendered_template": rendered,
+                    "config_format": format,
+                    "error": "policy invariant violated: config domain returned DenyAllowlist",
+                }));
+                continue;
+            }
         }
 
         let row = match commit_one(

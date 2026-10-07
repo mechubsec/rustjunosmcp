@@ -1,0 +1,28 @@
+binary     = "bin/rust-junosmcp"
+installer  = "packaging/lxc/install.sh"
+service    = "rust-junosmcp"
+config_dir = "/etc/jmcp"
+tokens     = "/var/lib/jmcp/tokens.json"
+
+# package-lxc.sh has a skip-build path (JMCP_PACKAGE_SKIP_BUILD) but does not
+# emit a BUILD-INFO file at all yet, honest or otherwise, so no provenance
+# claim is possible. R3 warns until that changes. See mecmcp's spec,
+# "Provenance ordering".
+build_info     = false
+skip_build_env = "JMCP_PACKAGE_SKIP_BUILD"
+
+units = ["packaging/systemd/rust-junosmcp.service"]
+
+# ENTRYPOINT bakes -f/devices.json, --tokens-file, and --audit-hmac-key-file
+# (closing the "5 of 6 server images run unkeyed audit" gap, mecmcp#376 /
+# MEC-978), so all three must still reach the binary after an operator
+# supplies their own CMD override (Docker appends to ENTRYPOINT but replaces
+# CMD wholesale -- rustmistmcp#78).
+must_survive_override = ["-f", "--tokens-file", "--audit-hmac-key-file"]
+
+# The binary generates its own key when the file is absent (ensure_audit_hmac_key
+# in src/main.rs) and the image has no shell to run a key-generating entrypoint
+# script, so this declares the audit_hmac_flag pattern instead of audit_entrypoint.
+# Promotes conformance R7 from warn to fatal: the flag above is already in
+# must_survive_override, so R6 proves it reaches the running container's argv.
+audit_hmac_flag = "--audit-hmac-key-file"

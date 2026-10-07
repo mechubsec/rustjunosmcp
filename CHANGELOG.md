@@ -4,7 +4,78 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.27.3] - 2026-10-06
+
+### Security
+
+- **`mecmcp` bumped to 0.26.1**, picking up an upstream redaction-coverage
+  fix in `mecmcp-redact`'s Junos profile. This repo's own support-bundle
+  XML redaction test no longer needs to exclude any known Junos secret key
+  from XML-pass coverage.
+
+### Changed
+
+- **`pfe_commands` now has its own `pfe_allow`/`pfe_allowed_pipes` config
+  keys**, merged per-device the same way `allow`/`allowed_pipes` are for
+  `commands` (MEC-1303). Previously the allowlist authorization mode
+  (default since 0.27.2) had no dedicated allow-list for PFE commands and
+  refused all of them unless a config pinned `mode: blocklist`; an
+  inventory that wants `execute_junos_pfe_command` under allowlist mode
+  should now add `pfe_allow` instead.
+
+### Security
+
+- **`rustnetconf` bumped to 0.18.1**, picking up its `russh >= 0.63.2, < 0.64`
+  fix for CVE-2026-102823. This also drops the temporary
+  `[patch.crates-io]` override for `HostKeyVerification::AcceptNew`
+  (MEC-43 / rustnetconf#108), which has shipped in a tagged release since
+  0.18.0.
+- **`rustez` bumped to 0.19**, the published version whose own `rustnetconf`
+  requirement moved to `^0.18` (0.18.0 still required `0.17`) — without this
+  the resolved dependency graph kept a second, vulnerable `rustnetconf
+  0.17.0` / `russh 0.62.7` pulled in transitively through `rustez`.
+
+### Changed
+
+- **The container image now pre-provisions its audit HMAC key.** The
+  `rust-junosmcp` binary generates `--audit-hmac-key-file` on first run if
+  it is absent or empty (mirroring `packaging/lxc/install.sh`'s own
+  key-generation step), and the Dockerfile's `ENTRYPOINT` now always passes
+  `--audit-hmac-key-file /var/lib/jmcp/audit-hmac.key`. Previously the
+  container image ran with no HMAC key configured at all, unlike the LXC
+  package of the same binary (mecmcp#376 / MEC-978). `--audit-redact`
+  itself still defaults to empty — redaction stays opt-in — so this alone
+  does not change what is logged; an operator who now turns on
+  `=hmac` redaction no longer hits `HmacKeyUnreadable` on the first
+  restart.
+
+## [0.27.2] - 2026-09-30
+
+### Changed
+
+- **`execute_junos_command`/`pfe_command` now enforce an allowlist by
+  default instead of a fail-open blocklist.** Command and PFE-command
+  authorization is wired to `mecmcp-policy`'s `Policy<Action>`, compiled
+  per device from `defaults.allow` merged with each device's own `allow`
+  list. A device config with deny rules but no explicit `mode` key keeps
+  loading as the legacy fail-open blocklist (with a startup warning); a
+  config with no policy section at all now defaults to the new fail-closed
+  allowlist. An explicit deny rule on top of a broader allow prefix (e.g.
+  `allow: ["request system"]` plus a deny on `request system reboot*`) is
+  now honored instead of being silently ignored. `pfe_command` has no
+  dedicated allow-list config key yet, so it fails closed under the new
+  default until a follow-up adds one (#465).
+
+### Fixed
+
+- **Release tarball now built and uploaded automatically.** The LXC release
+  tarball used to be attached to a GitHub release by hand, after the tag push
+  and the `Release image` workflow had already run; that manual step was
+  skipped for v0.27.1, so the sign-tarball workflow failed with "no assets to
+  download" and v0.27.1 shipped a GitHub release and a container image but no
+  tarball, checksum, or signature. `release-sign-tarball.yml` now builds the
+  Debian 13 LXC tarball itself and uploads it to the release before signing,
+  so signing always has something to work with (#464).
 
 ## [0.27.1] - 2026-09-30
 

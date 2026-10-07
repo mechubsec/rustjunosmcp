@@ -10,7 +10,7 @@ WORKDIR /src
 # rustez / rustnetconf are crates.io dependencies now (no sibling checkout),
 # so the build context is just the repo root and this Dockerfile is
 # self-contained:
-#   docker build -t rust-junosmcp:0.27.1 .
+#   docker build -t rust-junosmcp:0.27.3 .
 COPY . .
 RUN cargo build --release --bin rust-junosmcp
 
@@ -62,12 +62,25 @@ USER 65532:65532
 # relevant. CMD carries only what an operator is expected to replace: bind
 # address, port, and mode flags. Docker replaces CMD when the caller supplies
 # arguments, so security-relevant defaults must stay in ENTRYPOINT.
+#
+# --audit-hmac-key-file: without a shell (see above), the binary itself
+# generates /var/lib/jmcp/audit-hmac.key on first run if it is absent (see
+# ensure_audit_hmac_key in src/main.rs) -- the container-image equivalent of
+# packaging/lxc/install.sh's own key-generation step, closing the "5 of 6
+# server images run unkeyed audit" gap (mecmcp#376 / MEC-978). The path is
+# under the writable /var/lib/jmcp volume, not /etc/jmcp, because
+# compose.example.yaml mounts /etc/jmcp read-only, so a key path there could
+# never be generated on a fresh container. --audit-redact still defaults to
+# empty (redaction itself stays opt-in, see docs/AUDIT.md), so this alone
+# does not change what is logged -- it only means the key is already there
+# the moment an operator turns redaction on.
 ENTRYPOINT ["/usr/local/bin/rust-junosmcp", \
     "-f", "/etc/jmcp/devices.json", \
     "--staging-dir", "/var/lib/jmcp/staging", \
     "--known-hosts-file", "/var/lib/jmcp/known_hosts", \
     "--device-lease-dir", "/var/lib/jmcp/device-leases", \
-    "--tokens-file", "/var/lib/jmcp/tokens.json"]
+    "--tokens-file", "/var/lib/jmcp/tokens.json", \
+    "--audit-hmac-key-file", "/var/lib/jmcp/audit-hmac.key"]
 CMD ["--transport", "streamable-http", \
     "--host", "127.0.0.1", \
     "--port", "30030"]

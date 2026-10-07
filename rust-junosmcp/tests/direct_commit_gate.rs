@@ -34,6 +34,8 @@ fn stderr_for_request(extra_args: &[&str], request: &str) -> Vec<String> {
     cmd.args(["-t", "stdio"])
         .arg("--device-lease-dir")
         .arg(lease_dir.path())
+        .arg("--state-file")
+        .arg(lease_dir.path().join("changeset-state.json"))
         .arg("-f")
         .arg(inventory.path());
     for a in extra_args {

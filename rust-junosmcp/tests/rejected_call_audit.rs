@@ -38,6 +38,8 @@ fn stderr_for_request(request: &str) -> Vec<String> {
         .args(["-t", "stdio"])
         .arg("--device-lease-dir")
         .arg(lease_dir.path())
+        .arg("--state-file")
+        .arg(lease_dir.path().join("changeset-state.json"))
         .arg("-f")
         .arg(inventory.path())
         .stdin(Stdio::piped())

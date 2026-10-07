@@ -435,6 +435,66 @@ pub enum JmcpError {
         line_number: Option<usize>,
     },
 
+    /// Tool call was blocked by the fail-closed allowlist engine (MEC-93):
+    /// under `mode: allowlist`, no allowlist entry's token sequence was a
+    /// whole-token prefix of the input, a `|` pipe stage didn't match
+    /// `allowed_pipes`, or the raw input contained a forbidden
+    /// metacharacter (`;`, `>`, `<`, backtick, newline/CR).
+    ///
+    /// `reason` is the machine-readable code from
+    /// `mecmcp_policy::AllowlistDenyReason::as_str()` (`not_allowlisted`,
+    /// `pipe_not_allowlisted`, `forbidden_metachar`) and doubles as this
+    /// error's `audit_kind()`, so the audit trail records *why* a command
+    /// was refused, not just that it was. `input_excerpt` is built from the
+    /// *normalized* command (`Decision::DenyAllowlist::normalized`), never
+    /// the raw input, so the audit trail never records unsanitized input.
+    #[error("denied by allowlist: {tool} on '{router}': {reason}; input: {input_excerpt}")]
+    DeniedAllowlist {
+        /// Name of the MCP tool that was blocked.
+        tool: &'static str,
+        /// Name of the device the tool call was targeting.
+        router: String,
+        /// Machine-readable reason code (`not_allowlisted`,
+        /// `pipe_not_allowlisted`, or `forbidden_metachar`).
+        reason: &'static str,
+        /// Excerpt of the normalized (not raw) blocked input.
+        input_excerpt: String,
+    },
+
+    /// An `allow`/`allowed_pipes` entry in the inventory failed to compile:
+    /// it contained a glob metacharacter (`*`, `?`, `[`) — allowlist entries
+    /// are literal token prefixes, never globs — or was empty/all-whitespace.
+    /// Returned during inventory/policy load (before the server starts) so
+    /// an operator's typo never silently becomes a policy gap.
+    #[error("invalid allowlist entry for {scope}: entry '{entry}' {reason}")]
+    AllowlistEntryInvalid {
+        /// Scope where the invalid entry was found (e.g. device name or
+        /// "_blocklist_defaults").
+        scope: String,
+        /// The entry string that failed to compile.
+        entry: String,
+        /// Human-readable reason the entry was rejected.
+        reason: String,
+    },
+
+    /// `Policy::check_config` returned `Decision::DenyAllowlist`, which the
+    /// config domain (a fail-open blocklist, unaffected by `CommandMode`)
+    /// contracts to never produce (MEC-1096 F4). This should be
+    /// unreachable with the current `mecmcp-policy` version; refused rather
+    /// than `unreachable!()`-panicking on a device-action request path, so a
+    /// future library change that violates the contract fails closed
+    /// instead of aborting mid-transaction.
+    #[error(
+        "policy invariant violated: {tool} on '{router}': check_config returned \
+         DenyAllowlist, which the config domain must never produce"
+    )]
+    ConfigDomainAllowlistInvariant {
+        /// Name of the MCP tool that hit the invariant violation.
+        tool: &'static str,
+        /// Name of the device the tool call was targeting.
+        router: String,
+    },
+
     /// Destructive operation refused on a plane-owned device.
     ///
     /// This device's `config_authority` indicates it is managed by a plane (Mist,
@@ -452,6 +512,134 @@ pub enum JmcpError {
         /// Name of the device the tool call was targeting.
         device: String,
         /// Configuration authority that owns this device (e.g., "mist", "security-director-cloud").
+        authority: String,
+    },
+
+    /// A `rollback_source` action referencing a depth of 1 or more was requested
+    /// on a plane-owned device.
+    ///
+    /// Reverting N commits on a device whose true owner is a management plane
+    /// risks discarding configuration pushed by that plane since the target
+    /// commit, and (until commit-origin attribution lands) this server cannot
+    /// tell which commits were its own versus the plane's. Refused
+    /// unconditionally — no flag overrides this (MEC-1879, P5a).
+    #[error(
+        "refused: {tool} on '{device}' ({authority}) would roll back {depth} commit(s) on a \
+         plane-owned device. Reverting risks discarding configuration pushed by the owning \
+         plane since that commit, and commit-origin attribution isn't available to tell the \
+         two apart yet. Resolve this in the owning plane (e.g. Security Director) instead, or \
+         author an explicit inverse payload change via create_junos_change_set."
+    )]
+    PlaneOwnedRollbackDepthRefused {
+        /// Name of the MCP tool or code path that was refused.
+        tool: &'static str,
+        /// Name of the device the rollback targeted.
+        device: String,
+        /// Configuration authority that owns this device.
+        authority: String,
+        /// The requested rollback depth (`rollback_source` / archive number).
+        depth: u32,
+    },
+
+    /// `rollback_source: 1` on a plane-owned device was refused because
+    /// commit-0 attribution did not positively establish that commit 0 was not
+    /// the owning plane's own (MEC-1880, P5b). `class` names exactly which of
+    /// the non-`non_plane` [`crate::commit_attribution::CommitZeroClass`]
+    /// values applied, so the operator sees why without re-deriving it.
+    #[error(
+        "refused: {tool} on '{device}' ({authority}) requests rollback_source: 1, but commit-0 \
+         attribution classifies the current running config as '{class}', not 'non_plane'. Only \
+         a commit positively attributed to someone other than the owning plane may be rolled \
+         back this way. Resolve this in the owning plane (e.g. Security Director) instead, or \
+         author an explicit inverse payload change via create_junos_change_set."
+    )]
+    PlaneOwnedRollbackOneRefused {
+        /// Name of the MCP tool that was refused.
+        tool: &'static str,
+        /// Name of the device the rollback targeted.
+        device: String,
+        /// Configuration authority that owns this device.
+        authority: String,
+        /// The commit-0 class that caused the refusal (never `non_plane`).
+        class: &'static str,
+    },
+
+    /// A `rollback_source: 1` change set was approved with a commit-0 binding,
+    /// but the device's commit log no longer matches it at apply time
+    /// (MEC-1880, §5.5 TOCTOU binding). Something committed to the device
+    /// between create and apply, so the classification this plan was approved
+    /// under no longer describes the device; apply is refused rather than
+    /// trusting a stale classification.
+    #[error(
+        "refused: {tool} on '{device}' cannot apply a plane-owned rollback_source: 1 plan — the \
+         commit log has moved since this plan was approved (entry 0 no longer matches the \
+         commit-0 binding the plan was approved against). Re-create and re-approve the change \
+         set against the device's current state."
+    )]
+    CommitLogMoved {
+        /// Name of the MCP tool or code path that was refused.
+        tool: &'static str,
+        /// Name of the device the rollback targeted.
+        device: String,
+    },
+
+    /// A change set mixed a `rollback_source` action with another action on a
+    /// plane-owned device.
+    ///
+    /// A plane-owned rollback must be the sole action in its change set so
+    /// the depth-refusal guard can evaluate it in isolation (MEC-1879, P5a).
+    #[error(
+        "refused: {tool} on '{device}' ({authority}) mixes a rollback_source action with \
+         another action. A change set touching a plane-owned device's rollback history must \
+         contain only that one action."
+    )]
+    PlaneOwnedRollbackMixedAction {
+        /// Name of the MCP tool that was refused.
+        tool: &'static str,
+        /// Name of the device the tool call was targeting.
+        device: String,
+        /// Configuration authority that owns this device.
+        authority: String,
+    },
+
+    /// A change set with a plane-owned `rollback_source` action was created
+    /// while the server runs in `--lab-mode`.
+    ///
+    /// Lab mode waives approval on every change set it creates, since a
+    /// single-operator server has no second principal to approve it. A
+    /// plane-owned rollback has no waiver path at all — refused unconditionally,
+    /// independent of depth (MEC-1879, P5a).
+    #[error(
+        "refused: {tool} on '{device}' ({authority}) requests a rollback_source action while \
+         this server runs in lab mode. Lab mode waives approval, and a plane-owned rollback has \
+         no lab-mode waiver path; it requires approval by a second principal."
+    )]
+    PlaneOwnedRollbackLabMode {
+        /// Name of the MCP tool that was refused.
+        tool: &'static str,
+        /// Name of the device the tool call was targeting.
+        device: String,
+        /// Configuration authority that owns this device.
+        authority: String,
+    },
+
+    /// `rollback_config` was called with `commit=true` on a plane-owned device.
+    ///
+    /// Unlike other direct-commit writes, a plane-owned rollback is refused even
+    /// with `--allow-plane-owned-writes` set: the depth-refusal guard only
+    /// exists on the change-set path, so a direct-commit rollback has no
+    /// equivalent safeguard to allow it under (MEC-1879, P5c). `commit=false`
+    /// preview is unaffected.
+    #[error(
+        "refused: rollback_config on '{device}' ({authority}) cannot commit on a plane-owned \
+         device, even with --allow-plane-owned-writes. Use create_junos_change_set → \
+         approve_junos_change_set → apply_junos_change_set instead, which enforces the \
+         rollback-depth guard. rollback_config with commit=false still works as a preview."
+    )]
+    PlaneOwnedRollbackConfigRefused {
+        /// Name of the device the tool call was targeting.
+        device: String,
+        /// Configuration authority that owns this device.
         authority: String,
     },
 
@@ -673,7 +861,19 @@ impl JmcpError {
             Self::Io(_) => "io",
             Self::Json(_) => "parse",
             Self::Denied { .. } => "blocked",
+            // The reason code IS the audit_kind, per MEC-93 spec item 4: the
+            // audit trail records not just that a command was refused, but
+            // which of the library's three allowlist-deny reasons fired.
+            Self::DeniedAllowlist { reason, .. } => reason,
+            Self::AllowlistEntryInvalid { .. } => "invalid_input",
+            Self::ConfigDomainAllowlistInvariant { .. } => "blocked",
             Self::PlaneOwnedDevice { .. } => "blocked",
+            Self::PlaneOwnedRollbackDepthRefused { .. } => "blocked",
+            Self::PlaneOwnedRollbackOneRefused { .. } => "blocked",
+            Self::CommitLogMoved { .. } => "blocked",
+            Self::PlaneOwnedRollbackMixedAction { .. } => "blocked",
+            Self::PlaneOwnedRollbackLabMode { .. } => "blocked",
+            Self::PlaneOwnedRollbackConfigRefused { .. } => "blocked",
             Self::DirectCommitDisabled(_) => "blocked",
             Self::ConfigFormatNotAllowedWithRules { .. } => "invalid_input",
             Self::BlocklistRuleInvalid { .. } => "invalid_input",

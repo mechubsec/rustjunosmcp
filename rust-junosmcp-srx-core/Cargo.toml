@@ -1,6 +1,6 @@
 [package]
 name        = "rust-junosmcp-srx-core"
-version     = "0.27.1"
+version     = "0.27.3"
 edition.workspace     = true
 license.workspace     = true
 repository.workspace  = true
@@ -11,7 +11,7 @@ description = "SRX-specific workflow core for rust-junosmcp."
 workspace = true
 
 [dependencies]
-rust-junosmcp-core = { version = "0.27.1", path = "../rust-junosmcp-core" }
+rust-junosmcp-core = { version = "0.27.3", path = "../rust-junosmcp-core" }
 rustez             = { workspace = true }
 serde              = { workspace = true, features = ["derive"] }
 serde_json         = { workspace = true }
@@ -20,6 +20,7 @@ tracing            = { workspace = true }
 schemars           = { workspace = true }
 quick-xml          = "0.42"
 roxmltree          = "0.21"
+mecmcp-redact      = { workspace = true }
 # Address/prefix parsing for srx_resolve_address (MEC-54). Already resolved
 # transitively (2.12.x) by the existing dependency graph; taken as a direct
 # dep so address-book resolution gets typed prefixes instead of raw strings.

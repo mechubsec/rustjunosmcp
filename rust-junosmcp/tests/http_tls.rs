@@ -43,6 +43,7 @@ fn write_self_signed(dir: &Path) -> (PathBuf, PathBuf) {
 fn spawn_tls(inv_path: &Path, tokens_path: &Path, cert: &Path, key: &Path) -> Server {
     let port = pick_port();
     let device_lease_dir = tempfile::tempdir().expect("create device lease directory");
+    let state_file = device_lease_dir.path().join("changeset-state.json");
     let mut child = Command::new(binary_path())
         .args([
             "-f",
@@ -61,6 +62,8 @@ fn spawn_tls(inv_path: &Path, tokens_path: &Path, cert: &Path, key: &Path) -> Se
             key.to_str().unwrap(),
             "--device-lease-dir",
             device_lease_dir.path().to_str().unwrap(),
+            "--state-file",
+            state_file.to_str().unwrap(),
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())

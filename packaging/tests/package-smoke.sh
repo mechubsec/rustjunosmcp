@@ -133,6 +133,7 @@ PORT="${JMCP_PACKAGE_SMOKE_PORT:-39030}"
     --port "$PORT" \
     --tokens-file "$ROOTFS/var/lib/jmcp/tokens.json" \
     --device-lease-dir "$ROOTFS/var/lib/jmcp/device-leases" \
+    --state-file "$ROOTFS/var/lib/jmcp/changeset-state.json" \
     --inventory-readonly \
     >"$WORK/server.log" 2>&1 &
 SERVER_PID=$!

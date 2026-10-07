@@ -1,6 +1,6 @@
 [package]
 name        = "rust-junosmcp-core"
-version     = "0.27.1"
+version     = "0.27.3"
 edition.workspace     = true
 license.workspace     = true
 repository.workspace  = true
@@ -41,7 +41,7 @@ http         = { workspace = true }
 http-body    = { workspace = true }
 http-body-util = { workspace = true }
 rmcp         = { version = "3", features = ["server", "transport-streamable-http-server"] }
-rust-junosmcp-auth = { version = "0.27.1", path = "../rust-junosmcp-auth" }
+rust-junosmcp-auth = { version = "0.27.3", path = "../rust-junosmcp-auth" }
 mecmcp-transport = { workspace = true }
 mecmcp-policy = { workspace = true }
 mecmcp-inventory = { workspace = true }
@@ -68,7 +68,6 @@ uuid         = "1"
 # Test-only fixture SSH server for tests/ssh_host_key_fixture.rs (MEC-44):
 # proves `SshHostKeyMode::AcceptNew` refuses a changed host key end-to-end,
 # not just that it maps to the right enum variant. Same version rustnetconf
-# depends on (see the workspace `[patch.crates-io]` note); never shipped in
-# the server binary.
+# depends on; never shipped in the server binary.
 russh        = { version = "0.63", default-features = false, features = ["ring"] }
 zeroize      = "1"

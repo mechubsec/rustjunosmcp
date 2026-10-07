@@ -149,11 +149,14 @@ pub fn spawn_stdio_server_with_args(extra_args: &[&str]) -> StdioChild {
     ensure_built();
 
     let device_lease_dir = tempfile::tempdir().expect("create device lease directory");
+    let state_file = device_lease_dir.path().join("changeset-state.json");
     let mut cmd = Command::new(binary_path());
     cmd.arg("-t")
         .arg("stdio")
         .arg("--device-lease-dir")
-        .arg(device_lease_dir.path());
+        .arg(device_lease_dir.path())
+        .arg("--state-file")
+        .arg(&state_file);
     for a in extra_args {
         cmd.arg(a);
     }
@@ -405,6 +408,7 @@ pub fn spawn_with_auth_args(inv_path: &Path, tokens_path: &Path, extra: &[&str])
     let port = pick_port();
     let port_s = port.to_string();
     let device_lease_dir = tempfile::tempdir().expect("create device lease directory");
+    let state_file = device_lease_dir.path().join("changeset-state.json");
     let mut argv = vec![
         "-f",
         inv_path.to_str().unwrap(),
@@ -418,6 +422,8 @@ pub fn spawn_with_auth_args(inv_path: &Path, tokens_path: &Path, extra: &[&str])
         tokens_path.to_str().unwrap(),
         "--device-lease-dir",
         device_lease_dir.path().to_str().unwrap(),
+        "--state-file",
+        state_file.to_str().unwrap(),
     ];
     argv.extend_from_slice(extra);
     let child = Command::new(binary_path())
@@ -436,6 +442,7 @@ pub fn spawn_no_auth(inv_path: &Path, extra: &[&str]) -> Server {
     let port = pick_port();
     let port_s = port.to_string();
     let device_lease_dir = tempfile::tempdir().expect("create device lease directory");
+    let state_file = device_lease_dir.path().join("changeset-state.json");
     let mut argv = vec![
         "-f",
         inv_path.to_str().unwrap(),
@@ -448,6 +455,8 @@ pub fn spawn_no_auth(inv_path: &Path, extra: &[&str]) -> Server {
         "--allow-no-auth",
         "--device-lease-dir",
         device_lease_dir.path().to_str().unwrap(),
+        "--state-file",
+        state_file.to_str().unwrap(),
     ];
     argv.extend_from_slice(extra);
     let child = Command::new(binary_path())
@@ -481,6 +490,7 @@ pub fn spawn_with_args(extra: &[&str]) -> ServerWithToken {
     let port = pick_port();
     let port_s = port.to_string();
     let device_lease_dir = tempfile::tempdir().expect("create device lease directory");
+    let state_file = device_lease_dir.path().join("changeset-state.json");
     let mut argv = vec![
         "-f",
         inv.path().to_str().unwrap(),
@@ -493,6 +503,8 @@ pub fn spawn_with_args(extra: &[&str]) -> ServerWithToken {
         "--allow-no-auth",
         "--device-lease-dir",
         device_lease_dir.path().to_str().unwrap(),
+        "--state-file",
+        state_file.to_str().unwrap(),
     ];
     argv.extend_from_slice(extra);
     let child = Command::new(binary_path())

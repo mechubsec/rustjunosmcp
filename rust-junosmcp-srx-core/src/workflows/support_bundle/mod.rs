@@ -6,9 +6,10 @@
 //!   against Junos 24.4R1.9 on 2026-05-26.
 //! * [`artefacts`] — `CapturedArtefact` + `ArtefactSource` types describing
 //!   one piece of evidence inside the tarball.
-//! * [`redact`] — XML-element-name-based redaction (PSKs, secrets, SNMP
-//!   community, HMAC keys, RADIUS/TACACS shared-secrets) applied when
-//!   `redact=true`.
+//! * Redaction (PSKs, secrets, SNMP community, HMAC keys, RADIUS/TACACS
+//!   shared-secrets) applied when `redact=true` comes from
+//!   `mecmcp_redact::junos` (MEC-1232) rather than a local redactor — see
+//!   [`redact_rpc_reply`] and [`redact_generic_payload`].
 //! * [`staging`] — explicit LXC-side staging configuration +
 //!   on-device tarball path helpers + LRU eviction stub.
 //!
@@ -41,15 +42,10 @@
 
 pub mod artefacts;
 pub mod problem_type;
-pub mod redact;
 pub mod staging;
 
 pub use artefacts::{ArtefactSource, CapturedArtefact};
 pub use problem_type::{BASELINE_LOGS, BASELINE_RPCS, ProblemType};
-pub use redact::{
-    REDACT_ELEMENT_NAMES, REDACTED_MARKER, XmlRedaction, redact_log_artefact, redact_log_text,
-    try_redact_xml,
-};
 pub use staging::{
     DEFAULT_STAGING_DIR, DEFAULT_STAGING_MAX_BYTES, PreparedBundlePaths,
     SupportBundleStagingConfig, bundle_manifest_path, bundle_tarball_path, device_log_tarball_path,
@@ -57,6 +53,7 @@ pub use staging::{
 };
 
 use crate::{SrxError, SrxToolResponse};
+use mecmcp_redact::junos;
 use rust_junosmcp_core::device_manager::PooledDevice;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -391,7 +388,7 @@ async fn collect_generic(
         });
     }
 
-    let (payload, redacted) = redact_generic_payload(payload, args.redact);
+    let (payload, redacted) = redact_generic_payload(router, payload, args.redact)?;
 
     let fname = "request-support-information.txt";
     let abs_path = scratch.join(fname);
@@ -618,15 +615,36 @@ async fn collect_per_type(
             let mut content = raw;
             let truncated = truncate_to_char_boundary(&mut content, cap_bytes);
 
-            // Log files are plain text, so `redact_xml`'s well-formedness gate
-            // fails and would emit them verbatim. Route them through
-            // `redact_log_artefact`, which applies the line-oriented secret
-            // scrubber to non-XML payloads (#89).
+            // Log files are plain text, so a naive XML-only redactor's
+            // well-formedness gate fails and would emit them verbatim. Route
+            // them through `junos::redact_log_artefact`, which applies the
+            // line-oriented secret scrubber to non-XML payloads (#89) and
+            // fails closed when content merely shaped like XML cannot be
+            // confirmed well-formed — refuse rather than ship it with only
+            // the weaker pass applied.
             let (payload, redacted) = if args.redact {
-                let red = redact_log_artefact(&content);
-                let changed = red != content;
-                any_redacted |= changed;
-                (red, changed)
+                match junos::redact_log_artefact(&content) {
+                    Ok(red) => {
+                        let changed = red != content;
+                        any_redacted |= changed;
+                        (red, changed)
+                    }
+                    Err(e) => {
+                        artefacts.push(CapturedArtefact {
+                            source: ArtefactSource::LogFile {
+                                device_path: path.to_string(),
+                            },
+                            tarball_path: rel_display,
+                            sha256: String::new(),
+                            bytes_in_tarball: 0,
+                            redacted: false,
+                            error: Some(format!(
+                                "{path}: could not be confirmed safe to redact, artefact refused rather than shipped unredacted: {e}"
+                            )),
+                        });
+                        continue;
+                    }
+                }
             } else {
                 (content, false)
             };
@@ -804,20 +822,37 @@ fn finalize_lxc_bundle(
 
 /// Redact the `request support information` payload for the generic
 /// support-bundle path. That RPC returns plain tech-support text, never XML,
-/// so this always goes through the best-effort [`redact_log_artefact`] dispatch
-/// (never the permissive XML-only redactor) — otherwise `redact:true` (the
+/// so this always goes through [`mecmcp_redact::junos::redact_log_artefact`]
+/// (never a permissive XML-only redactor) — otherwise `redact:true` (the
 /// default) becomes a silent no-op that ships the raw payload while still
 /// recording `redacted: false`. Extracted from `collect_generic` so a test can
 /// call the exact function production code calls, rather than exercising
-/// `redact_log_artefact` directly and missing a regression in how
+/// `junos::redact_log_artefact` directly and missing a regression in how
 /// `collect_generic` wires it up.
-fn redact_generic_payload(payload: String, redact: bool) -> (String, bool) {
+///
+/// # Errors
+/// Returns [`SrxError::BundleConfigCaptureFailed`] when `junos::redact_log_artefact`
+/// cannot confirm the payload safe (fail-closed: the generic path's single
+/// artefact must be refused rather than shipped with only a partial redaction
+/// pass, or worse, raw).
+fn redact_generic_payload(
+    router: &str,
+    payload: String,
+    redact: bool,
+) -> Result<(String, bool), SrxError> {
     if redact {
-        let red = redact_log_artefact(&payload);
+        let red = junos::redact_log_artefact(&payload).map_err(|e| {
+            SrxError::BundleConfigCaptureFailed {
+                router: router.to_string(),
+                detail: format!(
+                    "request support information: payload could not be confirmed safe to redact: {e}"
+                ),
+            }
+        })?;
         let changed = red != payload;
-        (red, changed)
+        Ok((red, changed))
     } else {
-        (payload, false)
+        Ok((payload, false))
     }
 }
 
@@ -828,12 +863,12 @@ fn redact_generic_payload(payload: String, redact: bool) -> (String, bool) {
 /// well-formed XML — the caller must refuse the artefact rather than
 /// shipping the raw payload (fail closed).
 fn redact_rpc_reply(raw: &str) -> Option<(String, bool)> {
-    match try_redact_xml(raw) {
-        XmlRedaction::Redacted(red) => {
+    match junos::redact_xml(raw) {
+        Ok(red) => {
             let changed = red != raw;
             Some((red, changed))
         }
-        XmlRedaction::Unparseable => None,
+        Err(_) => None,
     }
 }
 
@@ -1027,12 +1062,13 @@ mod tests {
     // F3: the M1 regression test for `collect_generic`'s redaction call must
     // exercise the exact function production code calls, not just the
     // library redactor directly — otherwise a regression that swapped
-    // `redact_generic_payload`'s body back to the permissive `redact_xml`
-    // would go uncaught while the library-level test kept passing.
+    // `redact_generic_payload`'s body back to a permissive redactor would go
+    // uncaught while the library-level test kept passing.
     #[test]
     fn redact_generic_payload_scrubs_tech_support_text_when_redact_true() {
         let tech_support = "set snmp community leakedGeneric;\n".to_string();
-        let (out, redacted) = redact_generic_payload(tech_support.clone(), true);
+        let (out, redacted) = redact_generic_payload("edge01", tech_support.clone(), true)
+            .expect("plain tech-support text must redact, not refuse");
         assert!(!out.contains("leakedGeneric"), "secret leaked: {out}");
         assert!(redacted, "must report redacted=true");
     }
@@ -1040,9 +1076,117 @@ mod tests {
     #[test]
     fn redact_generic_payload_passes_through_when_redact_false() {
         let tech_support = "set snmp community leakedGeneric;\n".to_string();
-        let (out, redacted) = redact_generic_payload(tech_support.clone(), false);
+        let (out, redacted) = redact_generic_payload("edge01", tech_support.clone(), false)
+            .expect("redact=false must never fail");
         assert_eq!(out, tech_support);
         assert!(!redacted, "redact=false must report redacted=false");
+    }
+
+    // The generic support-bundle path's single artefact must be refused
+    // (fail closed), not silently shipped unredacted, when the captured
+    // payload cannot be confirmed safe to redact.
+    #[test]
+    fn redact_generic_payload_fails_closed_when_shaped_like_unparseable_xml() {
+        let bad = "<unclosed><secret>oops".to_string();
+        let err = redact_generic_payload("edge01", bad, true)
+            .expect_err("XML-shaped-but-unparseable payload must be refused");
+        assert!(
+            matches!(err, SrxError::BundleConfigCaptureFailed { .. }),
+            "unexpected error variant: {err:?}"
+        );
+    }
+
+    // MEC-1232 fixture coverage: every known Junos secret-bearing key name
+    // `mecmcp_redact::junos` redacts must actually come back redacted through
+    // *this crate's* support-bundle wiring (`redact_rpc_reply` for the
+    // per-RPC XML path, `redact_generic_payload` for the plain-text
+    // `request support information` path) — not just inside the library's
+    // own unit tests. `mecmcp_redact::junos::REDACT_LOG_KEYS` is private, so
+    // this list is kept in sync by hand; a name added there without a
+    // matching entry here is still caught by the crypt-hash catch-all cases
+    // below, but should be added here too.
+    const KNOWN_JUNOS_SECRET_KEYS: &[&str] = &[
+        "pre-shared-key",
+        "secret",
+        "simple-password",
+        "encrypted-password",
+        "community",
+        "hmac-key",
+        "authentication-key",
+        "authentication-password",
+        "privacy-password",
+        "privacy-key",
+        "password",
+        "chap-secret",
+        "default-chap-secret",
+        "local-password",
+        "hello-authentication-key",
+        "plain-text-password-value",
+        "key",
+        "value",
+    ];
+
+    #[test]
+    fn every_known_junos_secret_key_is_redacted_in_rpc_reply_xml() {
+        for key in KNOWN_JUNOS_SECRET_KEYS {
+            let leaked = format!("leak-{key}-value");
+            let xml = format!("<rpc-reply><{key}>{leaked}</{key}></rpc-reply>");
+            let (payload, changed) = redact_rpc_reply(&xml)
+                .unwrap_or_else(|| panic!("well-formed XML for <{key}> must redact, not refuse"));
+            assert!(
+                !payload.contains(&leaked),
+                "secret leaked for <{key}>: {payload}"
+            );
+            assert!(changed, "must report changed=true for <{key}>");
+        }
+    }
+
+    #[test]
+    fn every_known_junos_secret_key_is_redacted_in_generic_log_text() {
+        for key in KNOWN_JUNOS_SECRET_KEYS {
+            let leaked = format!("leak{key}Value");
+            // `set`-statement-aware config syntax, the same shape a
+            // `request support information` tech-support dump or a syslog
+            // line would carry it in.
+            let line = format!("set foo {key} \"{leaked}\"\n");
+            let (payload, changed) = redact_generic_payload("edge01", line.clone(), true)
+                .unwrap_or_else(|e| {
+                    panic!("set-syntax text for {key} must redact, not refuse: {e}")
+                });
+            assert!(
+                !payload.contains(&leaked),
+                "secret leaked for {key}: {payload}"
+            );
+            assert!(changed, "must report changed=true for {key}");
+        }
+    }
+
+    // The Junos crypt-hash catch-all must still fire through this crate's
+    // wiring even under an element/key name not on the known-key list — the
+    // whole point of the catch-all is covering names nobody has denylisted
+    // yet.
+    #[test]
+    fn junos_crypt_hash_catch_all_is_redacted_in_rpc_reply_xml() {
+        let xml = "<rpc-reply><password-hash>$6$saltXYZ$hashLEAKvalue</password-hash></rpc-reply>";
+        let (payload, changed) =
+            redact_rpc_reply(xml).expect("well-formed XML with a bare crypt hash must redact");
+        assert!(
+            !payload.contains("$6$saltXYZ$hashLEAKvalue"),
+            "crypt hash leaked: {payload}"
+        );
+        assert!(changed, "must report changed=true");
+    }
+
+    #[test]
+    fn junos_crypt_hash_catch_all_is_redacted_in_generic_log_text() {
+        let line = "unlisted-field $6$saltXYZ$hashLEAKvalue\n".to_string();
+        let (payload, changed) = redact_generic_payload("edge01", line, true)
+            .expect("bare crypt hash in text must redact, not refuse");
+        assert!(
+            !payload.contains("$6$saltXYZ$hashLEAKvalue"),
+            "crypt hash leaked: {payload}"
+        );
+        assert!(changed, "must report changed=true");
     }
 
     #[test]

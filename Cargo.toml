@@ -54,7 +54,7 @@ async-trait      = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 schemars     = "1.0"
 anyhow       = "1"
-rustez       = "0.18"
+rustez       = "0.19"
 # `version` is redundant for resolution alongside `tag`, but cargo-deny reads a
 # versionless dependency as a wildcard and rejects it under [bans].
 # All mecmcp crates MUST resolve to the same git ref. Cargo keys a git
@@ -71,30 +71,27 @@ rustez       = "0.18"
 # capture (mecmcp#288), which populates model_id/session_id/client_name for
 # clients that declare MCP 2026-07-28 and are routed without a session header.
 # mecmcp 0.17.0: adds resolve_token_path and find_stale_secrets to mecmcp-auth.
+# mecmcp 0.26.0: mecmcp-redact gains a Junos profile (`mecmcp_redact::junos`)
+# covering the two gaps this repo's own support-bundle redactor filled by
+# hand: a bare `<value>` element (NTP authentication-key secret) and a
+# config-syntax-aware line redactor for non-XML support-bundle artefacts.
+# mecmcp 0.26.1: closes the remaining XML redaction-coverage gap in the
+# Junos profile; this repo's support-bundle XML test no longer needs an
+# uncovered-key exclusion list.
 #
-# TEMPORARY: pinned to a specific commit of mechubsec/mecmcp `main`
-# (2e157e0f09894e2a5309408523c0911425eebd20), not a released tag. That commit
-# includes mecmcp-redact (added in mecmcp#386) plus a follow-up hardening
-# commit (mecmcp#432, marking device-sourced content as untrusted before it
-# reaches a model) — this repo depends on mecmcp-redact to close a privacy gap
-# in tool output (device secrets reaching the calling model) and neither PR
-# has shipped in a tagged release yet. If the crate moves again before a
-# release cuts, re-pin to the new head.
-# Replace `rev` with the released `tag` once mecmcp cuts a release that
-# includes mecmcp-redact; repin all eleven `mecmcp-*` crates together
-# (including mecmcp-redact below) and regenerate Cargo.lock, since they must
-# all resolve to the same git ref.
-mecmcp-audit = { version = "0.24.1", git = "https://github.com/mechubsec/mecmcp", rev = "2e157e0f09894e2a5309408523c0911425eebd20" }
-mecmcp-auth  = { version = "0.24.1", git = "https://github.com/mechubsec/mecmcp", rev = "2e157e0f09894e2a5309408523c0911425eebd20" }
-mecmcp-transport = { version = "0.24.1", git = "https://github.com/mechubsec/mecmcp", rev = "2e157e0f09894e2a5309408523c0911425eebd20" }
-mecmcp-runtime = { version = "0.24.1", git = "https://github.com/mechubsec/mecmcp", rev = "2e157e0f09894e2a5309408523c0911425eebd20" }
-mecmcp-policy = { version = "0.24.1", git = "https://github.com/mechubsec/mecmcp", rev = "2e157e0f09894e2a5309408523c0911425eebd20" }
-mecmcp-inventory = { version = "0.24.1", git = "https://github.com/mechubsec/mecmcp", rev = "2e157e0f09894e2a5309408523c0911425eebd20" }
-mecmcp-device = { version = "0.24.1", git = "https://github.com/mechubsec/mecmcp", rev = "2e157e0f09894e2a5309408523c0911425eebd20" }
-mecmcp-changeset = { version = "0.24.1", git = "https://github.com/mechubsec/mecmcp", rev = "2e157e0f09894e2a5309408523c0911425eebd20" }
-mecmcp-scp = { version = "0.24.1", git = "https://github.com/mechubsec/mecmcp", rev = "2e157e0f09894e2a5309408523c0911425eebd20" }
-mecmcp-secret = { version = "0.24.1", git = "https://github.com/mechubsec/mecmcp", rev = "2e157e0f09894e2a5309408523c0911425eebd20" }
-mecmcp-redact = { version = "0.24.1", git = "https://github.com/mechubsec/mecmcp", rev = "2e157e0f09894e2a5309408523c0911425eebd20" }
+# mecmcp is consumed at an exact pinned tag; all crates must resolve to the
+# same git ref (see the TypeId note above).
+mecmcp-audit = { version = "0.26.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.26.1" }
+mecmcp-auth  = { version = "0.26.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.26.1" }
+mecmcp-transport = { version = "0.26.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.26.1" }
+mecmcp-runtime = { version = "0.26.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.26.1" }
+mecmcp-policy = { version = "0.26.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.26.1" }
+mecmcp-inventory = { version = "0.26.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.26.1" }
+mecmcp-device = { version = "0.26.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.26.1" }
+mecmcp-changeset = { version = "0.26.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.26.1" }
+mecmcp-scp = { version = "0.26.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.26.1" }
+mecmcp-secret = { version = "0.26.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.26.1" }
+mecmcp-redact = { version = "0.26.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.26.1" }
 globset      = "0.4"
 regex        = "1"
 metrics                     = "0.24.6"
@@ -122,23 +119,8 @@ ureq             = "2"
 minijinja        = { version = "2", default-features = false, features = ["builtins", "loader", "serde"] }
 dashmap          = "6"
 http-body        = "1"
-rustnetconf      = "0.17"
+rustnetconf      = "0.18.1"
 rustix           = "1.1"
-
-# TEMPORARY: rustnetconf's `HostKeyVerification::AcceptNew` (MEC-43) merged to
-# mechubsec/rustnetconf#108 but has not shipped a tagged release yet — the
-# crates.io `0.17` line above still resolves to the pre-AcceptNew 0.17.0.
-# `[patch.crates-io]` overrides EVERY crates.io-sourced `rustnetconf` in the
-# graph, including the one pulled in transitively through `rustez` (which
-# depends on `rustnetconf = "0.17"` itself) — without this, rustjunosmcp and
-# rustez would each get a different `HostKeyVerification` type with a
-# different TypeId, and `rust-junosmcp-core::bootstrap::build_host_key_policy`
-# wouldn't type-check against what `rustez::Device` expects.
-# Replace this patch with a plain version bump once rustnetconf cuts a
-# release that includes #108, and drop the `russh` dev-dependency pin note in
-# rust-junosmcp-core's Cargo.toml alongside it if that version also moves.
-[patch.crates-io]
-rustnetconf = { git = "https://github.com/mechubsec/rustnetconf", rev = "29373d652386cc96d6e7b7c79e70515aec324a2a" }
 
 # Release build profile: LTO + strip for smaller binaries.
 #

@@ -15,9 +15,11 @@
 //! `redact_last_mile` uses [`super::redact_body`]'s JSON-first chain instead,
 //! so it redacts these already-serialized bodies structurally.
 //! `collect_jtac_support_bundle` additionally has its own dedicated, more
-//! precise redaction pass (`workflows::support_bundle::redact`) applied
-//! earlier, before the tarball is built; the last-mile pass on its summary
-//! response is a second, cheap safety net, not a replacement for that pass.
+//! precise redaction pass (`mecmcp_redact::junos`, via
+//! `workflows::support_bundle::{redact_rpc_reply, redact_generic_payload}`,
+//! MEC-1232) applied earlier, before the tarball is built; the last-mile
+//! pass on its summary response is a second, cheap safety net, not a
+//! replacement for that pass.
 
 use super::{JmcpHandler, audit_scope, caller_ctx, mint_request_id};
 
@@ -1269,7 +1271,9 @@ mod scope_tests {
     fn make_handler(authorization_required: bool) -> JmcpHandler {
         let inventory = Arc::new(rust_junosmcp_core::Inventory::empty());
         let dm = Arc::new(DeviceManager::new(inventory.clone()));
-        let policy = Arc::new(rust_junosmcp_core::Policy::build(&inventory).unwrap());
+        let policy = Arc::new(arc_swap::ArcSwap::from(Arc::new(
+            rust_junosmcp_core::Policy::build(&inventory).unwrap(),
+        )));
         let transfer_cfg = rust_junosmcp_core::TransferConfig {
             staging_dir: std::path::PathBuf::from("/tmp/staging"),
             known_hosts_file: std::path::PathBuf::from("/tmp/known_hosts"),

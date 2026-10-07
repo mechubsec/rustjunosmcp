@@ -1570,18 +1570,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "internal-russh-num-bigint"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae8e22120c32fb4d19ec55fba35015f57095cd95a2e3b732e44457f5915b2ee8"
-dependencies = [
- "num-integer",
- "num-traits",
- "rand 0.10.3",
- "rand_core 0.10.1",
-]
-
-[[package]]
 name = "ipnet"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1735,8 +1723,8 @@ checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
 
 [[package]]
 name = "mecmcp-audit"
-version = "0.24.1"
-source = "git+https://github.com/mechubsec/mecmcp?rev=2e157e0f09894e2a5309408523c0911425eebd20#2e157e0f09894e2a5309408523c0911425eebd20"
+version = "0.26.1"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -1765,8 +1753,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-auth"
-version = "0.24.1"
-source = "git+https://github.com/mechubsec/mecmcp?rev=2e157e0f09894e2a5309408523c0911425eebd20#2e157e0f09894e2a5309408523c0911425eebd20"
+version = "0.26.1"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -1784,8 +1772,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-changeset"
-version = "0.24.1"
-source = "git+https://github.com/mechubsec/mecmcp?rev=2e157e0f09894e2a5309408523c0911425eebd20#2e157e0f09894e2a5309408523c0911425eebd20"
+version = "0.26.1"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
 dependencies = [
  "async-trait",
  "getrandom 0.4.3",
@@ -1809,8 +1797,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-device"
-version = "0.24.1"
-source = "git+https://github.com/mechubsec/mecmcp?rev=2e157e0f09894e2a5309408523c0911425eebd20#2e157e0f09894e2a5309408523c0911425eebd20"
+version = "0.26.1"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
 dependencies = [
  "async-trait",
  "rustix",
@@ -1825,8 +1813,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-inventory"
-version = "0.24.1"
-source = "git+https://github.com/mechubsec/mecmcp?rev=2e157e0f09894e2a5309408523c0911425eebd20#2e157e0f09894e2a5309408523c0911425eebd20"
+version = "0.26.1"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
 dependencies = [
  "mecmcp-secret",
  "serde",
@@ -1839,21 +1827,22 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-policy"
-version = "0.24.1"
-source = "git+https://github.com/mechubsec/mecmcp?rev=2e157e0f09894e2a5309408523c0911425eebd20#2e157e0f09894e2a5309408523c0911425eebd20"
+version = "0.26.1"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
 dependencies = [
  "globset",
+ "quick-xml",
  "serde",
  "thiserror",
 ]
 
 [[package]]
 name = "mecmcp-redact"
-version = "0.24.1"
-source = "git+https://github.com/mechubsec/mecmcp?rev=2e157e0f09894e2a5309408523c0911425eebd20#2e157e0f09894e2a5309408523c0911425eebd20"
+version = "0.26.1"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
 dependencies = [
  "hmac",
- "quick-xml 0.41.0",
+ "quick-xml",
  "serde_json",
  "sha2",
  "thiserror",
@@ -1862,8 +1851,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-runtime"
-version = "0.24.1"
-source = "git+https://github.com/mechubsec/mecmcp?rev=2e157e0f09894e2a5309408523c0911425eebd20#2e157e0f09894e2a5309408523c0911425eebd20"
+version = "0.26.1"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
 dependencies = [
  "anyhow",
  "clap",
@@ -1880,14 +1869,14 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-scp"
-version = "0.24.1"
-source = "git+https://github.com/mechubsec/mecmcp?rev=2e157e0f09894e2a5309408523c0911425eebd20#2e157e0f09894e2a5309408523c0911425eebd20"
+version = "0.26.1"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
  "hmac",
  "mecmcp-secret",
- "russh 0.63.3",
+ "russh",
  "rustix",
  "sha1",
  "tempfile",
@@ -1899,8 +1888,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-secret"
-version = "0.24.1"
-source = "git+https://github.com/mechubsec/mecmcp?rev=2e157e0f09894e2a5309408523c0911425eebd20#2e157e0f09894e2a5309408523c0911425eebd20"
+version = "0.26.1"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
 dependencies = [
  "rustix",
  "thiserror",
@@ -1909,8 +1898,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-transport"
-version = "0.24.1"
-source = "git+https://github.com/mechubsec/mecmcp?rev=2e157e0f09894e2a5309408523c0911425eebd20#2e157e0f09894e2a5309408523c0911425eebd20"
+version = "0.26.1"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.26.1#b529190df5b2f1caa0fe1dd16ef29dbc74c3c51e"
 dependencies = [
  "axum",
  "axum-server",
@@ -2201,9 +2190,9 @@ dependencies = [
 
 [[package]]
 name = "pageant"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f3a5ae18f65a85c67a77d18d42d3606c07948e3c17c1e5f74852b26589e88a5"
+checksum = "6d8eab09a361a4afe0b1668be978cd97e4f052e927a92b0b608cf902965d49ce"
 dependencies = [
  "base16ct",
  "byteorder",
@@ -2454,15 +2443,6 @@ dependencies = [
  "wasi",
  "web-sys",
  "winapi",
-]
-
-[[package]]
-name = "quick-xml"
-version = "0.41.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
-dependencies = [
- "memchr",
 ]
 
 [[package]]
@@ -2825,76 +2805,6 @@ dependencies = [
 
 [[package]]
 name = "russh"
-version = "0.62.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9decb68e4e44e1079700e54f17c8f23806ec53d7e0db73ab1c71d9dabc666812"
-dependencies = [
- "aes",
- "bitflags",
- "block-padding",
- "byteorder",
- "bytes",
- "cbc",
- "cipher",
- "crypto-bigint",
- "ctr",
- "curve25519-dalek",
- "data-encoding",
- "delegate",
- "der",
- "digest",
- "ecdsa",
- "ed25519-dalek",
- "elliptic-curve",
- "enum_dispatch",
- "flate2",
- "futures",
- "generic-array 1.4.4",
- "getrandom 0.4.3",
- "ghash",
- "hex-literal",
- "hmac",
- "inout",
- "internal-russh-num-bigint",
- "keccak",
- "log",
- "md5",
- "ml-kem",
- "module-lattice",
- "num-bigint 0.4.8",
- "p256",
- "p384",
- "p521",
- "pageant",
- "pbkdf2",
- "pkcs5",
- "pkcs8",
- "polyval",
- "rand 0.10.3",
- "rand_core 0.10.1",
- "ring",
- "russh-cryptovec",
- "russh-util",
- "salsa20",
- "scrypt",
- "sec1",
- "sha1",
- "sha2",
- "sha3 0.12.0",
- "signature",
- "spki",
- "ssh-encoding",
- "ssh-key",
- "subtle",
- "thiserror",
- "tokio",
- "typenum",
- "universal-hash",
- "zeroize",
-]
-
-[[package]]
-name = "russh"
 version = "0.63.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "036204edbd199552a5b3832f63c60dcdf395dc44c7f06b4af1c0e8139cc11bce"
@@ -2989,7 +2899,7 @@ dependencies = [
 
 [[package]]
 name = "rust-junosmcp"
-version = "0.27.1"
+version = "0.27.3"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3005,6 +2915,7 @@ dependencies = [
  "mecmcp-transport",
  "metrics",
  "metrics-exporter-prometheus",
+ "rand 0.10.3",
  "rcgen",
  "reqwest",
  "rmcp",
@@ -3032,7 +2943,7 @@ dependencies = [
 
 [[package]]
 name = "rust-junosmcp-auth"
-version = "0.27.1"
+version = "0.27.3"
 dependencies = [
  "arc-swap",
  "axum",
@@ -3046,7 +2957,7 @@ dependencies = [
 
 [[package]]
 name = "rust-junosmcp-core"
-version = "0.27.1"
+version = "0.27.3"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -3070,7 +2981,7 @@ dependencies = [
  "minijinja",
  "regex",
  "rmcp",
- "russh 0.63.3",
+ "russh",
  "rust-junosmcp-auth",
  "rustez",
  "rustnetconf",
@@ -3092,13 +3003,14 @@ dependencies = [
 
 [[package]]
 name = "rust-junosmcp-srx-core"
-version = "0.27.1"
+version = "0.27.3"
 dependencies = [
  "base64ct",
  "flate2",
  "ipnet",
+ "mecmcp-redact",
  "pretty_assertions",
- "quick-xml 0.42.0",
+ "quick-xml",
  "rand 0.10.3",
  "roxmltree",
  "rust-junosmcp-core",
@@ -3133,11 +3045,11 @@ dependencies = [
 
 [[package]]
 name = "rustez"
-version = "0.18.0"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90b358f7c991e2819f548144ea89a6b59e1ae6ce3a398ee7b085f6fe717c7da0"
+checksum = "fcedbbae20827257ceb0956cafc4756a8fe53155388ccd1b96c9f2b66e7501d4"
 dependencies = [
- "quick-xml 0.42.0",
+ "quick-xml",
  "rustnetconf",
  "serde",
  "thiserror",
@@ -3205,14 +3117,15 @@ dependencies = [
 
 [[package]]
 name = "rustnetconf"
-version = "0.17.0"
-source = "git+https://github.com/mechubsec/rustnetconf?rev=29373d652386cc96d6e7b7c79e70515aec324a2a#29373d652386cc96d6e7b7c79e70515aec324a2a"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5da05ed236d6211753c2e7b9d7aaba39a8689c7c32fef796f011ef194f54cef"
 dependencies = [
  "async-trait",
  "base64ct",
- "quick-xml 0.42.0",
+ "quick-xml",
  "ring",
- "russh 0.62.7",
+ "russh",
  "thiserror",
  "tokio",
  "tracing",
@@ -3675,7 +3588,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

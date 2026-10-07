@@ -30,7 +30,9 @@ static TEST_PORT_COUNTER: AtomicU16 = AtomicU16::new(18800);
 /// Mirrors production initialization but with an empty inventory (no devices needed).
 fn test_handler() -> JmcpHandler {
     let inventory = rust_junosmcp_core::Inventory::empty();
-    let policy = Arc::new(Policy::build(&inventory).expect("test policy"));
+    let policy = Arc::new(arc_swap::ArcSwap::from(Arc::new(
+        Policy::build(&inventory).expect("test policy"),
+    )));
     let dev_manager = Arc::new(DeviceManager::new(Arc::new(inventory)));
 
     // Minimal transfer/upgrade config for test purposes

@@ -3,7 +3,9 @@
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
 use crate::inventory::{Inventory, hash_file};
+use crate::policy::Policy;
 use crate::tools::ReloadDevicesArgs;
+use arc_swap::ArcSwap;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,18 +15,23 @@ use std::sync::Arc;
 /// Rejects the call if inventory mutation is disabled (`--inventory-readonly`).
 /// Takes the device manager write lock, validates the new path is within the
 /// inventory directory (RJMCP-SEC-005: prevents symlink/traversal escapes),
-/// checks the file exists and is non-empty, hashes and swaps the inventory in
-/// memory, invalidates pooled sessions for removed/changed devices, and returns
-/// added/removed/changed counts.
+/// checks the file exists and is non-empty, rebuilds the policy from the new
+/// inventory, hashes and swaps the inventory and policy into memory together,
+/// invalidates pooled sessions for removed/changed devices, and returns
+/// added/removed/changed counts. The new inventory and the policy built from
+/// it are validated together before either is swapped in: on any validation
+/// failure this returns `Err` and leaves the previous inventory, policy, and
+/// pooled sessions untouched.
 pub async fn handle(
     args: ReloadDevicesArgs,
     dm: Arc<DeviceManager>,
+    policy: Arc<ArcSwap<Policy>>,
 ) -> Result<serde_json::Value, JmcpError> {
     if dm.inventory_readonly() {
         return Err(JmcpError::InventoryReadonly);
     }
 
-    reload(args, dm).await
+    reload(args, dm, policy).await
 }
 
 /// Re-read the already-configured inventory path from trusted process code.
@@ -34,13 +41,15 @@ pub async fn handle(
 /// It exists for process control paths such as SIGHUP configuration refresh.
 pub async fn reload_current_from_disk(
     dm: Arc<DeviceManager>,
+    policy: Arc<ArcSwap<Policy>>,
 ) -> Result<serde_json::Value, JmcpError> {
-    reload(ReloadDevicesArgs::default(), dm).await
+    reload(ReloadDevicesArgs::default(), dm, policy).await
 }
 
 async fn reload(
     args: ReloadDevicesArgs,
     dm: Arc<DeviceManager>,
+    policy: Arc<ArcSwap<Policy>>,
 ) -> Result<serde_json::Value, JmcpError> {
     let lock = dm.write_lock();
     let _guard = lock.lock().await;
@@ -129,6 +138,12 @@ async fn reload(
         }
     }
 
+    // Build the policy from the new inventory *before* anything is swapped
+    // in. On failure, return without touching the inventory, the policy, or
+    // the pool — the previous, known-good state keeps governing every
+    // existing device.
+    let new_policy = Policy::build(&new_inv)?;
+
     let new_hash = hash_file(&path).map_err(|e| JmcpError::InventoryRead(e.to_string()))?;
     tracing::info!(
         prev = %prev_path.display(),
@@ -136,6 +151,7 @@ async fn reload(
         "reload_devices: inventory swapped"
     );
     dm.store_inventory(Arc::new(new_inv), path.clone(), new_hash);
+    policy.store(Arc::new(new_policy));
 
     // Invalidate pooled sessions for removed or changed routers.
     let invalidate: Vec<String> = removed.iter().chain(changed.iter()).cloned().collect();
@@ -177,6 +193,10 @@ mod tests {
         ))
     }
 
+    fn test_policy(inv: &Inventory) -> Arc<ArcSwap<Policy>> {
+        Arc::new(ArcSwap::from(Arc::new(Policy::build(inv).unwrap())))
+    }
+
     fn write_file(json: &str) -> tempfile::NamedTempFile {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(json.as_bytes()).unwrap();
@@ -214,7 +234,8 @@ mod tests {
                  "r2":{"ip":"127.0.0.2","username":"u","auth":{"type":"password","password":"x"}}}"#,
         );
 
-        let r = handle(ReloadDevicesArgs::default(), dm.clone())
+        let policy = test_policy(&dm.inventory());
+        let r = handle(ReloadDevicesArgs::default(), dm.clone(), policy)
             .await
             .unwrap();
         assert_eq!(r["previous_router_count"], 1);
@@ -231,11 +252,13 @@ mod tests {
         );
         let dm = dm_at(&p1, false);
 
+        let policy = test_policy(&dm.inventory());
         let r = handle(
             ReloadDevicesArgs {
                 file_name: Some(name2),
             },
             dm.clone(),
+            policy,
         )
         .await
         .unwrap();
@@ -252,11 +275,13 @@ mod tests {
             r#"{}"#,
         );
         let dm = dm_at(&p1, false);
+        let policy = test_policy(&dm.inventory());
         let r = handle(
             ReloadDevicesArgs {
                 file_name: Some(name2),
             },
             dm,
+            policy,
         )
         .await;
         assert!(matches!(r, Err(JmcpError::EmptyInventory)));
@@ -268,7 +293,8 @@ mod tests {
             r#"{"r1":{"ip":"127.0.0.1","username":"u","auth":{"type":"password","password":"x"}}}"#,
         );
         let dm = dm_at(f.path(), true);
-        let r = handle(ReloadDevicesArgs::default(), dm).await;
+        let policy = test_policy(&dm.inventory());
+        let r = handle(ReloadDevicesArgs::default(), dm, policy).await;
         assert!(matches!(r, Err(JmcpError::InventoryReadonly)));
     }
 
@@ -284,7 +310,8 @@ mod tests {
             r#"{"r2":{"ip":"127.0.0.2","username":"u","auth":{"type":"password","password":"x"}}}"#,
         );
 
-        let result = reload_current_from_disk(dm.clone()).await.unwrap();
+        let policy = test_policy(&dm.inventory());
+        let result = reload_current_from_disk(dm.clone(), policy).await.unwrap();
         assert_eq!(result["new_router_count"], 1);
         assert!(dm.inventory().get("r2").is_ok());
         assert!(dm.inventory().get("r1").is_err());
@@ -305,11 +332,13 @@ mod tests {
             }"#,
         );
         let dm = dm_at(&p1, false);
+        let policy = test_policy(&dm.inventory());
         let r = handle(
             ReloadDevicesArgs {
                 file_name: Some(name2),
             },
             dm,
+            policy,
         )
         .await
         .unwrap();
@@ -327,11 +356,13 @@ mod tests {
             r#"{"r1":{"ip":"127.0.0.1","username":"u","auth":{"type":"password","password":"x"}}}"#,
         );
         let dm = dm_at(f.path(), false);
+        let policy = test_policy(&dm.inventory());
         let r = handle(
             ReloadDevicesArgs {
                 file_name: Some("../../../etc/shadow".into()),
             },
             dm,
+            policy,
         )
         .await;
         assert!(matches!(r, Err(JmcpError::InventoryInvalid(ref msg)) if msg.contains("..")));
@@ -344,11 +375,13 @@ mod tests {
             r#"{"r1":{"ip":"127.0.0.1","username":"u","auth":{"type":"password","password":"new"}}}"#,
         );
         let dm = dm_at(&p1, false);
+        let policy = test_policy(&dm.inventory());
         let r = handle(
             ReloadDevicesArgs {
                 file_name: Some(name2),
             },
             dm,
+            policy,
         )
         .await
         .unwrap();
@@ -363,11 +396,13 @@ mod tests {
             r#"{"r1":{"ip":"127.0.0.1","username":"u","auth":{"type":"password","password":"x"}}}"#,
         );
         let dm = dm_at(f.path(), false);
+        let policy = test_policy(&dm.inventory());
         let r = handle(
             ReloadDevicesArgs {
                 file_name: Some("/etc/passwd".into()),
             },
             dm,
+            policy,
         )
         .await;
         assert!(
@@ -400,16 +435,124 @@ mod tests {
         std::os::unix::fs::symlink(&outside_target, &escape).unwrap();
 
         let dm = dm_at(&inv_path, false);
+        let policy = test_policy(&dm.inventory());
         let r = handle(
             ReloadDevicesArgs {
                 file_name: Some("escape.json".into()),
             },
             dm,
+            policy,
         )
         .await;
         assert!(
             matches!(r, Err(JmcpError::InventoryInvalid(ref msg)) if msg.contains("outside")),
             "expected symlink-escape rejection, got {r:?}"
+        );
+    }
+
+    /// A reload whose new inventory parses but whose policy fails to build
+    /// must fail closed on every axis — inventory, policy, and pool — not
+    /// just the policy.
+    #[tokio::test]
+    async fn reload_with_file_name_rejected_when_new_policy_fails_to_build() {
+        let (_dir, p1, name2) = paired_inventories(
+            r#"{
+                "_blocklist_defaults": {"mode":"blocklist","commands":[{"action":"deny","pattern":"request system reboot*"}]},
+                "r1":{"ip":"1.1.1.1","username":"u","auth":{"type":"password","password":"x"}}
+            }"#,
+            r#"{
+                "_blocklist_defaults": {"mode":"blocklist","commands":[{"action":"deny","pattern":"request system reboot*"}]},
+                "r1":{"ip":"1.1.1.1","username":"u","auth":{"type":"password","password":"x"}},
+                "r2":{"ip":"2.2.2.2","username":"u","auth":{"type":"password","password":"x"},
+                      "blocklist":{"commands":[{"action":"deny","pattern":"[unterminated"}]}}
+            }"#,
+        );
+        let dm = dm_at(&p1, false);
+        let policy = test_policy(&dm.inventory());
+        let policy_before = policy.load_full();
+        let hash_before = dm.inventory_hash();
+
+        let r = handle(
+            ReloadDevicesArgs {
+                file_name: Some(name2),
+            },
+            dm.clone(),
+            policy.clone(),
+        )
+        .await;
+        assert!(
+            matches!(r, Err(JmcpError::BlocklistRuleInvalid { .. })),
+            "expected BlocklistRuleInvalid, got {r:?}"
+        );
+
+        // (b) the in-memory inventory is unchanged: the new device never
+        // appears, and the hash used for the next TOCTOU check is untouched.
+        assert_eq!(dm.inventory().len(), 1);
+        assert!(dm.inventory().get("r2").is_err());
+        assert_eq!(dm.inventory_hash(), hash_before);
+
+        // (c) a device still decided by the old policy *and* the old
+        // inventory: r1's pre-existing deny rule is still enforced, proving
+        // the old policy (not a half-built one) is what governs it.
+        assert!(
+            !policy
+                .load()
+                .check_command("r1", "request system reboot")
+                .is_allowed(),
+            "the old policy's deny rule must still be enforced after a failed reload"
+        );
+        assert!(
+            Arc::ptr_eq(&policy.load_full(), &policy_before),
+            "policy must not be swapped when the rebuild fails"
+        );
+    }
+
+    /// (d) Same failure mode via the SIGHUP path
+    /// ([`reload_current_from_disk`]), which has no caller to report `Err`
+    /// to but must leave the same state untouched.
+    #[tokio::test]
+    async fn sighup_reload_rejected_when_new_policy_fails_to_build() {
+        let f = write_file(
+            r#"{
+                "_blocklist_defaults": {"mode":"blocklist","commands":[{"action":"deny","pattern":"request system reboot*"}]},
+                "r1":{"ip":"1.1.1.1","username":"u","auth":{"type":"password","password":"x"}}
+            }"#,
+        );
+        let dm = dm_at(f.path(), false);
+        let policy = test_policy(&dm.inventory());
+        let policy_before = policy.load_full();
+        let hash_before = dm.inventory_hash();
+
+        // Mutate the file in place, as SIGHUP would re-read it.
+        crate::helpers::write_restricted_fixture(
+            f.path(),
+            r#"{
+                "_blocklist_defaults": {"mode":"blocklist","commands":[{"action":"deny","pattern":"request system reboot*"}]},
+                "r1":{"ip":"1.1.1.1","username":"u","auth":{"type":"password","password":"x"}},
+                "r2":{"ip":"2.2.2.2","username":"u","auth":{"type":"password","password":"x"},
+                      "blocklist":{"commands":[{"action":"deny","pattern":"[unterminated"}]}}
+            }"#,
+        );
+
+        let r = reload_current_from_disk(dm.clone(), policy.clone()).await;
+        assert!(
+            matches!(r, Err(JmcpError::BlocklistRuleInvalid { .. })),
+            "expected BlocklistRuleInvalid, got {r:?}"
+        );
+
+        assert_eq!(dm.inventory().len(), 1);
+        assert!(dm.inventory().get("r2").is_err());
+        assert_eq!(dm.inventory_hash(), hash_before);
+        assert!(
+            !policy
+                .load()
+                .check_command("r1", "request system reboot")
+                .is_allowed(),
+            "the old policy's deny rule must still be enforced after a failed SIGHUP reload"
+        );
+        assert!(
+            Arc::ptr_eq(&policy.load_full(), &policy_before),
+            "policy must not be swapped when the rebuild fails"
         );
     }
 }

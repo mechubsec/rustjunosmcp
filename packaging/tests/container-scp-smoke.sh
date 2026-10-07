@@ -46,7 +46,9 @@ for expected in \
     '"--known-hosts-file"' \
     '"/var/lib/jmcp/known_hosts"' \
     '"--device-lease-dir"' \
-    '"/var/lib/jmcp/device-leases"'; do
+    '"/var/lib/jmcp/device-leases"' \
+    '"--audit-hmac-key-file"' \
+    '"/var/lib/jmcp/audit-hmac.key"'; do
     [[ "$image_config" == *"$expected"* ]] || {
         echo "application image config missing: $expected" >&2
         exit 1
@@ -81,7 +83,7 @@ argv=$(docker inspect "$container_id" --format '{{join .Args "\n"}}')
 docker rm "$container_id" > /dev/null
 
 # Assert the five config path VALUES (not the -f flag, which is too weak to grep).
-for p in /etc/jmcp/devices.json /var/lib/jmcp/staging /var/lib/jmcp/known_hosts /var/lib/jmcp/device-leases /var/lib/jmcp/tokens.json; do
+for p in /etc/jmcp/devices.json /var/lib/jmcp/staging /var/lib/jmcp/known_hosts /var/lib/jmcp/device-leases /var/lib/jmcp/tokens.json /var/lib/jmcp/audit-hmac.key; do
   echo "$argv" | grep -q -- "$p" || { echo "FAIL: $p missing from argv with --host override"; exit 1; }
 done
 echo "PASS: config paths survive --host override"
@@ -95,8 +97,10 @@ cat > "$WORK/devices.json" <<'DEVICES'
 DEVICES
 
 VOLUME="jmcpsmoke$$"
+AUDIT_VOLUME="jmcpauditsmoke$$"
 docker volume create "$VOLUME" >/dev/null
-trap 'docker volume rm "$VOLUME" 2>/dev/null || true; rm -rf "$WORK"' EXIT
+docker volume create "$AUDIT_VOLUME" >/dev/null
+trap 'docker volume rm "$VOLUME" "$AUDIT_VOLUME" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 
 docker run --rm -v "$VOLUME:/vol" -v "$WORK:/host:ro" \
   rust:1.97-slim-bookworm \
@@ -135,5 +139,21 @@ if ! grep -q '"name":"fetch_file"' <<<"$response"; then
     echo "tools/list did not include fetch_file" >&2
     exit 1
 fi
+
+echo ">> Verifying audit HMAC key is generated in the state volume on first run"
+# Run the image's real ENTRYPOINT against an otherwise-empty state volume. No
+# devices.json is mounted at /etc/jmcp, so the process exits nonzero shortly
+# after -- that's expected and ignored (the exit code is never asserted here).
+# ensure_audit_hmac_key (src/main.rs) runs before device-mapping is even
+# read, so the key file lands in the volume regardless of that later failure.
+docker run --rm -v "$AUDIT_VOLUME:/var/lib/jmcp" "$APP_IMAGE" >/dev/null 2>&1 || true
+
+key_present=$(docker run --rm -v "$AUDIT_VOLUME:/vol:ro" rust:1.97-slim-bookworm \
+    bash -c '[ -s /vol/audit-hmac.key ] && echo yes || echo no')
+if [[ "$key_present" != "yes" ]]; then
+    echo "FAIL: audit-hmac.key was not generated in /var/lib/jmcp on first run" >&2
+    exit 1
+fi
+echo "PASS: audit HMAC key auto-generated on first run"
 
 echo ">> Distroless container smoke test passed (hardening + MCP server operation verified)"

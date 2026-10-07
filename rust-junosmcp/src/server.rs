@@ -391,6 +391,13 @@ impl JmcpHandler {
     /// Construct a new server handler with the given device manager, policy, and
     /// operational configs.
     ///
+    /// `policy` is shared (not copied) with the caller: `add_device` and
+    /// `reload_devices` store a freshly-built policy into it after a
+    /// successful inventory mutation, and callers that also run the SIGHUP
+    /// hot-reload path pass the same `Arc` to
+    /// [`reload_current_from_disk`](rust_junosmcp_core::tools::reload_devices::reload_current_from_disk)
+    /// so both paths update the policy the handler actually reads from.
+    ///
     /// Registers the Junos tool surface unconditionally and the SRX tools when the
     /// `srx` feature is enabled. Authorization is not yet enforced at construction;
     /// call [`with_srx_runtime`](Self::with_srx_runtime) to configure SRX-specific
@@ -398,7 +405,7 @@ impl JmcpHandler {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         dm: Arc<DeviceManager>,
-        policy: Arc<Policy>,
+        policy: Arc<arc_swap::ArcSwap<Policy>>,
         transfer_cfg: rust_junosmcp_core::TransferConfig,
         upgrade_cfg: rust_junosmcp_core::UpgradeConfig,
         coordinator: Arc<mecmcp_changeset::ChangesetCoordinator>,
@@ -416,7 +423,7 @@ impl JmcpHandler {
 
         Self {
             dm,
-            policy: Arc::new(arc_swap::ArcSwap::from(policy)),
+            policy,
             transfer_cfg,
             upgrade_cfg,
             coordinator,
@@ -456,14 +463,6 @@ impl JmcpHandler {
     /// Returns the transfer configuration governing `transfer_file` operations.
     pub fn transfer_config(&self) -> &rust_junosmcp_core::TransferConfig {
         &self.transfer_cfg
-    }
-
-    /// Rebuild the blocklist policy from the current inventory and store it.
-    /// Called after inventory mutations (add_device, reload_devices, SIGHUP).
-    pub fn rebuild_policy(&self) {
-        if let Ok(new_policy) = Policy::build(&self.dm.inventory()) {
-            self.policy.store(Arc::new(new_policy));
-        }
     }
 
     /// Convert a tool's `Result<Value, JmcpError>` into the `CallToolResult`
@@ -1295,20 +1294,21 @@ impl JmcpHandler {
             audit.meta("auth_kind", auth_kind);
         }
 
-        let result = add_device::handle(args, self.dm.clone()).await;
-        match &result {
-            Ok(_) => {
-                self.rebuild_policy();
+        let result = add_device::handle(args, self.dm.clone(), self.policy.clone()).await;
+        let result = match result {
+            Ok(v) => {
                 audit.succeed();
+                Ok(v)
             }
             Err(e) => {
                 if matches!(e, rust_junosmcp_core::JmcpError::InventoryReadonly) {
                     audit.deny("inventory_readonly");
                 } else {
-                    audit.fail_kind(e.audit_kind(), e);
+                    audit.fail_kind(e.audit_kind(), &e);
                 }
+                Err(e)
             }
-        }
+        };
         Self::to_call_result(result)
     }
 
@@ -1329,10 +1329,9 @@ impl JmcpHandler {
             return Self::scope_to_call_result(e);
         }
 
-        let result = reload_devices::handle(args, self.dm.clone()).await;
-        match &result {
+        let result = reload_devices::handle(args, self.dm.clone(), self.policy.clone()).await;
+        let result = match result {
             Ok(v) => {
-                self.rebuild_policy();
                 if let Some(added) = v.get("added").and_then(|a| a.as_array())
                     && let Some(removed) = v.get("removed").and_then(|r| r.as_array())
                 {
@@ -1340,15 +1339,17 @@ impl JmcpHandler {
                     audit.meta("device_count", total as u64);
                 }
                 audit.succeed();
+                Ok(v)
             }
             Err(e) => {
                 if matches!(e, rust_junosmcp_core::JmcpError::InventoryReadonly) {
                     audit.deny("inventory_readonly");
                 } else {
-                    audit.fail_kind(e.audit_kind(), e);
+                    audit.fail_kind(e.audit_kind(), &e);
                 }
+                Err(e)
             }
-        }
+        };
         Self::to_call_result(result)
     }
 
@@ -2217,7 +2218,9 @@ mod scope_tests {
     fn make_handler() -> JmcpHandler {
         let inv = Arc::new(rust_junosmcp_core::Inventory::empty());
         let dm = Arc::new(DeviceManager::new(inv.clone()));
-        let policy = Arc::new(Policy::build(&inv).unwrap());
+        let policy = Arc::new(arc_swap::ArcSwap::from(Arc::new(
+            Policy::build(&inv).unwrap(),
+        )));
         let transfer_cfg = test_transfer_cfg();
         let upgrade_cfg = rust_junosmcp_core::UpgradeConfig {
             transfer_cfg: transfer_cfg.clone(),
@@ -2566,7 +2569,9 @@ mod scope_tests {
 
         let inv = Arc::new(rust_junosmcp_core::Inventory::empty());
         let dm = Arc::new(DeviceManager::new(inv.clone()));
-        let policy = Arc::new(Policy::build(&inv).unwrap());
+        let policy = Arc::new(arc_swap::ArcSwap::from(Arc::new(
+            Policy::build(&inv).unwrap(),
+        )));
         let cfg = TransferConfig {
             staging_dir: std::path::PathBuf::from("/tmp/x"),
             known_hosts_file: std::path::PathBuf::from("/tmp/khosts"),

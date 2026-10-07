@@ -18,6 +18,7 @@ mod tls;
 mod token_cmd;
 
 use anyhow::{Context, Result};
+use arc_swap::ArcSwap;
 use cli::{Command, Transport};
 use rmcp::ServiceExt;
 use rust_junosmcp::server::JmcpHandler;
@@ -66,12 +67,69 @@ fn resolve_tokens_with(
     mecmcp_auth::resolve_token_path(configured, legacy).context("resolving token file path")
 }
 
+/// Pre-provision the audit HMAC key file at `path` if it is absent or empty,
+/// mirroring `packaging/lxc/install.sh`'s own key-generation step so every
+/// entry point -- LXC install, systemd start, or a container's first run --
+/// converges on the same keyed-audit posture instead of only the LXC path
+/// doing it (mecmcp#376 / MEC-978). `--audit-redact` still defaults to empty
+/// (redaction stays opt-in, see docs/AUDIT.md), so this alone does not turn
+/// redaction on; it just means the key is already there the moment an
+/// operator flips `--audit-redact ...=hmac` on, instead of failing with
+/// `HmacKeyUnreadable` on that first restart.
+///
+/// `-s` (not `-e`): a zero-byte key file is indistinguishable from "never
+/// generated" and would make every HMAC output constant, so rewriting it
+/// here is a repair, not data loss. A non-empty file is never rotated --
+/// that would silently break verification of every audit record signed
+/// under the old key.
+fn ensure_audit_hmac_key(path: &std::path::Path) -> Result<()> {
+    if std::fs::metadata(path)
+        .map(|m| m.len() > 0)
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    let mut key = [0u8; 32];
+    use rand::TryRng as _;
+    rand::rngs::SysRng.try_fill_bytes(&mut key).map_err(|e| {
+        anyhow::anyhow!("generating audit HMAC key: OS entropy source unavailable: {e}")
+    })?;
+    let hex_key: String = key.iter().map(|b| format!("{b:02x}")).collect();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .with_context(|| format!("creating audit HMAC key file {}", path.display()))?;
+        use std::io::Write as _;
+        file.write_all(hex_key.as_bytes())
+            .with_context(|| format!("writing audit HMAC key file {}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, &hex_key)
+            .with_context(|| format!("writing audit HMAC key file {}", path.display()))?;
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let env_compat::ParsedCli {
         cli: args,
         warnings,
     } = env_compat::parse();
+
+    if let Some(key_path) = args.audit_hmac_key_file.as_deref() {
+        ensure_audit_hmac_key(key_path).context("pre-provisioning audit HMAC key file")?;
+    }
 
     let redaction = if args.audit_redact.trim().is_empty() {
         None
@@ -89,6 +147,9 @@ async fn main() -> Result<()> {
         audit_log_file: args.audit_log_file.clone(),
         redaction,
         journald: args.audit_journald,
+        // rust-junosmcp does not expose `--otel-endpoint`; OTel export stays
+        // off until this server's CLI wires it through.
+        otel: None,
     };
     let audit_sink =
         mecmcp_audit::init_tracing(&audit_cfg).context("initializing audit tracing")?;
@@ -120,6 +181,11 @@ async fn main() -> Result<()> {
         audit_journald: args.audit_journald,
         audit_redact: args.audit_redact.clone(),
         audit_hmac_key_file: args.audit_hmac_key_file.clone(),
+        // Not exposed as a rust-junosmcp CLI flag yet, same as above: no
+        // `--otel-endpoint`/`--otel-service-name` flags exist on this
+        // binary's own `Cli`, so OTel export stays disabled.
+        otel_endpoint: None,
+        otel_service_name: "mecmcp".to_string(),
         evidence: args.evidence.clone(),
         // Not exposed as a rust-junosmcp CLI flag yet; no approval-digest
         // coordinator is wired into this binary, so there is no key to pass.
@@ -164,8 +230,8 @@ async fn main() -> Result<()> {
         "loaded inventory"
     );
 
-    let policy = Arc::new(Policy::build(&inventory).context("compiling blocklist policy")?);
-    let counts = policy.rule_counts();
+    let built_policy = Policy::build(&inventory).context("compiling blocklist policy")?;
+    let counts = built_policy.rule_counts();
     tracing::info!(
         default_command_rules = counts.default_commands,
         default_config_rules = counts.default_config,
@@ -173,6 +239,12 @@ async fn main() -> Result<()> {
         total_devices = inventory.names().len(),
         "blocklist policy loaded"
     );
+    // Shared with the SIGHUP hot-reload path below: `add_device`,
+    // `reload_devices`, and the SIGHUP inventory re-read all store a
+    // freshly-built policy into this same `ArcSwap` after a successful
+    // mutation, so every path the handler reads from (`self.policy`) sees
+    // the update.
+    let policy = Arc::new(ArcSwap::from(Arc::new(built_policy)));
     // Mirror the scp host-key posture for NETCONF SSH:
     //   default                              → strict KnownHosts lookup against --known-hosts-file
     //   --ssh-accept-new-host-keys           → real TOFU (AcceptNew): pin unknown hosts, refuse changed keys
@@ -442,7 +514,7 @@ async fn main() -> Result<()> {
 
     let handler = JmcpHandler::new(
         dev_manager.clone(),
-        policy,
+        policy.clone(),
         transfer_cfg,
         upgrade_cfg,
         coordinator,
@@ -472,7 +544,7 @@ async fn main() -> Result<()> {
         };
         // Inventory is now mutable at runtime (add_device / reload_devices).
         let dm = dev_manager.clone();
-        let hup_handler = handler.clone();
+        let hup_policy = policy.clone();
         let hup_audit_sink = audit_sink.clone();
         tokio::spawn(async move {
             let mut hup = match tokio::signal::unix::signal(
@@ -502,18 +574,21 @@ async fn main() -> Result<()> {
                 let Some(store_file) = &store_and_path else {
                     continue;
                 };
-                // Reload inventory FIRST so the token store sees current routers.
+                // Reload inventory and rebuild the policy from it together, so the
+                // token store below never sees a half-updated state. A policy build
+                // failure fails the whole reload: both the inventory and the
+                // policy stay exactly as they were.
                 match rust_junosmcp_core::tools::reload_devices::reload_current_from_disk(
                     dm.clone(),
+                    hup_policy.clone(),
                 )
                 .await
                 {
                     Ok(result) => {
-                        hup_handler.rebuild_policy();
-                        tracing::info!(?result, "inventory reloaded");
+                        tracing::info!(?result, "inventory and policy reloaded");
                     }
                     Err(e) => {
-                        tracing::error!(error = %e, "inventory reload failed; keeping previous inventory");
+                        tracing::error!(error = %e, "inventory reload failed; keeping previous inventory and policy");
                     }
                 }
                 // Reload the token store. The shared TokenStoreFile's reload()
@@ -726,5 +801,81 @@ mod token_path_tests {
             resolved.path, malformed,
             "the given path must be used verbatim"
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod audit_hmac_key_tests {
+    use super::ensure_audit_hmac_key;
+
+    /// The common case: no entry point has ever run here before (fresh
+    /// container volume, fresh LXC install). A key must be created, be
+    /// non-empty, and be mode 0600 so it is not group/world-readable.
+    #[test]
+    fn generates_a_key_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit-hmac.key");
+
+        ensure_audit_hmac_key(&path).unwrap();
+
+        let contents = std::fs::read(&path).unwrap();
+        assert!(!contents.is_empty(), "generated key file must not be empty");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "key file must be mode 0600");
+        }
+    }
+
+    /// A key already exists (install.sh ran, or this is not the first
+    /// container start against this volume). It must be left byte-for-byte
+    /// untouched -- rotating it here would silently break verification of
+    /// every audit record HMAC'd under the old key.
+    #[test]
+    fn does_not_rotate_an_existing_nonempty_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit-hmac.key");
+        std::fs::write(&path, b"existing-key-material").unwrap();
+
+        ensure_audit_hmac_key(&path).unwrap();
+
+        let contents = std::fs::read(&path).unwrap();
+        assert_eq!(contents, b"existing-key-material");
+    }
+
+    /// A zero-byte key file is indistinguishable from "never generated" (a
+    /// truncated write, an `install -m 0600 /dev/null ...` placeholder, an
+    /// interrupted first run) and would make every HMAC output constant. It
+    /// must be repaired, not treated as already-present.
+    #[test]
+    fn repairs_an_empty_key_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit-hmac.key");
+        std::fs::write(&path, b"").unwrap();
+
+        ensure_audit_hmac_key(&path).unwrap();
+
+        let contents = std::fs::read(&path).unwrap();
+        assert!(!contents.is_empty(), "empty key file must be repaired");
+    }
+
+    /// Two independent calls must not produce the same key -- otherwise the
+    /// "random" key is really a constant and every deployment's audit HMAC
+    /// is forgeable by anyone who reads this test.
+    #[test]
+    fn successive_generations_differ() {
+        let dir = tempfile::tempdir().unwrap();
+        let path_a = dir.path().join("a.key");
+        let path_b = dir.path().join("b.key");
+
+        ensure_audit_hmac_key(&path_a).unwrap();
+        ensure_audit_hmac_key(&path_b).unwrap();
+
+        let a = std::fs::read(&path_a).unwrap();
+        let b = std::fs::read(&path_b).unwrap();
+        assert_ne!(a, b, "two generated keys must not collide");
     }
 }

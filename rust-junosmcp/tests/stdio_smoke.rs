@@ -85,6 +85,12 @@ fn lists_expected_tools() {
             "stdio",
             "--device-lease-dir",
             device_lease_dir.path().to_str().unwrap(),
+            "--state-file",
+            device_lease_dir
+                .path()
+                .join("changeset-state.json")
+                .to_str()
+                .unwrap(),
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -234,6 +240,12 @@ fn denied_command_returns_tool_error() {
             "stdio",
             "--device-lease-dir",
             device_lease_dir.path().to_str().unwrap(),
+            "--state-file",
+            device_lease_dir
+                .path()
+                .join("changeset-state.json")
+                .to_str()
+                .unwrap(),
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

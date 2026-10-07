@@ -33,18 +33,25 @@ Drop-in on `devices.json` and the core tools — plus a lot the Python/PyEZ serv
 
 ## Performance
 
-Benchmarked against [Juniper/junos-mcp-server](https://github.com/Juniper/junos-mcp-server)
-(Python/PyEZ) on the same vSRX lab devices, same network path.
+Benchmarked on 2026-10-05 against [Juniper/junos-mcp-server](https://github.com/Juniper/junos-mcp-server)
+1.1.1 and [shigechika/junos-mcp](https://github.com/shigechika/junos-mcp) 0.18.0 / 0.22.0
+with the same read-only workload on a vSRX lab device (Junos 26.2R1.7), 3 runs × 30 calls per operation, 0 failed calls.
+Medians across runs:
 
-| Test | rust-junosmcp (v0.3.0) | junos-mcp (Python) | Speedup |
-|------|------------------------|--------------------|---------|
-| 5 sequential commands | 30.4s (6.1s/cmd) | 52.2s (10.4s/cmd) | **1.7x** |
-| 5 parallel commands | 8.1s (1.6s/cmd) | 11.1s (2.2s/cmd) | **1.4x** |
-| 4 routers x 3 commands (batch) | 16.1s (1.3s/cmd) | N/A | Rust-only |
+| | rust-junosmcp 0.27.2 | Juniper 1.1.1 | shigechika 0.22.0 |
+|---|---|---|---|
+| Cold start | 6 ms | 264 ms | 392 ms |
+| Peak memory (RSS) | 20 MiB | 129 MiB | 98 MiB |
+| SSH connections per run | 1 | 121 | 1 |
+| `show version`, p50 | 216 ms | 878 ms | 228 ms |
+| config RPC (access-denied reply¹), p50 | 11 ms | 776 ms | 21 ms |
 
-Session pooling (`PooledDevice`) eliminates SSH/NETCONF handshake overhead
-on sequential commands to the same router. The batch tool runs routers in
-parallel with a configurable concurrency cap.
+¹ the read-only bench login has no configuration view, so this measures a
+round trip with a ~400-byte reply, not a full config fetch. See
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
+Full results, the mock-target overhead numbers, method and reproduction steps:
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 > ## v0.10.0 released — read before upgrading
 >
@@ -250,6 +257,78 @@ rejected pre-flight in that case.
 > `blocklist` are not cross-compatible with Juniper/junos-mcp-server's
 > inventory format. Files without these fields remain drop-in compatible.
 
+### `execute_junos_command` authorization mode: allowlist (default) vs. blocklist
+
+`_blocklist_defaults` (and, going forward, this key only — see the
+per-device restriction below) may carry a `mode` of `"allowlist"` or
+`"blocklist"`. This governs `execute_junos_command`,
+`execute_junos_command_batch`, `execute_junos_pfe_command`, and also
+`get_junos_config` (it runs `show configuration [path] [| display
+<format>]` through the same `commands` allowlist/blocklist — see "Config
+output format and load mode" below); the `config` domain used by
+`load_and_commit_config` stays a fail-open blocklist regardless of `mode`.
+
+- **`allowlist` (fail-closed, the default for new configs)** — a command is
+  denied unless it matches a literal, whitespace-tokenized prefix in
+  `allow` (globs are rejected at load time, not just ignored). Each stage
+  after a `|` in the command must independently match a prefix in
+  `allowed_pipes`, or the whole command is refused; forbidden shell
+  metacharacters (`;`, redirects, backticks, newlines) are refused
+  outright, before any prefix match. `allow`/`allowed_pipes` merge the same
+  way `commands` deny rules do today: `_blocklist_defaults` ∪ the device's
+  own list. A per-device `allow` addition never leaks to other devices —
+  each device gets its own compiled allowlist policy.
+
+  `execute_junos_pfe_command` is gated by its own, independent pair of
+  keys: `pfe_allow`/`pfe_allowed_pipes`. They merge the same way as
+  `allow`/`allowed_pipes` (defaults ∪ device), but an entry in `allow` does
+  not allowlist anything for PFE commands and vice versa — the two domains
+  never share state. A config that sets `allow` but not `pfe_allow` still
+  refuses every PFE command under allowlist mode — that is fail-closed by
+  default for an unconfigured domain, not a bug; add a `pfe_allow` list if
+  you need `execute_junos_pfe_command`.
+- **`blocklist` (fail-open, legacy)** — the pre-MEC-93 behavior: a command
+  is denied only if it matches a `commands` (or `pfe_commands`) deny glob;
+  everything else is allowed.
+
+**Allowed characters (MEC-1337).** In allowlist mode, a command may only
+use printable ASCII characters with the literal ASCII space (`U+0020`) as
+the token separator. Any other character is refused outright
+(`forbidden_metachar`), the same as the existing `;`/redirect/backtick/
+newline check.
+
+**Migration:** a `devices.json` with `commands`/`pfe_commands` deny rules
+but no `mode` key loads as `blocklist` and logs one startup `WARN` that
+blocklist mode is fail-open, with a pointer back to this section. A file
+with no `_blocklist_defaults` at all, or a freshly generated sample
+config, loads as `allowlist`. `mode` is only valid on
+`_blocklist_defaults` — setting it on a per-device `blocklist` is a
+load-time error, since the underlying policy engine picks one command mode
+for the whole file and a per-device override would silently do nothing.
+
+Every refusal — allowlist or blocklist — writes an audit record via the
+existing audit path, tagged with a stable reason code
+(`not_allowlisted`, `pipe_not_allowlisted`, `forbidden_metachar`, or the
+legacy `blocked`).
+
+A minimal read-only starter allowlist:
+
+```json
+"_blocklist_defaults": {
+    "mode": "allowlist",
+    "allow": [
+        "show version",
+        "show interfaces",
+        "show route",
+        "show security policies",
+        "show chassis"
+    ],
+    "pfe_allow": [
+        "show cos"
+    ]
+}
+```
+
 ## Config output format and load mode
 
 `get_junos_config` takes an optional `format`: `text` (default, unchanged),
@@ -261,6 +340,20 @@ separate code path for the new formats.
 ```json
 { "router_name": "core-1", "config_path": "system services", "format": "set" }
 ```
+
+**Under `mode: allowlist`, `get_junos_config` is governed by the
+`commands` allowlist, not a separate rule.** The rendered command is
+`show configuration [config_path] [| display set|xml|json]`, checked the
+same way as any other `execute_junos_command` input: `show configuration`
+must be a prefix in `allow`, and — if a `format` other than the default
+`text` is requested — `display set`/`display xml`/`display json` must be
+a prefix in `allowed_pipes`. The starter allowlist in
+[`devices-template.json`](devices-template.json) does **not** include
+`show configuration`, so copying it as-is refuses `get_junos_config`
+entirely (fails closed, so it is safe, but easy to miss). Add
+`"show configuration"` to `allow` (and the `display` variants you need to
+`allowed_pipes`) to enable it — and note that doing so exposes the full
+running configuration, including hashed secrets, to the model.
 
 `load_and_commit_config`, `render_and_apply_j2_template`, and
 `create_junos_change_set`'s per-action `payload` all take an optional
@@ -707,7 +800,7 @@ directory. Private-key paths in `devices.json` must use their in-container
 locations under `/etc/jmcp/keys`.
 
 ```bash
-# Pull the prebuilt image (tags: latest, 0.25, 0.26, 0.27.1).
+# Pull the prebuilt image (tags: latest, 0.25, 0.26, 0.27).
 docker pull ghcr.io/mechubsec/rustjunosmcp:latest
 
 # Prepare host paths. Review scanned host-key fingerprints against a trusted
@@ -767,6 +860,21 @@ Images published before 2026-09-29 were signed by the workflow under
 `github.com/fastrevmd-lab/RustJunosMCP`, so verifying an older tag needs that
 identity instead.
 
+**Verifying the SBOM attestation:** on release, a CycloneDX SBOM of the Rust
+dependency graph (not the image's distroless runtime base) is attached to the
+GitHub release and also pushed as an in-toto attestation on the image, signed
+keylessly the same way as above. This attestation is signed by the
+`release-sbom.yml` workflow, a **different identity** from the image
+signature's `release-image.yml` identity above, because it is a separate job
+that runs after the image is already pushed:
+
+```bash
+cosign verify-attestation --type cyclonedx \
+  --certificate-identity-regexp '^https://github\.com/mechubsec/rustjunosmcp/\.github/workflows/release-sbom\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/mechubsec/rustjunosmcp:<version>
+```
+
 The state mount holds staged upload/download files, the shared destructive
 operation leases, and `known_hosts`. Do not delete its lease files while a
 server is running. Strict host-key checking is the default. For an isolated lab
@@ -803,7 +911,7 @@ docker run --rm -i \
 ./scripts/package-lxc.sh
 
 # Verify the checksum.
-sha256sum -c dist/rust-junosmcp_0.27.1_amd64.tar.gz.sha256
+sha256sum -c dist/rust-junosmcp_0.27.2_amd64.tar.gz.sha256
 
 # Push and install on VM 115. The installer copies the unified binary and unit
 # from its extracted package root.
@@ -819,8 +927,8 @@ sha256sum -c dist/rust-junosmcp_0.27.1_amd64.tar.gz.sha256
 #
 # Debian 13 also matches docs/PACKAGING.md §2, the container runtime base, and
 # rustpanosmcp — one distro generation to track CVEs against, not three.
-pct push 115 dist/rust-junosmcp_0.27.1_amd64.tar.gz /tmp/jmcp.tar.gz
-pct exec 115 -- bash -c "tar xzf /tmp/jmcp.tar.gz -C /tmp && /tmp/rust-junosmcp_0.27.1_amd64/install.sh"
+pct push 115 dist/rust-junosmcp_0.27.2_amd64.tar.gz /tmp/jmcp.tar.gz
+pct exec 115 -- bash -c "tar xzf /tmp/jmcp.tar.gz -C /tmp && /tmp/rust-junosmcp_0.27.2_amd64/install.sh"
 ```
 
 **Downloading a prebuilt release tarball instead:** each GitHub release also
@@ -832,7 +940,7 @@ alone only proves the download was not corrupted in transit, not that it came
 from this repository's release workflow:
 
 ```bash
-version=0.27.1
+version=0.27.2
 base="https://github.com/mechubsec/rustjunosmcp/releases/download/v${version}"
 curl -LO "${base}/rust-junosmcp_${version}_amd64.tar.gz"
 curl -LO "${base}/rust-junosmcp_${version}_amd64.tar.gz.sha256"
@@ -841,17 +949,35 @@ curl -LO "${base}/rust-junosmcp_${version}_amd64.tar.gz.cosign.bundle"
 sha256sum -c "rust-junosmcp_${version}_amd64.tar.gz.sha256"
 
 cosign verify-blob \
-  --certificate-identity "https://github.com/mechubsec/rustjunosmcp/.github/workflows/release-sign-tarball.yml@refs/heads/main" \
+  --certificate-identity "https://github.com/mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@8ede62a31917ad4d5f41ca2a664601280b2ddc41" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  --certificate-github-workflow-repository "mechubsec/rustjunosmcp" \
+  --certificate-github-workflow-trigger "release" \
   --bundle "rust-junosmcp_${version}_amd64.tar.gz.cosign.bundle" \
   "rust-junosmcp_${version}_amd64.tar.gz"
 ```
 
-As with the image, `--certificate-identity` names the signing workflow's ref
-(`@refs/heads/main`, since that workflow itself lives and runs from `main`),
-not the release tag being verified. `cosign verify-blob` exits non-zero on any
-mismatch — wrong identity, wrong issuer, or a tarball that does not match the
-bundle — so a failure here means do not install, not "probably fine."
+Unlike the image workflow above, the `sign` job in this repo's own
+`release-sign-tarball.yml` delegates the actual signing to mecmcp's reusable
+workflow, so the OIDC certificate subject is *that* workflow's path, pinned
+to the exact commit SHA `release-sign-tarball.yml`'s `sign:` job currently
+references via its `uses:` line — not this repo's own workflow file, and not
+a branch ref. That pin moves whenever the `sign:` job is repinned to a newer
+mecmcp SHA or tag, so don't trust this README's SHA to stay accurate forever;
+check the `uses:` line in `.github/workflows/release-sign-tarball.yml` for
+the current pin.
+
+Because that reusable workflow lives in a public repo, any GitHub repository
+can call it and get a certificate with the same identity, so the identity
+alone does not prove the tarball came from *this* repo's release.
+`--certificate-github-workflow-repository` and
+`--certificate-github-workflow-trigger` close that gap: they check the
+certificate's calling-repository and triggering-event fields, which must be
+`mechubsec/rustjunosmcp` and `release`. Do not drop them.
+
+`cosign verify-blob` exits non-zero on any mismatch — wrong identity, wrong
+issuer, wrong calling repository or trigger, or a tarball that does not match
+the bundle — so a failure here means do not install, not "probably fine."
 
 **Edit the inventory:**
 

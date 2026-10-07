@@ -4,10 +4,10 @@
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
 use crate::helpers::{
-    config_display_suffix, excerpt, strip_config_xml_wrapper, validate_config_path,
-    validate_input_length, validate_output_caps,
+    config_display_suffix, strip_config_xml_wrapper, validate_config_path, validate_input_length,
+    validate_output_caps,
 };
-use crate::policy::{Decision, Policy};
+use crate::policy::{Policy, enforce_decision};
 use crate::tools::GetConfigArgs;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -95,26 +95,12 @@ pub async fn handle(
     let _ = dm.inventory().get(&args.device)?;
 
     // Check command against policy (same as execute_junos_command)
-    if let Decision::Deny { rule, source, .. } = policy.check_command(&args.device, &command) {
-        let pattern = rule.pattern.clone();
-        let source_str = source.as_str();
-        tracing::warn!(
-            tool = "get_junos_config",
-            router = %args.device,
-            matched_rule = %pattern,
-            rule_source = %source_str,
-            input_excerpt = %excerpt(&command),
-            "blocklist denied request",
-        );
-        return Err(JmcpError::Denied {
-            tool: "get_junos_config",
-            router: args.device.clone(),
-            pattern,
-            rule_source: source_str,
-            input_excerpt: excerpt(&command),
-            line_number: None,
-        });
-    }
+    enforce_decision(
+        policy.check_command(&args.device, &command),
+        "get_junos_config",
+        &args.device,
+        &command,
+    )?;
 
     let timeout = Duration::from_secs(args.timeout);
     let result = tokio::time::timeout(timeout, async {
