@@ -4,11 +4,11 @@ service    = "rust-junosmcp"
 config_dir = "/etc/jmcp"
 tokens     = "/var/lib/jmcp/tokens.json"
 
-# package-lxc.sh has a skip-build path (JMCP_PACKAGE_SKIP_BUILD) but does not
-# emit a BUILD-INFO file at all yet, honest or otherwise, so no provenance
-# claim is possible. R3 warns until that changes. See mecmcp's spec,
-# "Provenance ordering".
-build_info     = false
+# package-lxc.sh has a skip-build path (JMCP_PACKAGE_SKIP_BUILD) and emits an
+# honest BUILD-INFO either way -- a real rustc -vV when it compiled the binary,
+# "unknown (...)" when it did not. R3 is therefore fatal rather than a warning.
+# See mecmcp's spec, "Provenance ordering".
+build_info     = true
 skip_build_env = "JMCP_PACKAGE_SKIP_BUILD"
 
 units = ["packaging/systemd/rust-junosmcp.service"]

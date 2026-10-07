@@ -222,6 +222,7 @@ required_files=(
     usr/local/bin/rust-junosmcp
     etc/jmcp/devices.json.example
     etc/systemd/system/rust-junosmcp.service
+    BUILD-INFO
 )
 
 # Validate the complete payload before creating users, directories, or files.
@@ -230,6 +231,16 @@ for relative in "${required_files[@]}"; do
 done
 [[ -x "$PACKAGE_ROOT/usr/local/bin/rust-junosmcp" ]] \
     || fail "package binary is not executable: usr/local/bin/rust-junosmcp"
+
+# A compile-path rustc field names the compiling toolchain; a skip-build
+# package names none, and must say so honestly rather than claim a workstation
+# toolchain that never touched the binary.
+grep -Eq '^rustc=(rustc |unknown \()' "$PACKAGE_ROOT/BUILD-INFO" \
+    || fail "BUILD-INFO rustc metadata is invalid"
+recorded_sha=$(sed -n 's/^binary_sha256=//p' "$PACKAGE_ROOT/BUILD-INFO")
+[[ "$recorded_sha" =~ ^[0-9a-f]{64}$ ]] || fail "BUILD-INFO binary_sha256 is invalid"
+[[ "$recorded_sha" == "$(sha256sum "$PACKAGE_ROOT/usr/local/bin/rust-junosmcp" | cut -d' ' -f1)" ]] \
+    || fail "BUILD-INFO binary_sha256 does not match the shipped binary"
 
 [[ "$INSTALL_ROOT" == /* ]] || fail "JMCP_INSTALL_ROOT must be an absolute path"
 if [[ "$INSTALL_ROOT" != "/" && "$SKIP_USER_SETUP" != "1" ]]; then
