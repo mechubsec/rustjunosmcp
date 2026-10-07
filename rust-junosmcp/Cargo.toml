@@ -1,6 +1,6 @@
 [package]
 name        = "rust-junosmcp"
-version     = "0.27.3"
+version     = "0.27.4"
 edition.workspace    = true
 license.workspace    = true
 repository.workspace = true
@@ -69,15 +69,15 @@ path = "tests/srx_live_smoke.rs"
 required-features = ["srx"]
 
 [dependencies]
-rust-junosmcp-core = { version = "0.27.3", path = "../rust-junosmcp-core" }
-rust-junosmcp-auth = { version = "0.27.3", path = "../rust-junosmcp-auth" }
+rust-junosmcp-core = { version = "0.27.4", path = "../rust-junosmcp-core" }
+rust-junosmcp-auth = { version = "0.27.4", path = "../rust-junosmcp-auth" }
 mecmcp-audit = { workspace = true }
 mecmcp-auth = { workspace = true }
 mecmcp-changeset = { workspace = true }
 mecmcp-transport = { workspace = true }
 mecmcp-runtime = { workspace = true }
 mecmcp-redact = { workspace = true }
-rust-junosmcp-srx-core = { version = "0.27.3", path = "../rust-junosmcp-srx-core", optional = true }
+rust-junosmcp-srx-core = { version = "0.27.4", path = "../rust-junosmcp-srx-core", optional = true }
 tokio              = { workspace = true }
 tokio-util         = { workspace = true }
 serde              = { workspace = true }
