@@ -35,7 +35,7 @@ old terms, or alter licenses already granted for earlier versions.
 | Repository | Default branch | Current active license surfaces | MIT-only work |
 | --- | --- | --- | --- |
 | `firewallintentconverter` | `main` | Two license files, npm metadata and root lockfile metadata, README badge/license/contribution text | Canonical `LICENSE`; update npm metadata and README; remove Apache file and dual-license wording |
-| `fwconfigsantizer` | `main` | Two license files, README, contribution terms | Canonical `LICENSE`; update README/contribution terms; remove Apache file and dual-license wording |
+| `fwconfigsanitizer` | `main` | Two license files, README, contribution terms | Canonical `LICENSE`; update README/contribution terms; remove Apache file and dual-license wording |
 | `fwskillsshare` | `main` | Two license files, `NOTICE`, README, per-skill license metadata | Retain only MIT material; remove the 14 non-MIT skill subtrees and `NOTICE`; repair catalogs/tests/docs; canonicalize the project license |
 | `rustez` | `main` | Two license files, Cargo workspace/crate metadata, Python package metadata, README | Canonical `LICENSE`; set project metadata and README to MIT; remove Apache file and dual-license wording |
 | `rustjunosmcp` | `main` | Two license files, Cargo workspace metadata, OCI image label, README | Canonical `LICENSE`; set Cargo/OCI/README to MIT; remove Apache file and dual-license wording |
