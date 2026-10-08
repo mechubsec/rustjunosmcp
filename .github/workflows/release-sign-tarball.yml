@@ -18,8 +18,11 @@ name: Sign release tarball
 # already-published release whose own `release: published` run did not attach
 # them. The `tag` input must name an existing GitHub-verified signed tag that
 # already has a published (non-draft) release; the workflow checks that
-# before building and refuses anything else. Agents cannot dispatch; the
-# board runs `gh workflow run release-sign-tarball.yml -f tag=vX.Y.Z`.
+# before building and refuses anything else. A dispatch is also refused when
+# that release already has a tarball signature bundle, so a backfill cannot
+# replace signed release assets. A release that has the tarball but no bundle
+# can still be backfilled. Agents cannot dispatch; the board runs
+# `gh workflow run release-sign-tarball.yml -f tag=vX.Y.Z`.
 on:
   release:
     types: [published]
@@ -66,13 +69,31 @@ jobs:
             echo "::error::$TAG is not a GitHub-verified signature (reason: $reason). Sign it with a GPG or SSH key registered to your GitHub account: git tag -s $TAG -m '...' && git push origin $TAG."
             exit 1
           fi
-          if ! draft=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq '.draft'); then
+          # One release read. An API error must fail the job, not look like a
+          # missing asset.
+          release_json=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}") || {
             echo "::error::$TAG has no GitHub release."
+            exit 1
+          }
+          if ! draft=$(jq -r '.draft' <<<"$release_json"); then
+            echo "::error::could not read the release for $TAG."
             exit 1
           fi
           if [[ "$draft" != "false" ]]; then
             echo "::error::$TAG has a draft release; backfill and sign only run against a published release."
             exit 1
+          fi
+          # Dispatch refuses when a tarball signature bundle is already
+          # attached. A tarball without a bundle can still be backfilled.
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if ! bundle_count=$(jq -r '[.assets[].name | select(endswith(".tar.gz.cosign.bundle"))] | length' <<<"$release_json"); then
+              echo "::error::could not read release assets for $TAG."
+              exit 1
+            fi
+            if [[ "$bundle_count" != "0" ]]; then
+              echo "::error::$TAG already has a signed tarball; backfill does not replace signed release assets."
+              exit 1
+            fi
           fi
           echo "$TAG: annotated, GitHub-verified, published"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"

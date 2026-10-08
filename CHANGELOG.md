@@ -16,7 +16,8 @@ All notable user-facing changes are recorded here. Format loosely follows
   container job trusts its workspace so packaging can read git metadata, and
   `workflow_dispatch` with a `tag` input rebuilds and uploads the tarball for
   an existing GitHub-verified signed tag that already has a published
-  release.
+  release. A dispatch is refused when that release already has a tarball
+  signature bundle.
 
 ## [0.27.5] - 2026-10-07
 

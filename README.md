@@ -1004,7 +1004,9 @@ alone does not prove the tarball came from *this* repo's release.
 certificate's calling-repository and triggering-event fields, which must be
 `mechubsec/rustjunosmcp` and one of this workflow's two legitimate triggers.
 A normal cut uses `release`; a board `workflow_dispatch` backfill of an
-already-published signed tag uses `workflow_dispatch`. The flag is an exact
+already-published signed tag uses `workflow_dispatch`. A dispatch is refused
+when that release already has a tarball signature bundle. A release that has
+the tarball but no bundle can still be backfilled. The flag is an exact
 match, so swap it when verifying a backfilled asset. Do not drop either flag.
 
 `cosign verify-blob` exits non-zero on any mismatch — wrong identity, wrong
