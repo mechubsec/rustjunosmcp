@@ -12,6 +12,11 @@ All notable user-facing changes are recorded here. Format loosely follows
   (`JMCP_PACKAGE_SKIP_BUILD=1`) records `rustc=unknown (...)` instead of a
   local toolchain, and `binary_sha256` always matches the packed binary.
   Shared packaging conformance treats that provenance as fatal.
+- **`Sign release tarball` can backfill a published tag.** The Debian 13
+  container job trusts its workspace so packaging can read git metadata, and
+  `workflow_dispatch` with a `tag` input rebuilds and uploads the tarball for
+  an existing GitHub-verified signed tag that already has a published
+  release.
 
 ## [0.27.5] - 2026-10-07
 

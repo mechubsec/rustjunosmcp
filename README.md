@@ -982,6 +982,8 @@ cosign verify-blob \
   --certificate-github-workflow-trigger "release" \
   --bundle "rust-junosmcp_${version}_amd64.tar.gz.cosign.bundle" \
   "rust-junosmcp_${version}_amd64.tar.gz"
+# Backfilled assets (workflow_dispatch of an already-published tag) use
+# --certificate-github-workflow-trigger "workflow_dispatch" instead.
 ```
 
 Unlike the image workflow above, the `sign` job in this repo's own
@@ -1000,7 +1002,10 @@ alone does not prove the tarball came from *this* repo's release.
 `--certificate-github-workflow-repository` and
 `--certificate-github-workflow-trigger` close that gap: they check the
 certificate's calling-repository and triggering-event fields, which must be
-`mechubsec/rustjunosmcp` and `release`. Do not drop them.
+`mechubsec/rustjunosmcp` and one of this workflow's two legitimate triggers.
+A normal cut uses `release`; a board `workflow_dispatch` backfill of an
+already-published signed tag uses `workflow_dispatch`. The flag is an exact
+match, so swap it when verifying a backfilled asset. Do not drop either flag.
 
 `cosign verify-blob` exits non-zero on any mismatch — wrong identity, wrong
 issuer, wrong calling repository or trigger, or a tarball that does not match
