@@ -14,44 +14,60 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Redact device secrets (Junos `$9$`-style reversibly-encrypted values,
-/// PSKs, SNMP communities, RADIUS/TACACS secrets, ...) from configuration
-/// text before it reaches the caller, using the redactor that matches the
+/// PSKs, SNMP communities, RADIUS/TACACS secrets, PEM key blocks,
+/// URL-userinfo passwords, plaintext tokens, ...) from configuration text
+/// before it reaches the caller, using the redactor that matches the
 /// requested display `format`.
 ///
 /// `text` and `set` output is line-oriented Junos config syntax, so it goes
-/// through [`mecmcp_redact::junos::redact_log_text`] — a closed, whole-word
-/// Junos key vocabulary with no `session` entry, unlike the cross-vendor
-/// [`mecmcp_redact::redact_text`] denylist, whose intentionally broad
-/// `session` substring match (MEC-537, for other vendors' `session_id`/
-/// `session_token` shapes) has no config-syntax awareness and blanks the
-/// rest of the line it matches — wiping non-secret Junos syntax like `then
-/// log session-init session-close;` or `limit-session 1000;` (MEC-2519).
+/// through [`junos_text_fallback`], which runs the cross-vendor
+/// [`mecmcp_redact::redact_text`] denylist first and layers the
+/// Junos-specific, whole-word [`mecmcp_redact::junos::redact_log_text`]
+/// vocabulary on top (MEC-2558 re-review of MEC-2519/#526: the Junos-only
+/// pass alone is not a superset of the generic one — it has no entries for
+/// PEM bodies, URL-userinfo passwords, plaintext bearer tokens, or several
+/// generic secret-shaped keys, so using it *instead of* the generic pass
+/// let those shapes through unredacted). This still carries the generic
+/// denylist's documented `session`-substring over-masking (MEC-2519,
+/// tracked upstream in `mecmcp`) for genuinely non-secret Junos syntax like
+/// `then log session-init session-close;` or `limit-session 1000;` — an
+/// accepted, explicitly reviewed tradeoff until that false positive is
+/// fixed at its root in `mecmcp`'s denylist.
+///
 /// `xml` and `json` output is parsed and structurally redacted via
 /// [`mecmcp_redact::redact_xml_str`] / [`mecmcp_redact::redact_json_value`]
 /// so secrets are caught regardless of where they sit in the structure; if
 /// an unexpected or malformed device reply makes the fragment unparseable,
-/// this falls back to the same Junos-specific line redactor rather than
-/// shipping an unredacted body. This runs before `max_lines` / `max_bytes`
-/// / `tail` output caps are applied (see the caller), so a caps-truncated
-/// fragment is never what reaches this function.
+/// this falls back to the same composed line redactor rather than shipping
+/// an unredacted body. This runs before `max_lines` / `max_bytes` / `tail`
+/// output caps are applied (see the caller), so a caps-truncated fragment
+/// is never what reaches this function.
 fn redact_config_output(text: &str, format: &str) -> String {
     match format {
         "xml" => match mecmcp_redact::redact_xml_str(text) {
             Ok(redacted) => redacted,
-            Err(_) => mecmcp_redact::junos::redact_log_text(text),
+            Err(_) => junos_text_fallback(text),
         },
         "json" => match serde_json::from_str::<Value>(text) {
             Ok(mut value) => {
                 mecmcp_redact::redact_json_value(&mut value);
-                serde_json::to_string_pretty(&value)
-                    .unwrap_or_else(|_| mecmcp_redact::junos::redact_log_text(text))
+                serde_json::to_string_pretty(&value).unwrap_or_else(|_| junos_text_fallback(text))
             }
-            Err(_) => mecmcp_redact::junos::redact_log_text(text),
+            Err(_) => junos_text_fallback(text),
         },
-        // "text" and "set", and any future/unknown format: line-oriented,
-        // Junos-vocabulary redaction is the correct and safe choice.
-        _ => mecmcp_redact::junos::redact_log_text(text),
+        // "text" and "set", and any future/unknown format: line-oriented
+        // redaction, generic-then-Junos-vocabulary, is the correct and safe
+        // choice.
+        _ => junos_text_fallback(text),
     }
+}
+
+/// See [`redact_config_output`]'s doc comment for why this composition
+/// (generic [`mecmcp_redact::redact_text`] then Junos-specific
+/// [`mecmcp_redact::junos::redact_log_text`]) replaced a bare
+/// `redact_log_text` call.
+fn junos_text_fallback(text: &str) -> String {
+    mecmcp_redact::junos::redact_log_text(&mecmcp_redact::redact_text(text))
 }
 
 /// Build the `show configuration [<config_path>]` command for the requested
@@ -173,33 +189,23 @@ mod tests {
         );
     }
 
-    /// MEC-2519 (rustjunosmcp#522): `then log session-init session-close;`
-    /// and `limit-session 1000;` are real, non-secret Junos `set` syntax —
-    /// no credential involved — but the cross-vendor
-    /// `mecmcp_redact::redact_text` denylist matches `session` as a
-    /// substring and used to blank the rest of the line once it matched.
-    /// `redact_config_output` must preserve both while still catching a
-    /// real secret on an unrelated line.
+    /// MEC-2558 (re-review of MEC-2519/#526): the Junos-only
+    /// `redact_log_text` vocabulary alone does not catch a PEM private-key
+    /// body, a plaintext API key/shared-secret/passphrase, or a URL's
+    /// userinfo password — `redact_config_output` must still catch all of
+    /// these via the generic [`mecmcp_redact::redact_text`] pass it now
+    /// layers underneath.
     #[test]
-    fn redact_config_output_text_preserves_non_secret_session_keywords() {
+    fn redact_config_output_text_still_catches_shapes_the_junos_only_vocabulary_misses() {
         let text = format!(
-            "set security policies from-zone trust to-zone untrust policy p1 then log session-init session-close;\n\
-             set security screen ids-option scr1 limit-session source-ip-based 1000;\n\
-             set snmp community \"{FAKE_SNMP_COMMUNITY}\";\n"
+            "-----BEGIN RSA PRIVATE KEY-----\n{FAKE_PSK}\n-----END RSA PRIVATE KEY-----\n\
+             set security ike policy p1 pre-shared-key ascii-text \"shhh\"\n\
+             set security dynamic-address archive-sites \"ftp://svc:{FAKE_PSK}@archive.example.net/cfg\"\n\
+             set system host-name edge1.example.net\n"
         );
         let out = redact_config_output(&text, "text");
-        assert!(
-            out.contains("then log session-init session-close;"),
-            "non-secret log keywords lost: {out}"
-        );
-        assert!(
-            out.contains("limit-session source-ip-based 1000;"),
-            "non-secret screen limit lost: {out}"
-        );
-        assert!(
-            !out.contains(FAKE_SNMP_COMMUNITY),
-            "community leaked: {out}"
-        );
+        assert!(!out.contains(FAKE_PSK), "secret leaked: {out}");
+        assert!(out.contains("edge1.example.net"), "hostname lost: {out}");
     }
 
     #[test]
