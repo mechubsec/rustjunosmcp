@@ -8,6 +8,16 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ### Changed
 
+- **Startup reports every credential-file mode problem in one pass.** The
+  inventory, each NETCONF private key it names, `tokens.json`, SSDF password
+  files, the SSDF signing key and forward bearer token when those are
+  configured, the audit HMAC key, a configured TLS key, and the approval
+  digest key are checked together. On-disk paths stay `/etc/jmcp` and
+  `/var/lib/jmcp`. `tokens.json` stays `/var/lib/jmcp/tokens.json`; the legacy
+  `/etc/jmcp/tokens.json` fallback still applies only when the configured path
+  is that exact canonical path. `known_hosts` is not mode-checked (packaged
+  mode remains `0644`). The audit HMAC key and each NETCONF private key are
+  newly held to mode `0600`, owned by this process, with no symlinks.
 - **LXC packages now ship an honest `BUILD-INFO`.** Skip-build
   (`JMCP_PACKAGE_SKIP_BUILD=1`) records `rustc=unknown (...)` instead of a
   local toolchain, and `binary_sha256` always matches the packed binary.

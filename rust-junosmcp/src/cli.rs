@@ -2,7 +2,30 @@
 //! management subcommand.
 
 use clap::{Parser, Subcommand, ValueEnum};
+use mecmcp_secret::naming::{ServerNaming, known};
 use std::path::PathBuf;
+
+/// Layout for this server. `known::JUNOS` is the deployed short name (`jmcp`),
+/// so `/etc/jmcp` and `/var/lib/jmcp` stay the paths already on disk.
+pub(crate) fn server_naming() -> ServerNaming {
+    ServerNaming::derive(known::JUNOS)
+}
+
+fn default_staging_dir() -> PathBuf {
+    server_naming().state_dir.join("staging")
+}
+
+fn default_known_hosts_file() -> PathBuf {
+    server_naming().config_dir.join("known_hosts")
+}
+
+fn default_device_lease_dir() -> PathBuf {
+    server_naming().state_dir.join("device-leases")
+}
+
+fn default_changeset_state_file() -> PathBuf {
+    server_naming().state_dir.join("changeset-state.json")
+}
 
 // Re-export from mecmcp-runtime for compatibility
 pub use mecmcp_runtime::cli::Transport;
@@ -118,15 +141,22 @@ pub struct Cli {
     pub allow_password_auth_add: bool,
 
     /// Directory used to stage files before scp push (transfer_file).
-    #[arg(long, default_value = "/var/lib/jmcp/staging")]
+    ///
+    /// Default `/var/lib/jmcp/staging`, from [`server_naming`].
+    #[arg(long, default_value_os_t = default_staging_dir())]
     pub staging_dir: PathBuf,
 
     /// SSH known_hosts file used for scp pushes (transfer_file).
-    #[arg(long, default_value = "/etc/jmcp/known_hosts")]
+    ///
+    /// Default `/etc/jmcp/known_hosts`, from [`server_naming`]. This file is
+    /// not mode-checked: the packaged mode is `0644`.
+    #[arg(long, default_value_os_t = default_known_hosts_file())]
     pub known_hosts_file: PathBuf,
 
     /// Shared directory for cross-process destructive-operation leases.
-    #[arg(long, default_value = "/var/lib/jmcp/device-leases")]
+    ///
+    /// Default `/var/lib/jmcp/device-leases`, from [`server_naming`].
+    #[arg(long, default_value_os_t = default_device_lease_dir())]
     pub device_lease_dir: PathBuf,
 
     /// Change-set lifecycle state file for two-person approval workflow.
@@ -137,7 +167,7 @@ pub struct Cli {
     #[arg(
         long = "state-file",
         alias = "changeset-state-file",
-        default_value = "/var/lib/jmcp/changeset-state.json"
+        default_value_os_t = default_changeset_state_file()
     )]
     pub changeset_state_file: PathBuf,
 
