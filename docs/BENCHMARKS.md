@@ -223,9 +223,13 @@ For a lab device, add `--target lab --lab-device <name> --lab-config <file>`.
 file:
 
 ```json
-{"<name>": {"host": "…", "port": 830, "username": "…",
+{"<name>": {"host": "…", "port": 22, "username": "…",
             "private_key_path": "…", "host_key": "ssh-ed25519 AAAA…"}}
 ```
+
+Junos enables NETCONF over SSH with `set system services netconf ssh`, using
+the normal SSH port 22 by default. If NETCONF is configured on a dedicated
+port 830 instead, set `port` to 830 explicitly in the lab configuration.
 
 Use a read-only Junos login class. If the device rate-limits SSH
 sessions, add `--pace-ms 2000 --settle-s 70` (the values used for our lab

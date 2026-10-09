@@ -69,7 +69,7 @@ Full results, the mock-target overhead numbers, method and reproduction steps:
 > with `rustix`. A malformed token entry also no longer takes the whole store
 > offline at load.
 >
-> Tool surface is unchanged at 27 tools (18 Junos-only with
+> Tool surface is 41 tools by default (28 Junos-only with
 > `--no-default-features`). See the
 > [v0.10.0 release notes](https://github.com/mechubsec/rustjunosmcp/releases/tag/v0.10.0).
 
