@@ -32,7 +32,14 @@ fn stderr_for_request(request: &str) -> Vec<String> {
     common::ensure_built();
 
     let lease_dir = tempfile::tempdir().expect("device lease dir");
-    let inventory = common::write_inventory_temp(&[("r1", "127.0.0.1", 22, "u", "/dev/null")]);
+    let key = common::write_fake_netconf_key_temp();
+    let inventory = common::write_inventory_temp(&[(
+        "r1",
+        "127.0.0.1",
+        22,
+        "u",
+        key.path().to_str().expect("key path is utf8"),
+    )]);
 
     let mut child = Command::new(common::binary_path())
         .args(["-t", "stdio"])

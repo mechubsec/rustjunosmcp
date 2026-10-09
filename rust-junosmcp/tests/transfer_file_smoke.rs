@@ -18,6 +18,11 @@ fn make_server(dir: &Path) -> (StdioChild, NamedTempFile) {
 
     let key_file = dir.join("dummy_key");
     std::fs::write(&key_file, b"").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
 
     let inv = write_inventory_temp(&[(
         "vsrx-test10",

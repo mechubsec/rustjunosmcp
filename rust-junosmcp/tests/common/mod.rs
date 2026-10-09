@@ -46,6 +46,21 @@ pub fn binary_path() -> PathBuf {
 /// that is a Cargo bug, and `binary_path()` failing loudly is the right outcome.
 pub fn ensure_built() {}
 
+/// Write a placeholder NETCONF private key: a regular, 0600 temp file.
+///
+/// Startup now mode- and type-checks every private key path named in the
+/// inventory (`validate_startup_credentials`), so a stand-in like
+/// `/dev/null` no longer boots the server ("not a regular file"). Use this
+/// for any inventory fixture that needs a key path the server will accept
+/// but never actually reads.
+#[allow(dead_code)]
+pub fn write_fake_netconf_key_temp() -> tempfile::NamedTempFile {
+    use std::io::Write as _;
+    let mut f = tempfile::NamedTempFile::new().expect("create temp key file");
+    writeln!(f, "not a real key").expect("write temp key file");
+    f
+}
+
 /// Write `contents` to `path` with mode 0600.
 ///
 /// Use this for any file the server itself reads as configuration — inventory
