@@ -69,31 +69,20 @@ fn execute_rejects_an_unknown_operation_with_the_exact_allowed_list() {
         expected.extend_from_slice(rust_junosmcp_auth::SRX_TOOLS);
         expected.sort_unstable();
 
-        // MEC-859 F2/F4: this message now passes through `redact_last_mile`
-        // like every other tool response, since it is a text `ContentBlock`
-        // of a `Complete` result the same as any device-derived one. That is
-        // a real, known false positive here, not a functional bug in this
-        // test's expectation: `mecmcp-redact`'s key denylist matches
-        // `session` as a substring, so the tool name `srx_flow_sessions`
-        // (`"srxflowsessions"` normalized) is itself flagged as a
-        // denylisted key, and everything on the same comma-joined line
-        // after it is force-redacted to a single `[REDACTED]` token (see
-        // `mecmcp-redact`'s `text::redact_line`/X1). It is tracked as F4 in
-        // the MEC-859 review — a `mecmcp` follow-up, not something fixable
-        // from this repo — and it is not a security regression: over-
-        // redacting a list of this server's own tool names costs
-        // discoverability, not a leaked secret.
-        #[cfg(feature = "srx")]
-        {
-            let split_at = expected
-                .iter()
-                .position(|op| *op == "srx_flow_sessions")
-                .expect("srx_flow_sessions must be in SRX_TOOLS");
-            let mut with_known_over_redaction = expected[..=split_at].to_vec();
-            with_known_over_redaction.push("[REDACTED]");
-            assert_eq!(allowed, with_known_over_redaction);
-        }
-        #[cfg(not(feature = "srx"))]
+        // MEC-859 F2/F4, fixed by MEC-2519: this message passes through
+        // `redact_last_mile` like every other tool response, since it is a
+        // text `ContentBlock` of a `Complete` result the same as any
+        // device-derived one. That last-mile fallback used to be
+        // `mecmcp_redact::redact_text`, whose cross-vendor key denylist
+        // matches `session` as a substring — so the tool name
+        // `srx_flow_sessions` (`"srxflowsessions"` normalized) was itself
+        // flagged as a denylisted key, and everything on the same
+        // comma-joined line after it was force-redacted to a single
+        // `[REDACTED]` token (`mecmcp-redact`'s `text::redact_line`/X1).
+        // `redact_body`'s fallback is now `mecmcp_redact::junos::
+        // redact_log_text`, whose closed, whole-word Junos key vocabulary
+        // has no `session` entry, so this server's own tool-name list no
+        // longer loses discoverability to that false positive.
         assert_eq!(allowed, expected);
 
         assert!(!allowed.contains(&"execute"));

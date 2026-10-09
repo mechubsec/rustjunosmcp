@@ -92,8 +92,8 @@ pub(super) fn mint_request_id() -> String {
 /// branch build their body with `serde_json::to_string_pretty`, so this is
 /// the common case — then XML (only when the trimmed input actually opens
 /// with `<`; see MEC-918 N1 below), then falls back to
-/// [`mecmcp_redact::redact_text`] for genuinely unstructured input (CLI
-/// output, a plain error message).
+/// [`mecmcp_redact::junos::redact_log_text`] for genuinely unstructured
+/// input (CLI output, a plain error message).
 ///
 /// Parsing and redacting structurally rather than scanning the serialized
 /// text is the point: a line-oriented pass over valid JSON/XML can match a
@@ -110,19 +110,33 @@ pub(super) fn mint_request_id() -> String {
 /// every `"`, `'`, and `>` it contains, corrupting non-XML output. Only
 /// attempt the XML path when the input actually looks like a document
 /// (trimmed, starts with `<`), so plain text falls straight through to
-/// [`mecmcp_redact::redact_text`] unescaped.
+/// [`mecmcp_redact::junos::redact_log_text`] unescaped.
+///
+/// MEC-2519: this server only ever speaks Junos, so the fallback uses
+/// [`mecmcp_redact::junos::redact_log_text`]'s closed, whole-word Junos key
+/// vocabulary rather than [`mecmcp_redact::redact_text`]'s cross-vendor
+/// substring denylist. The generic scan's `session` entry (kept broad for
+/// `session_id`/`session_token` shapes other vendors use, MEC-537) has no
+/// config-syntax awareness and blanks the rest of the *line* once it
+/// matches — so `then log session-init session-close;`, `limit-session
+/// 1000;`, and `show security flow session summary` counters all lost real,
+/// non-secret operational data to a line that merely contained the word
+/// "session". `redact_log_text` whole-word-matches a Junos-specific key
+/// list that has no `session` entry at all, so it still catches every real
+/// secret shape (`pre-shared-key`, `secret`, `community`, `password`, a
+/// `set`-context `key`/`value`, ...) without that false trigger.
 pub(super) fn redact_body(s: &str) -> String {
     if let Ok(mut value) = serde_json::from_str::<Value>(s) {
         redact_json_preserving_server_fields(&mut value);
         return serde_json::to_string_pretty(&value)
-            .unwrap_or_else(|_| mecmcp_redact::redact_text(s));
+            .unwrap_or_else(|_| mecmcp_redact::junos::redact_log_text(s));
     }
     if s.trim_start().starts_with('<')
         && let Ok(redacted) = mecmcp_redact::redact_xml_str(s)
     {
         return redacted;
     }
-    mecmcp_redact::redact_text(s)
+    mecmcp_redact::junos::redact_log_text(s)
 }
 
 /// Server-defined field names that survive [`redact_body`] /
@@ -227,7 +241,7 @@ pub(super) fn redact_json_preserving_server_fields(value: &mut Value) {
 /// the confirmation plan as JSON *inside* a larger non-JSON string (`[code=
 /// ...] router=...: ...; plan: {...}`), so [`redact_body`] can't parse it
 /// structurally and falls through to the line-oriented
-/// [`mecmcp_redact::redact_text`] pass, which would strip the
+/// [`mecmcp_redact::junos::redact_log_text`] pass, which would strip the
 /// `confirmation_token` the two-call confirmation protocol requires back
 /// verbatim — fine for a device secret, fails the caller closed for a
 /// protocol token that was never a secret to begin with.
@@ -483,7 +497,7 @@ impl JmcpHandler {
     ///   strings here are themselves pre-redacted JSON/XML (from
     ///   `get_junos_config`, `junos_config_diff`), and `redact_body` redacts
     ///   those structurally too, while a genuinely plain-text string (CLI
-    ///   output) falls through to [`mecmcp_redact::redact_text`].
+    ///   output) falls through to [`mecmcp_redact::junos::redact_log_text`].
     ///
     /// This is the single choke point nearly every Junos tool's output
     /// passes through, but it is not the *only* one — [`redact_last_mile`]
@@ -3356,8 +3370,9 @@ mod redact_last_mile_tests {
     }
 
     /// Genuinely unstructured input (CLI/`set`-style output, a plain error
-    /// message) falls back to line-oriented `redact_text` rather than being
-    /// left unredacted because it did not parse as JSON or XML.
+    /// message) falls back to [`mecmcp_redact::junos::redact_log_text`]
+    /// rather than being left unredacted because it did not parse as JSON
+    /// or XML.
     #[test]
     fn redact_body_falls_back_to_text_redaction_for_non_structured_input() {
         let body = format!(
@@ -3379,7 +3394,7 @@ mod redact_last_mile_tests {
     /// output, a `show route` dump, a plain error message all have these).
     /// `redact_body` must only try the XML path when the input actually
     /// looks like a document, so on genuinely non-XML text it must behave
-    /// identically to a direct `mecmcp_redact::redact_text` call.
+    /// identically to a direct `mecmcp_redact::junos::redact_log_text` call.
     #[test]
     fn redact_body_does_not_xml_escape_plain_text() {
         let body = format!(
@@ -3388,8 +3403,46 @@ mod redact_last_mile_tests {
 
         assert_eq!(
             redact_body(&body),
-            mecmcp_redact::redact_text(&body),
+            mecmcp_redact::junos::redact_log_text(&body),
             "redact_body must not run non-XML text through the XML writer"
+        );
+    }
+
+    /// MEC-2519: `execute_junos_command` output is plain Junos CLI text that
+    /// can legitimately contain the word "session" with no secret attached
+    /// (`then log session-init session-close;`, `limit-session 1000;`, a
+    /// `show security flow session summary` counter line). The generic
+    /// cross-vendor `mecmcp_redact::redact_text` denylist matches `session`
+    /// as a substring (MEC-537, kept broad for `session_id`/`session_token`
+    /// shapes) and blanks the rest of the line once it matches, with no
+    /// config-syntax awareness — so all three examples above would lose
+    /// real operational data to a line that merely contained "session".
+    /// `redact_body`'s fallback must use the Junos-specific, whole-word
+    /// [`mecmcp_redact::junos::redact_log_text`] instead, which has no
+    /// `session` entry in its closed key vocabulary.
+    #[test]
+    fn redact_body_does_not_mask_non_secret_session_values_in_cli_text() {
+        let body = format!(
+            "set security policies from-zone trust to-zone untrust policy p1 then log session-init session-close;\nset security screen ids-option scr1 limit-session source-ip-based 1000;\nTCP     {FAKE_HOSTNAME}  10.0.0.1       1024  -> 203.0.113.5     443    Act    18\nset system host-name {FAKE_HOSTNAME}\npre-shared-key ascii-text \"{FAKE_PSK}\"\n"
+        );
+
+        let redacted = redact_body(&body);
+
+        assert!(
+            redacted.contains("session-init session-close"),
+            "non-secret logging keywords lost: {redacted}"
+        );
+        assert!(
+            redacted.contains("limit-session source-ip-based 1000"),
+            "non-secret screen limit lost: {redacted}"
+        );
+        assert!(
+            redacted.contains(FAKE_HOSTNAME),
+            "non-secret hostname/session-summary line lost: {redacted}"
+        );
+        assert!(
+            !redacted.contains(FAKE_PSK),
+            "secret leaked (not printed here to avoid echoing it into test output)"
         );
     }
 

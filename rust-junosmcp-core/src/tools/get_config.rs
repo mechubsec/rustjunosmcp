@@ -19,33 +19,38 @@ use std::time::Duration;
 /// requested display `format`.
 ///
 /// `text` and `set` output is line-oriented Junos config syntax, so it goes
-/// through [`mecmcp_redact::redact_text`]. `xml` and `json` output is parsed
-/// and structurally redacted via [`mecmcp_redact::redact_xml_str`] /
-/// [`mecmcp_redact::redact_json_value`] so secrets are caught regardless of
-/// where they sit in the structure; if an unexpected or malformed device
-/// reply makes the fragment unparseable, this falls back to `redact_text`
-/// rather than shipping an unredacted body (the crate's `redact_text` is
-/// documented as a safe universal fallback: it still catches key=value/
-/// secret-shaped patterns in any format). This runs before `max_lines` /
-/// `max_bytes` / `tail` output caps are applied (see the caller), so a
-/// caps-truncated fragment is never what reaches this function.
+/// through [`mecmcp_redact::junos::redact_log_text`] — a closed, whole-word
+/// Junos key vocabulary with no `session` entry, unlike the cross-vendor
+/// [`mecmcp_redact::redact_text`] denylist, whose intentionally broad
+/// `session` substring match (MEC-537, for other vendors' `session_id`/
+/// `session_token` shapes) has no config-syntax awareness and blanks the
+/// rest of the line it matches — wiping non-secret Junos syntax like `then
+/// log session-init session-close;` or `limit-session 1000;` (MEC-2519).
+/// `xml` and `json` output is parsed and structurally redacted via
+/// [`mecmcp_redact::redact_xml_str`] / [`mecmcp_redact::redact_json_value`]
+/// so secrets are caught regardless of where they sit in the structure; if
+/// an unexpected or malformed device reply makes the fragment unparseable,
+/// this falls back to the same Junos-specific line redactor rather than
+/// shipping an unredacted body. This runs before `max_lines` / `max_bytes`
+/// / `tail` output caps are applied (see the caller), so a caps-truncated
+/// fragment is never what reaches this function.
 fn redact_config_output(text: &str, format: &str) -> String {
     match format {
         "xml" => match mecmcp_redact::redact_xml_str(text) {
             Ok(redacted) => redacted,
-            Err(_) => mecmcp_redact::redact_text(text),
+            Err(_) => mecmcp_redact::junos::redact_log_text(text),
         },
         "json" => match serde_json::from_str::<Value>(text) {
             Ok(mut value) => {
                 mecmcp_redact::redact_json_value(&mut value);
                 serde_json::to_string_pretty(&value)
-                    .unwrap_or_else(|_| mecmcp_redact::redact_text(text))
+                    .unwrap_or_else(|_| mecmcp_redact::junos::redact_log_text(text))
             }
-            Err(_) => mecmcp_redact::redact_text(text),
+            Err(_) => mecmcp_redact::junos::redact_log_text(text),
         },
-        // "text" and "set", and any future/unknown format: line-oriented
-        // redaction is the correct and safe choice.
-        _ => mecmcp_redact::redact_text(text),
+        // "text" and "set", and any future/unknown format: line-oriented,
+        // Junos-vocabulary redaction is the correct and safe choice.
+        _ => mecmcp_redact::junos::redact_log_text(text),
     }
 }
 
@@ -162,6 +167,35 @@ mod tests {
     fn redact_config_output_set_strips_set_style_secrets() {
         let text = format!("set snmp community \"{FAKE_SNMP_COMMUNITY}\";\n");
         let out = redact_config_output(&text, "set");
+        assert!(
+            !out.contains(FAKE_SNMP_COMMUNITY),
+            "community leaked: {out}"
+        );
+    }
+
+    /// MEC-2519 (rustjunosmcp#522): `then log session-init session-close;`
+    /// and `limit-session 1000;` are real, non-secret Junos `set` syntax —
+    /// no credential involved — but the cross-vendor
+    /// `mecmcp_redact::redact_text` denylist matches `session` as a
+    /// substring and used to blank the rest of the line once it matched.
+    /// `redact_config_output` must preserve both while still catching a
+    /// real secret on an unrelated line.
+    #[test]
+    fn redact_config_output_text_preserves_non_secret_session_keywords() {
+        let text = format!(
+            "set security policies from-zone trust to-zone untrust policy p1 then log session-init session-close;\n\
+             set security screen ids-option scr1 limit-session source-ip-based 1000;\n\
+             set snmp community \"{FAKE_SNMP_COMMUNITY}\";\n"
+        );
+        let out = redact_config_output(&text, "text");
+        assert!(
+            out.contains("then log session-init session-close;"),
+            "non-secret log keywords lost: {out}"
+        );
+        assert!(
+            out.contains("limit-session source-ip-based 1000;"),
+            "non-secret screen limit lost: {out}"
+        );
         assert!(
             !out.contains(FAKE_SNMP_COMMUNITY),
             "community leaked: {out}"

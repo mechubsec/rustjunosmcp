@@ -53,9 +53,14 @@ pub async fn handle(args: ConfigDiffArgs, dm: Arc<DeviceManager>) -> Result<Valu
     // The diff is line-oriented Junos config syntax (unified `compare
     // rollback` output), so it may carry the same secret-shaped values
     // (`$9$...`, pre-shared-key, SNMP community, ...) a full `show
-    // configuration` would. Redact it before it reaches the caller.
+    // configuration` would. Redact it before it reaches the caller, using
+    // the Junos-specific closed key vocabulary (no `session` entry) rather
+    // than the cross-vendor `mecmcp_redact::redact_text` substring denylist
+    // — see `get_config::redact_config_output`'s doc comment (MEC-2519) for
+    // why a `then log session-init session-close;` / `limit-session 1000;`
+    // line survives this redactor but a real secret does not.
     let stripped = strip_config_xml_wrapper(&result);
-    Ok(json!(mecmcp_redact::redact_text(&stripped)))
+    Ok(json!(mecmcp_redact::junos::redact_log_text(&stripped)))
 }
 
 #[cfg(test)]
