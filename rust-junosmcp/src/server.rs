@@ -123,10 +123,13 @@ pub(super) fn mint_request_id() -> String {
 /// `limit-session 1000;`, and `show security flow session summary`
 /// counters all lost real, non-secret operational data to a line that
 /// merely contained the word "session". Running `redact_log_text` after
-/// `redact_text` fixes the `session` false positive going forward (the
-/// Junos pass whole-word-matches a closed key list with no `session`
-/// entry) while still keeping the generic denylist's much broader secret
-/// coverage (PEM blocks, URL-userinfo passwords, bearer tokens,
+/// `redact_text` does **not** fix that `session` false positive — by the
+/// time the Junos pass (whole-word-matching a closed key list with no
+/// `session` entry) runs, `redact_text` has already blanked the line. The
+/// `session` over-masking remains an accepted tradeoff until it is fixed
+/// upstream in `mecmcp` (tracked on MEC-2519). What running `redact_text`
+/// first adds back is the generic denylist's much broader secret coverage
+/// (PEM blocks, URL-userinfo passwords, bearer tokens,
 /// `api-key`/`shared-secret`/`psk`/`passphrase`, prose `password <value>`,
 /// ...) that the Junos-only vocabulary does not know about.
 pub(super) fn redact_body(s: &str) -> String {
@@ -145,8 +148,10 @@ pub(super) fn redact_body(s: &str) -> String {
 /// Run the cross-vendor [`mecmcp_redact::redact_text`] pass first, then the
 /// Junos-specific [`mecmcp_redact::junos::redact_log_text`] pass on top of
 /// its output, so unstructured Junos CLI/config text gets the broader
-/// generic secret coverage plus the `session` false-positive fix (MEC-2558
-/// review of MEC-2519). Mirrors the composition
+/// generic secret coverage plus whole-word Junos-key coverage the generic
+/// pass lacks. This does **not** fix the generic pass's `session`
+/// false-positive (MEC-2558 review of MEC-2519); that remains until the
+/// denylist is fixed upstream in `mecmcp`. Mirrors the composition
 /// `mecmcp_redact::junos::redact_log_artefact` uses for non-XML-shaped
 /// input, without going through its `Result`/XML-shape dispatch — callers
 /// here already know the input isn't XML (they tried that path and it
