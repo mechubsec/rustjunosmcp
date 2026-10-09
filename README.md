@@ -897,9 +897,41 @@ identity instead.
 dependency graph (not the image's distroless runtime base) is attached to the
 GitHub release and also pushed as an in-toto attestation on the image, signed
 keylessly the same way as above. This attestation is signed by the
-`release-sbom.yml` workflow, a **different identity** from the image
-signature's `release-image.yml` identity above, because it is a separate job
-that runs after the image is already pushed:
+`sbom:` job in this repo's own `release-sbom.yml`, which (starting with the
+first release after v0.27.5) delegates the actual attestation to mecmcp's
+reusable `reusable-attest-release-sbom.yml` workflow, so the OIDC certificate
+subject is *that* workflow's path,
+pinned to the exact commit SHA `release-sbom.yml`'s `uses:` line currently
+references — not this repo's own workflow file, and not a branch ref. That
+pin moves whenever `release-sbom.yml` is repinned to a newer mecmcp SHA or
+tag, so don't trust this README's SHA to stay accurate forever; check the
+`uses:` line in `.github/workflows/release-sbom.yml` for the current pin.
+
+Because that reusable workflow lives in a public repo, any GitHub repository
+can call it and get a certificate with the same identity, so the identity
+alone does not prove the attestation came from *this* repo's release.
+`--certificate-github-workflow-repository` and
+`--certificate-github-workflow-trigger` close that gap: they check the
+certificate's calling-repository and triggering-event fields, which must be
+`mechubsec/rustjunosmcp` and `release`. Do not drop them. This is the same
+identity as the release-tarball signature below, a **different identity**
+from the image signature's `release-image.yml` identity above, because it is
+a separate job that runs after the image is already pushed:
+
+```bash
+cosign verify-attestation --type cyclonedx \
+  --certificate-identity-regexp '^https://github\.com/mechubsec/mecmcp/\.github/workflows/reusable-attest-release-sbom\.yml@[0-9a-f]{40}$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-repository mechubsec/rustjunosmcp \
+  --certificate-github-workflow-trigger release \
+  ghcr.io/mechubsec/rustjunosmcp:<version>
+```
+
+The regexp is over the SHA (not an exact `--certificate-identity`) because
+dependabot or a maintainer may repin `release-sbom.yml` to a newer mecmcp
+commit; this only pins the path, not one specific commit. For releases up to
+and including v0.27.5, the attestation was instead signed directly by this
+repo's own `release-sbom.yml` workflow identity:
 
 ```bash
 cosign verify-attestation --type cyclonedx \
@@ -988,6 +1020,8 @@ cosign verify-blob \
   --certificate-github-workflow-trigger "release" \
   --bundle "rust-junosmcp_${version}_amd64.tar.gz.cosign.bundle" \
   "rust-junosmcp_${version}_amd64.tar.gz"
+# Backfilled assets (workflow_dispatch of an already-published tag) use
+# --certificate-github-workflow-trigger "workflow_dispatch" instead.
 ```
 
 Unlike the image workflow above, the `sign` job in this repo's own
@@ -1006,7 +1040,12 @@ alone does not prove the tarball came from *this* repo's release.
 `--certificate-github-workflow-repository` and
 `--certificate-github-workflow-trigger` close that gap: they check the
 certificate's calling-repository and triggering-event fields, which must be
-`mechubsec/rustjunosmcp` and `release`. Do not drop them.
+`mechubsec/rustjunosmcp` and one of this workflow's two legitimate triggers.
+A normal cut uses `release`; a board `workflow_dispatch` backfill of an
+already-published signed tag uses `workflow_dispatch`. A dispatch is refused
+when that release already has a tarball signature bundle. A release that has
+the tarball but no bundle can still be backfilled. The flag is an exact
+match, so swap it when verifying a backfilled asset. Do not drop either flag.
 
 `cosign verify-blob` exits non-zero on any mismatch — wrong identity, wrong
 issuer, wrong calling repository or trigger, or a tarball that does not match
