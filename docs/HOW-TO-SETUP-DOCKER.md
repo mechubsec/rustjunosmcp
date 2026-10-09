@@ -49,7 +49,7 @@ is the first thing that will stop you (see Troubleshooting):
 {
     "vsrx-demo": {
         "ip": "192.0.2.20",
-        "port": 830,
+        "port": 22,
         "username": "netconf",
         "auth": {
             "type": "ssh_key",
@@ -58,6 +58,11 @@ is the first thing that will stop you (see Troubleshooting):
     }
 }
 ```
+
+The server defaults to port 22, which reaches NETCONF over the device's
+regular SSH service (`set system services ssh`). If you enable the dedicated
+NETCONF listener with `set system services netconf ssh` (port 830 by
+default) and want to use it, set `port` to 830 explicitly.
 
 **`private_key_path` must be the in-container path**, not the host path. The
 file lives at `keys/id_ed25519` on the host and is mounted to `/etc/jmcp/keys`.
@@ -109,12 +114,15 @@ Both are shown below. The second is what the examples here were verified with.
 ## 3. Pin the image version
 
 Obtain the immutable digest for the version you want to run. If the image has not
-been pulled yet, run `docker pull ghcr.io/mechubsec/rustjunosmcp:0.27.2` first.
+been pulled yet, choose one of the published registries and pull it first:
 
 ```bash
-image=$(docker inspect ghcr.io/mechubsec/rustjunosmcp:0.27.2 \
+image=ghcr.io/mechubsec/rustjunosmcp:0.27.5
+# Docker Hub equivalent: image=docker.io/mechub/rustjunosmcp:0.27.5
+docker pull "$image"
+image=$(docker inspect "$image" \
     --format '{{index .RepoDigests 0}}')
-# $image is now ghcr.io/...@sha256:... — pinned, and printable if you want it recorded
+# $image is now <registry>/...@sha256:... — pinned, and printable if you want it recorded
 ```
 
 The digest should be recorded wherever the deployment is tracked, since it identifies
