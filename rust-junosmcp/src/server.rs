@@ -92,7 +92,7 @@ pub(super) fn mint_request_id() -> String {
 /// branch build their body with `serde_json::to_string_pretty`, so this is
 /// the common case — then XML (only when the trimmed input actually opens
 /// with `<`; see MEC-918 N1 below), then falls back to
-/// [`mecmcp_redact::redact_text`] for genuinely unstructured input (CLI
+/// [`junos_log_text_fallback`] for genuinely unstructured input (CLI
 /// output, a plain error message).
 ///
 /// Parsing and redacting structurally rather than scanning the serialized
@@ -110,19 +110,54 @@ pub(super) fn mint_request_id() -> String {
 /// every `"`, `'`, and `>` it contains, corrupting non-XML output. Only
 /// attempt the XML path when the input actually looks like a document
 /// (trimmed, starts with `<`), so plain text falls straight through to
-/// [`mecmcp_redact::redact_text`] unescaped.
+/// [`junos_log_text_fallback`] unescaped.
+///
+/// MEC-2519/MEC-2558: this server only ever speaks Junos, so the fallback
+/// layers [`mecmcp_redact::junos::redact_log_text`]'s closed, whole-word
+/// Junos key vocabulary *on top of* [`mecmcp_redact::redact_text`]'s
+/// cross-vendor substring denylist (via [`junos_log_text_fallback`]),
+/// rather than replacing it. The generic scan's `session` entry (kept
+/// broad for `session_id`/`session_token` shapes other vendors use,
+/// MEC-537) has no config-syntax awareness and blanks the rest of the
+/// *line* once it matches — so `then log session-init session-close;`,
+/// `limit-session 1000;`, and `show security flow session summary`
+/// counters all lost real, non-secret operational data to a line that
+/// merely contained the word "session". Running `redact_log_text` after
+/// `redact_text` does **not** fix that `session` false positive — by the
+/// time the Junos pass (whole-word-matching a closed key list with no
+/// `session` entry) runs, `redact_text` has already blanked the line. The
+/// `session` over-masking remains an accepted tradeoff until it is fixed
+/// upstream in `mecmcp` (tracked on MEC-2519). What running `redact_text`
+/// first adds back is the generic denylist's much broader secret coverage
+/// (PEM blocks, URL-userinfo passwords, bearer tokens,
+/// `api-key`/`shared-secret`/`psk`/`passphrase`, prose `password <value>`,
+/// ...) that the Junos-only vocabulary does not know about.
 pub(super) fn redact_body(s: &str) -> String {
     if let Ok(mut value) = serde_json::from_str::<Value>(s) {
         redact_json_preserving_server_fields(&mut value);
-        return serde_json::to_string_pretty(&value)
-            .unwrap_or_else(|_| mecmcp_redact::redact_text(s));
+        return serde_json::to_string_pretty(&value).unwrap_or_else(|_| junos_log_text_fallback(s));
     }
     if s.trim_start().starts_with('<')
         && let Ok(redacted) = mecmcp_redact::redact_xml_str(s)
     {
         return redacted;
     }
-    mecmcp_redact::redact_text(s)
+    junos_log_text_fallback(s)
+}
+
+/// Run the cross-vendor [`mecmcp_redact::redact_text`] pass first, then the
+/// Junos-specific [`mecmcp_redact::junos::redact_log_text`] pass on top of
+/// its output, so unstructured Junos CLI/config text gets the broader
+/// generic secret coverage plus whole-word Junos-key coverage the generic
+/// pass lacks. This does **not** fix the generic pass's `session`
+/// false-positive (MEC-2558 review of MEC-2519); that remains until the
+/// denylist is fixed upstream in `mecmcp`. Mirrors the composition
+/// `mecmcp_redact::junos::redact_log_artefact` uses for non-XML-shaped
+/// input, without going through its `Result`/XML-shape dispatch — callers
+/// here already know the input isn't XML (they tried that path and it
+/// either doesn't apply or already failed).
+pub(super) fn junos_log_text_fallback(s: &str) -> String {
+    mecmcp_redact::junos::redact_log_text(&mecmcp_redact::redact_text(s))
 }
 
 /// Server-defined field names that survive [`redact_body`] /
@@ -227,7 +262,7 @@ pub(super) fn redact_json_preserving_server_fields(value: &mut Value) {
 /// the confirmation plan as JSON *inside* a larger non-JSON string (`[code=
 /// ...] router=...: ...; plan: {...}`), so [`redact_body`] can't parse it
 /// structurally and falls through to the line-oriented
-/// [`mecmcp_redact::redact_text`] pass, which would strip the
+/// [`junos_log_text_fallback`] pass, which would strip the
 /// `confirmation_token` the two-call confirmation protocol requires back
 /// verbatim — fine for a device secret, fails the caller closed for a
 /// protocol token that was never a secret to begin with.
@@ -483,7 +518,7 @@ impl JmcpHandler {
     ///   strings here are themselves pre-redacted JSON/XML (from
     ///   `get_junos_config`, `junos_config_diff`), and `redact_body` redacts
     ///   those structurally too, while a genuinely plain-text string (CLI
-    ///   output) falls through to [`mecmcp_redact::redact_text`].
+    ///   output) falls through to [`junos_log_text_fallback`].
     ///
     /// This is the single choke point nearly every Junos tool's output
     /// passes through, but it is not the *only* one — [`redact_last_mile`]
@@ -3356,8 +3391,9 @@ mod redact_last_mile_tests {
     }
 
     /// Genuinely unstructured input (CLI/`set`-style output, a plain error
-    /// message) falls back to line-oriented `redact_text` rather than being
-    /// left unredacted because it did not parse as JSON or XML.
+    /// message) falls back to [`mecmcp_redact::junos::redact_log_text`]
+    /// rather than being left unredacted because it did not parse as JSON
+    /// or XML.
     #[test]
     fn redact_body_falls_back_to_text_redaction_for_non_structured_input() {
         let body = format!(
@@ -3379,7 +3415,7 @@ mod redact_last_mile_tests {
     /// output, a `show route` dump, a plain error message all have these).
     /// `redact_body` must only try the XML path when the input actually
     /// looks like a document, so on genuinely non-XML text it must behave
-    /// identically to a direct `mecmcp_redact::redact_text` call.
+    /// identically to a direct [`junos_log_text_fallback`] call.
     #[test]
     fn redact_body_does_not_xml_escape_plain_text() {
         let body = format!(
@@ -3388,8 +3424,40 @@ mod redact_last_mile_tests {
 
         assert_eq!(
             redact_body(&body),
-            mecmcp_redact::redact_text(&body),
+            junos_log_text_fallback(&body),
             "redact_body must not run non-XML text through the XML writer"
+        );
+    }
+
+    /// MEC-2558 (re-review of MEC-2519/#526): the Junos-only
+    /// `redact_log_text` vocabulary is not a superset of the cross-vendor
+    /// `redact_text` denylist it had replaced — it has no entries for PEM
+    /// key-block bodies, URL-userinfo passwords, plaintext bearer tokens,
+    /// or several generic secret-shaped keys. `redact_body`'s fallback must
+    /// run `redact_text` first (restoring that coverage) and layer
+    /// `redact_log_text` on top, so all of these keep getting caught.
+    ///
+    /// Running `redact_text` first reintroduces its documented `session`
+    /// substring over-masking (MEC-2519/MEC-537) for genuinely non-secret
+    /// CLI text until that false positive is fixed upstream in `mecmcp`
+    /// (tracked on MEC-2519) — an accepted, explicitly reviewed tradeoff:
+    /// losing some non-secret "session" text is far cheaper than leaking a
+    /// real credential.
+    #[test]
+    fn redact_body_still_catches_secret_shapes_the_junos_only_vocabulary_misses() {
+        let body = format!(
+            "-----BEGIN RSA PRIVATE KEY-----\n{FAKE_PSK}\n-----END RSA PRIVATE KEY-----\nset system host-name {FAKE_HOSTNAME}\narchive-sites \"ftp://svcacct:{FAKE_PSK}@archive.example.net/cfg\"\nAuthorization: Bearer {FAKE_PSK}\n"
+        );
+
+        let redacted = redact_body(&body);
+
+        assert!(
+            !redacted.contains(FAKE_PSK),
+            "secret leaked across one of the PEM/URL-userinfo/bearer-token shapes: {redacted}"
+        );
+        assert!(
+            redacted.contains(FAKE_HOSTNAME),
+            "non-secret hostname lost: {redacted}"
         );
     }
 
