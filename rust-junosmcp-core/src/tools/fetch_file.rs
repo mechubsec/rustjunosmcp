@@ -94,7 +94,7 @@ pub async fn handle(
         let inv = dm.inventory();
         let entry = inv.get(&args.device)?;
         let private_key_path = match &entry.auth {
-            AuthConfig::Password { .. } => {
+            AuthConfig::Password { .. } | AuthConfig::PasswordEnv { .. } => {
                 return Err(JmcpError::UnsupportedAuth(args.device.clone()));
             }
             AuthConfig::SshKey { private_key_path } => private_key_path.clone(),

@@ -1288,8 +1288,8 @@ impl JmcpHandler {
         }
         if let Some(auth) = &args.auth {
             let auth_kind = match auth {
-                rust_junosmcp_core::inventory::AuthConfig::Password { .. } => "password",
-                rust_junosmcp_core::inventory::AuthConfig::SshKey { .. } => "ssh_key",
+                rust_junosmcp_core::inventory::AddDeviceAuth::Password { .. } => "password",
+                rust_junosmcp_core::inventory::AddDeviceAuth::SshKey { .. } => "ssh_key",
             };
             audit.meta("auth_kind", auth_kind);
         }
@@ -1559,6 +1559,12 @@ impl JmcpHandler {
         };
 
         let attribution = mecmcp_audit::Attribution::from_caller(ctx_val);
+        // The owner's bound IdP identity, if their token has one (`token add
+        // --oidc-issuer ... --oidc-subject ...`, MEC-994 W2). Read directly
+        // off `CallerCtx` rather than `Attribution`: this is server-side
+        // token-bound provenance the request itself cannot assert, and
+        // `Attribution` carries no field for it.
+        let owner_subject = ctx_val.oidc_subject.clone();
 
         let result = changeset::create_change_set_with_cancel(
             args,
@@ -1566,6 +1572,7 @@ impl JmcpHandler {
             self.coordinator.clone(),
             self.policy.load_full(),
             attribution,
+            owner_subject,
             ct,
         )
         .await;
@@ -2488,6 +2495,8 @@ mod scope_tests {
     fn tool_scope_denies_when_not_listed() {
         let handler = make_handler();
         let ctx = CallerCtx {
+            oidc_subject: None,
+            verified_approver: None,
             token_name: "alice".into(),
             client_name: None,
             model_id: None,
@@ -2516,6 +2525,8 @@ mod scope_tests {
     fn router_scope_denies_when_not_listed() {
         let handler = make_handler();
         let ctx = CallerCtx {
+            oidc_subject: None,
+            verified_approver: None,
             token_name: "alice".into(),
             client_name: None,
             model_id: None,
@@ -2544,6 +2555,8 @@ mod scope_tests {
     fn pfe_scope_denial_rejects_call() {
         let handler = make_handler();
         let ctx = CallerCtx {
+            oidc_subject: None,
+            verified_approver: None,
             token_name: "alice".into(),
             client_name: None,
             model_id: None,
@@ -2612,6 +2625,8 @@ mod scope_tests {
     fn transfer_file_tool_scope_denies_when_not_listed() {
         let handler = make_handler();
         let ctx = CallerCtx {
+            oidc_subject: None,
+            verified_approver: None,
             token_name: "alice".into(),
             client_name: None,
             model_id: None,
@@ -2635,6 +2650,8 @@ mod scope_tests {
     fn list_staged_files_tool_scope_denies_when_not_listed() {
         let handler = make_handler();
         let ctx = CallerCtx {
+            oidc_subject: None,
+            verified_approver: None,
             token_name: "alice".into(),
             client_name: None,
             model_id: None,
@@ -2660,6 +2677,8 @@ mod scope_tests {
         // a request for `vsrx-test10` must surface RouterNotInScope.
         let handler = make_handler();
         let ctx = CallerCtx {
+            oidc_subject: None,
+            verified_approver: None,
             token_name: "alice".into(),
             client_name: None,
             model_id: None,
@@ -2688,6 +2707,8 @@ mod scope_tests {
     fn fetch_file_tool_scope_denies_when_not_listed() {
         let handler = make_handler();
         let ctx = CallerCtx {
+            oidc_subject: None,
+            verified_approver: None,
             token_name: "alice".into(),
             client_name: None,
             model_id: None,
@@ -2713,6 +2734,8 @@ mod scope_tests {
         // a request for `vsrx-test10` must surface RouterNotInScope.
         let handler = make_handler();
         let ctx = CallerCtx {
+            oidc_subject: None,
+            verified_approver: None,
             token_name: "alice".into(),
             client_name: None,
             model_id: None,
@@ -2739,6 +2762,8 @@ mod scope_tests {
         // first router not in scope.
         let handler = make_handler();
         let ctx = CallerCtx {
+            oidc_subject: None,
+            verified_approver: None,
             token_name: "alice".into(),
             client_name: None,
             model_id: None,
@@ -2777,6 +2802,8 @@ mod scope_tests {
 
     fn ctx_with_tools(tools: ScopeSet) -> CallerCtx {
         CallerCtx {
+            oidc_subject: None,
+            verified_approver: None,
             token_name: "t".into(),
             client_name: None,
             model_id: None,

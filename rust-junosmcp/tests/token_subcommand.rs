@@ -191,6 +191,78 @@ fn add_rejects_unknown_tool() {
     assert!(stderr.contains("no_such_tool"));
 }
 
+/// MEC-995: `--oidc-issuer`/`--oidc-subject` bind a token to an IdP identity
+/// so `approve_change_set`'s two-person check can later tell this owner's
+/// verified subject apart from an approver's.
+#[test]
+fn add_with_oidc_pair_persists_the_binding() {
+    ensure_built();
+    let dir = tempfile::tempdir().unwrap();
+    let tokens = dir.path().join("tokens.json");
+
+    let out = Command::new(binary_path())
+        .args([
+            "token",
+            "add",
+            "--tokens-file",
+            tokens.to_str().unwrap(),
+            "--name",
+            "alice",
+            "--routers",
+            "*",
+            "--tools",
+            "get_router_list",
+            "--oidc-issuer",
+            "https://idp.example.com",
+            "--oidc-subject",
+            "alice-sub",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let body = std::fs::read_to_string(&tokens).unwrap();
+    assert!(
+        body.contains("https://idp.example.com") && body.contains("alice-sub"),
+        "tokens file must persist the oidc_issuer/oidc_subject binding, got: {body}"
+    );
+}
+
+#[test]
+fn add_rejects_oidc_issuer_without_subject() {
+    ensure_built();
+    let dir = tempfile::tempdir().unwrap();
+    let tokens = dir.path().join("tokens.json");
+
+    let out = Command::new(binary_path())
+        .args([
+            "token",
+            "add",
+            "--tokens-file",
+            tokens.to_str().unwrap(),
+            "--name",
+            "alice",
+            "--routers",
+            "*",
+            "--tools",
+            "get_router_list",
+            "--oidc-issuer",
+            "https://idp.example.com",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("--oidc-subject"),
+        "expected an error naming the missing pair partner, got: {stderr}"
+    );
+}
+
 #[test]
 fn add_accepts_srx_only_tool_scope() {
     ensure_built();

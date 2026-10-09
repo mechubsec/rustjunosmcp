@@ -5,8 +5,8 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$defs": {
-        "AuthConfig": {
-          "description": "Device authentication method for NETCONF.",
+        "AddDeviceAuth": {
+          "description": "Auth a caller of the model-facing `add_device` tool may set.\n\nDeliberately a strict subset of [`AuthConfig`]: it omits `PasswordEnv`.\n`add_device` lets a model pick an arbitrary environment-variable name and\nhave its value sent as an SSH password to a host the same call also\nchooses, which turns any server env var the operator has set into a\ncredential-exfiltration channel. `password_env` stays available only by\nhand-editing `devices.json` directly, never through the tool call, so\nthis type has no `PasswordEnv` variant for the model to request — making\nthat misuse unrepresentable rather than merely checked for.",
           "oneOf": [
             {
               "description": "Authenticate with a plaintext password. Supported for NETCONF; not\nsupported for SCP-based file transfers.",
@@ -85,10 +85,10 @@
           "default": null
         },
         "auth": {
-          "description": "Auth config (tagged enum: ssh_key | password).",
+          "description": "Auth config (tagged enum: ssh_key | password). `password_env` is not\noffered here — see `AddDeviceAuth`.",
           "anyOf": [
             {
-              "$ref": "#/$defs/AuthConfig"
+              "$ref": "#/$defs/AddDeviceAuth"
             },
             {
               "type": "null"

@@ -561,11 +561,38 @@ What it does and does not change:
   real separation of duties.
 - The server warns loudly at startup whenever it is enabled.
 
-If you want solo write-testing *without* waiving the control, mint two tokens
-with different names and use one to plan and the other to approve: the
-principal is the token name, and self-approval is refused. That gives one
-person the complete lifecycle with the control intact, and is the better choice
-wherever the ceremony has any value.
+If you want solo write-testing *without* waiving the control, minting two
+tokens with different names and using one to plan and the other to approve
+is weaker than it looks: both tokens belong to the same human, so
+"two-person" review is really the same operator clicking approve on their
+own plan under a different name. The principal is the token name and
+self-approval is refused, so it exercises the plan→approve→apply API shape
+honestly — but it is not a real second reviewer.
+
+mecmcp 0.27.0 adds a verified human-approver flow (MEC-994/MEC-995) that
+closes that gap by binding the *approver's* identity to a fresh IdP login
+rather than a token name:
+
+- Bind the owner token to an IdP identity at creation time:
+  `token add --oidc-issuer https://idp.example.com --oidc-subject
+  alice@example.com ...`.
+- Start the server with `--oidc-issuer`, `--oidc-audience`, and
+  `--require-verified-approver` (plus `--approval-digest-key-file`, which
+  strict mode requires so the verified-approver fields are tamper-evident).
+- Approve with [`mecmcp-approve`](https://github.com/mechubsec/mecmcp/tree/main/crates/mecmcp-approve),
+  which drives a real OIDC login (PKCE by default) and attaches the
+  resulting assertion as a `Mecmcp-Approver-Assertion` header:
+  `mecmcp-approve --server-url https://junos01.example:8443/mcp
+  --approve-tool approve_junos_change_set --oidc-issuer
+  https://idp.example.com --oidc-client-id mecmcp-approve
+  --arg change_set_id=... --arg device=... --arg expected_digest=...`.
+- In strict mode, the coordinator refuses an approval whose verified subject
+  matches the owner's bound subject — the same human cannot satisfy both
+  sides of the two-person rule, no matter how many token names they hold.
+
+The two-token workaround above still has a place for pure functional
+testing of the plan→approve→apply flow when no IdP is available, but treat
+it as what it is: one operator exercising the API shape, not an approval.
 
 ### Enabling it
 
@@ -720,6 +747,69 @@ default `srx` feature, or 28 in a Junos-only build):
 ```
 
 ## Docker
+
+### Run with Docker
+
+The catalog-friendly stdio invocation replaces the image's HTTP CMD with
+`--transport stdio`. The ENTRYPOINT already supplies the inventory, state,
+known-hosts, lease, and token-file paths, so do not repeat those flags here.
+The state mount is a bind mount, so it starts out host-user-owned; it and
+`tokens.json` inside it must be owned by UID/GID `65532:65532` before the
+first start, with `tokens.json` at mode `0600`:
+
+```bash
+mkdir -p jmcp-state
+cat > jmcp-state/tokens.json <<'EOF'
+{
+  "version": 1,
+  "tokens": [
+    {
+      "name": "catalog",
+      "digest": "sha256:REPLACE_WITH_TOKEN_ADD_OUTPUT",
+      "devices": ["r1"],
+      "tools": ["gather_device_facts"],
+      "created_at": "2026-01-01T00:00:00Z"
+    }
+  ]
+}
+EOF
+sudo chown -R 65532:65532 jmcp-state
+sudo chmod 0700 jmcp-state
+sudo chmod 0600 jmcp-state/tokens.json
+sudo chown 65532:65532 devices.json
+sudo chmod 0600 devices.json
+
+docker run --rm -i \
+  -v "$PWD/devices.json:/etc/jmcp/devices.json:ro" \
+  -v "$PWD/keys:/etc/jmcp/keys:ro" \
+  -v "$PWD/jmcp-state:/var/lib/jmcp" \
+  ghcr.io/mechubsec/rustjunosmcp:latest \
+  --transport stdio
+```
+
+On rootless Docker or a userns-remapped host, UID 65532 inside the container
+maps to a different host UID; chown the mounts to whatever that mapped UID
+is instead of `65532` directly.
+
+For example, `devices.json` uses the server's inventory shape (replace the
+placeholder secret before use):
+
+```json
+{
+  "r1": {
+    "ip": "192.0.2.10",
+    "port": 22,
+    "username": "netconf-user",
+    "auth": {
+      "type": "password",
+      "password": "replace-with-device-password"
+    }
+  }
+}
+```
+
+This invocation leaves HTTP and TLS off because replacing the image CMD also
+removes its HTTP bind and TLS-related flags.
 
 > Running the two-person and lab-mode pair as containers, including the
 > published-vs-internal port trap that makes the allow-lists reject everything
@@ -917,12 +1007,14 @@ curl -LO "${base}/rust-junosmcp_${version}_amd64.tar.gz.cosign.bundle"
 sha256sum -c "rust-junosmcp_${version}_amd64.tar.gz.sha256"
 
 cosign verify-blob \
-  --certificate-identity "https://github.com/mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@8ede62a31917ad4d5f41ca2a664601280b2ddc41" \
+  --certificate-identity "https://github.com/mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@f927c820f39369b2601e11e31334cc5b504b1fd1" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   --certificate-github-workflow-repository "mechubsec/rustjunosmcp" \
   --certificate-github-workflow-trigger "release" \
   --bundle "rust-junosmcp_${version}_amd64.tar.gz.cosign.bundle" \
   "rust-junosmcp_${version}_amd64.tar.gz"
+# Backfilled assets (workflow_dispatch of an already-published tag) use
+# --certificate-github-workflow-trigger "workflow_dispatch" instead.
 ```
 
 Unlike the image workflow above, the `sign` job in this repo's own
@@ -941,7 +1033,12 @@ alone does not prove the tarball came from *this* repo's release.
 `--certificate-github-workflow-repository` and
 `--certificate-github-workflow-trigger` close that gap: they check the
 certificate's calling-repository and triggering-event fields, which must be
-`mechubsec/rustjunosmcp` and `release`. Do not drop them.
+`mechubsec/rustjunosmcp` and one of this workflow's two legitimate triggers.
+A normal cut uses `release`; a board `workflow_dispatch` backfill of an
+already-published signed tag uses `workflow_dispatch`. A dispatch is refused
+when that release already has a tarball signature bundle. A release that has
+the tarball but no bundle can still be backfilled. The flag is an exact
+match, so swap it when verifying a backfilled asset. Do not drop either flag.
 
 `cosign verify-blob` exits non-zero on any mismatch — wrong identity, wrong
 issuer, wrong calling repository or trigger, or a tarball that does not match

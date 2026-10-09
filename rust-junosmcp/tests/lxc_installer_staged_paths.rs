@@ -33,6 +33,7 @@ fn build_fake_package(pkg_root: &Path) {
         "[Unit]\nDescription=stub\n",
     )
     .unwrap();
+    write_build_info(pkg_root, &bin);
 
     let real_install_sh = repo_root().join("packaging/lxc/install.sh");
     let staged_install_sh = pkg_root.join("install.sh");
@@ -40,6 +41,42 @@ fn build_fake_package(pkg_root: &Path) {
     let mut perms = fs::metadata(&staged_install_sh).unwrap().permissions();
     std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
     fs::set_permissions(&staged_install_sh, perms).unwrap();
+}
+
+fn sha256_hex(path: &Path) -> String {
+    let output = Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .expect("sha256sum");
+    assert!(
+        output.status.success(),
+        "sha256sum failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("sha256sum output is utf-8");
+    let sha = stdout
+        .split_whitespace()
+        .next()
+        .expect("sha256sum digest")
+        .to_string();
+    assert_eq!(sha.len(), 64, "sha256 digest must be 64 hex characters");
+    sha
+}
+
+/// Provenance matching the staged binary. The installer refuses a package
+/// whose record is missing or does not describe those bytes.
+fn write_build_info(pkg_root: &Path, bin: &Path) {
+    let sha = sha256_hex(bin);
+    fs::write(
+        pkg_root.join("BUILD-INFO"),
+        format!(
+            "version=test\n\
+             git_commit=000000000000\n\
+             rustc=unknown (test fixture; binary was not compiled by the packager)\n\
+             binary_sha256={sha}\n"
+        ),
+    )
+    .unwrap();
 }
 
 fn run_install(pkg_root: &Path, install_root: &Path) -> std::process::Output {
@@ -79,6 +116,47 @@ impl StagedInstall {
     fn path(&self, relative: &str) -> PathBuf {
         self.install_root.path().join(relative)
     }
+}
+
+#[test]
+fn installer_refuses_a_package_missing_provenance() {
+    let pkg_dir = tempfile::tempdir().unwrap();
+    let pkg_root = pkg_dir.path().join("pkg");
+    build_fake_package(&pkg_root);
+    fs::remove_file(pkg_root.join("BUILD-INFO")).unwrap();
+    let install_root = tempfile::tempdir().unwrap();
+    let output = run_install(&pkg_root, install_root.path());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "install must refuse a package with no provenance file: {stderr}"
+    );
+    assert!(
+        stderr.contains("BUILD-INFO"),
+        "refusal should name the provenance file: {stderr}"
+    );
+}
+
+#[test]
+fn installer_refuses_a_provenance_hash_mismatch() {
+    let pkg_dir = tempfile::tempdir().unwrap();
+    let pkg_root = pkg_dir.path().join("pkg");
+    build_fake_package(&pkg_root);
+    let info = pkg_root.join("BUILD-INFO");
+    let text = fs::read_to_string(&info).unwrap();
+    let replaced = text.replace(
+        &sha256_hex(&pkg_root.join("usr/local/bin/rust-junosmcp")),
+        &"0".repeat(64),
+    );
+    assert_ne!(text, replaced, "fixture hash must be replaceable");
+    fs::write(&info, replaced).unwrap();
+    let install_root = tempfile::tempdir().unwrap();
+    let output = run_install(&pkg_root, install_root.path());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "install must refuse a provenance hash that does not match the binary: {stderr}"
+    );
 }
 
 #[test]

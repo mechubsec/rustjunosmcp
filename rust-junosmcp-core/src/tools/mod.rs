@@ -509,9 +509,10 @@ pub struct AddDeviceArgs {
     /// Username.
     #[serde(default)]
     pub username: Option<String>,
-    /// Auth config (tagged enum: ssh_key | password).
+    /// Auth config (tagged enum: ssh_key | password). `password_env` is not
+    /// offered here — see `AddDeviceAuth`.
     #[serde(default)]
-    pub auth: Option<crate::inventory::AuthConfig>,
+    pub auth: Option<crate::inventory::AddDeviceAuth>,
 }
 
 /// Arguments for `reload_devices`: hot-reloads the device inventory from disk without restarting the server.
@@ -820,8 +821,20 @@ mod tests {
         assert_eq!(a.device_port, Some(22));
         assert!(matches!(
             a.auth,
-            Some(crate::inventory::AuthConfig::SshKey { .. })
+            Some(crate::inventory::AddDeviceAuth::SshKey { .. })
         ));
+    }
+
+    #[test]
+    fn add_device_args_rejects_password_env() {
+        let v = serde_json::json!({
+            "auth": {"type":"password_env","password_env":"R1_PASSWORD"}
+        });
+        let r: Result<AddDeviceArgs, _> = serde_json::from_value(v);
+        assert!(
+            r.is_err(),
+            "add_device must not accept password_env, even before validate() runs"
+        );
     }
 
     #[test]

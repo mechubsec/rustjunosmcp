@@ -94,6 +94,7 @@ async fn start_test_server(
         false, // No metrics
         false, // allow_insecure_bind: these tests bind loopback, which is exempt
         shutdown.clone(),
+        None, // no verified-approver assertion verifier in these tests
     )
     .expect("router build");
 
@@ -318,6 +319,7 @@ async fn insecure_bind_acknowledgement_reaches_the_transport() {
         false,
         true, // allow_insecure_bind — the flag under test
         shutdown.clone(),
+        None, // no verified-approver assertion verifier in this test
     )
     .expect("router build");
 

@@ -32,10 +32,15 @@ jobs:
       # them itself -- see mecmcp's docs/RELEASE-WORKFLOWS.md.
       id-token: write
     # Pinned to mecmcp main after #440 merged (squash). Repin to a mecmcp tag once one is cut.
-    uses: mechubsec/mecmcp/.github/workflows/reusable-release-image.yml@8ede62a31917ad4d5f41ca2a664601280b2ddc41
+    uses: mechubsec/mecmcp/.github/workflows/reusable-release-image.yml@f927c820f39369b2601e11e31334cc5b504b1fd1
     with:
       # GHCR requires a lowercase image path; github.repository is already lowercase.
       image: ghcr.io/${{ github.repository }}
+      dockerhub-image: docker.io/mechub/rustjunosmcp
+      description: 'Junos/SRX MCP server'
       version: ${{ github.event.inputs.version }}
       ref: ${{ github.event.inputs.ref }}
       smoke-test-command: ./packaging/tests/container-scp-smoke.sh
+    secrets:
+      dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}

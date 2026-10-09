@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 // Re-export from mecmcp-runtime for compatibility
 pub use mecmcp_runtime::cli::Transport;
+pub use mecmcp_runtime::cli::VerifiedApproverArgs;
 pub use mecmcp_runtime::cli::WebApproverArgs;
 
 #[derive(Debug, Parser)]
@@ -246,6 +247,25 @@ pub struct Cli {
     #[command(flatten)]
     pub web_approver: WebApproverArgs,
 
+    /// Step-up verified-approver identity (MEC-994/MEC-995): --oidc-issuer,
+    /// --oidc-audience, --require-verified-approver, and friends. Standalone
+    /// rather than part of the shared flags, matching `WebApproverArgs`: see
+    /// `VerifiedApproverArgs`'s own doc comment for why. Call
+    /// `VerifiedApproverArgs::validate` (done in `main.rs`) before trusting
+    /// these.
+    #[command(flatten)]
+    pub verified_approver: VerifiedApproverArgs,
+
+    /// File containing the HMAC key for the change-set approval digest.
+    ///
+    /// Required by `--require-verified-approver`, which signs the
+    /// verified-approver fields into the digest and needs the key at
+    /// approval time to make that tamper-evident. Optional otherwise: a
+    /// deployment with no key keeps signing and accepting the unkeyed v5
+    /// approval digest.
+    #[arg(long)]
+    pub approval_digest_key_file: Option<PathBuf>,
+
     /// Directory used to stage collected SRX support bundles.
     #[cfg(feature = "srx")]
     #[arg(
@@ -419,6 +439,14 @@ pub enum TokenAction {
         /// Actor type: "human", "agent", or "unknown". Optional.
         #[arg(long)]
         actor_type: Option<String>,
+        /// IdP issuer URL this token is bound to, for verified-approver
+        /// identity (MEC-994/MEC-995). Required if `--oidc-subject` is set.
+        #[arg(long)]
+        oidc_issuer: Option<String>,
+        /// The IdP's `sub` claim identifying the human this token is bound
+        /// to. Required if `--oidc-issuer` is set.
+        #[arg(long)]
+        oidc_subject: Option<String>,
         /// Send SIGHUP to this pid after writing.
         #[arg(long)]
         server_pid: Option<i32>,

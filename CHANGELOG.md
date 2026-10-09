@@ -4,6 +4,52 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **LXC packages now ship an honest `BUILD-INFO`.** Skip-build
+  (`JMCP_PACKAGE_SKIP_BUILD=1`) records `rustc=unknown (...)` instead of a
+  local toolchain, and `binary_sha256` always matches the packed binary.
+  Shared packaging conformance treats that provenance as fatal.
+- **`Sign release tarball` can backfill a published tag.** The Debian 13
+  container job trusts its workspace so packaging can read git metadata, and
+  `workflow_dispatch` with a `tag` input rebuilds and uploads the tarball for
+  an existing GitHub-verified signed tag that already has a published
+  release. A dispatch is refused when that release already has a tarball
+  signature bundle.
+
+## [0.27.5] - 2026-10-07
+
+### Added
+
+- **Release images are also published to Docker Hub** as
+  `docker.io/mechub/rustjunosmcp` (same tags as GHCR: `X.Y.Z`, `X.Y`,
+  `latest`), signed and attested the same way (#517, #518).
+- **stdio no longer requires a bearer-token store**, and devices can take
+  their credential from an environment variable (#504).
+- mecmcp's verified-approver identity is wired through (MEC-995, #519).
+
+### Changed
+
+- Packaging emits an honest `BUILD-INFO` and treats provenance failures as
+  fatal (#514).
+
+## [0.27.4] - 2026-10-07
+
+### Added
+
+- **Official MCP Registry listing.** The image now carries
+  `io.modelcontextprotocol.server.name="io.github.mechubsec/rustjunosmcp"`,
+  which the registry uses to verify image ownership, and the repo ships a
+  `server.json` describing the documented stdio container invocation.
+
+### Changed
+
+- Dependency and CI updates: distroless `cc-debian13` base image digest,
+  `cargo-minor-patch` group, and pinned `mecmcp` reusable workflows.
+- Docs: stdio container invocation and fwconfigsanitizer references.
+
 ## [0.27.3] - 2026-10-06
 
 ### Security

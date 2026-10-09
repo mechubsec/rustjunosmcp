@@ -215,6 +215,33 @@ fn srx_status_allows_stdio_even_when_a_token_file_is_loaded() {
     assert_eq!(result["endpoint"], "srxmcp");
 }
 
+/// A container's `ENTRYPOINT` bakes in a fixed `--tokens-file` path so a
+/// manually-run HTTP server always stays protected. stdio must still start
+/// when that path has nothing mounted there -- the file protects a bearer
+/// listener stdio never opens, so a missing file must not block the MCP
+/// handshake (MEC-2121).
+#[test]
+fn stdio_starts_when_tokens_file_flag_points_to_a_missing_path() {
+    let inventory = common::write_inv("{}");
+    let missing_tokens_path = {
+        let dir = tempfile::tempdir().unwrap();
+        dir.path().join("tokens.json")
+        // `dir` drops here, so the path never existed and never will.
+    };
+    let mut server = common::spawn_stdio_server_with_args(&[
+        "--device-mapping",
+        inventory.path().to_str().unwrap(),
+        "--tokens-file",
+        missing_tokens_path.to_str().unwrap(),
+    ]);
+    let result = common::call_tool(&mut server, "get_device_list", json!({}));
+    assert_ne!(
+        result.get("isError"),
+        Some(&json!(true)),
+        "tool call failed: {result:?}"
+    );
+}
+
 #[test]
 fn denied_command_returns_tool_error() {
     common::ensure_built();
