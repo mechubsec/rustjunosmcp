@@ -24,7 +24,9 @@
 
 mod common;
 
-use common::{call_tool, spawn_stdio_server_with_args, write_inventory_temp};
+use common::{
+    call_tool, spawn_stdio_server_with_args, write_fake_netconf_key_temp, write_inventory_temp,
+};
 use serde_json::json;
 use std::time::Instant;
 
@@ -32,14 +34,16 @@ use std::time::Instant;
 fn execute_junos_command_outer_timeout_fires_before_rustez_cap() {
     // Inventory points at TEST-NET-1 (RFC 5737) — guaranteed unreachable,
     // so the connect attempt will hang until *something* times out.
+    // Use a fake key file — connection will fail at the TCP layer long
+    // before key parsing matters, but startup now requires a real,
+    // 0600-moded regular file for every private_key_path named here.
+    let key = write_fake_netconf_key_temp();
     let inv_path = write_inventory_temp(&[(
         "unreachable",
         "192.0.2.1",
         22,
         "netconf",
-        // Use a fake key file path — connection will fail at TCP layer
-        // long before key parsing matters, but we need a valid auth field.
-        "/dev/null",
+        key.path().to_str().expect("key path is utf8"),
     )]);
 
     let mut child = spawn_stdio_server_with_args(&["-f", inv_path.path().to_str().unwrap()]);

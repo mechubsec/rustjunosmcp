@@ -13,10 +13,16 @@ fn list_staged_files_returns_host_staging_only() {
     std::fs::write(staging.join("alpha.tgz"), b"alpha-bytes").unwrap();
     std::fs::write(staging.join("beta.bin"), b"beta-bytes").unwrap();
 
-    // The server validates the key file exists at startup, so create a real
-    // (empty) file. We never actually connect to the device in this test.
+    // Startup mode- and type-checks every private key path named in the
+    // inventory, so this placeholder must be a real, 0600 regular file. We
+    // never actually connect to the device in this test.
     let key_file = dir.path().join("dummy_key");
     std::fs::write(&key_file, b"").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
 
     // Inventory: one ssh-key device. We never reach the device path because
     // the test omits router_name, so the placeholder ssh-key path is fine.

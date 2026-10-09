@@ -670,6 +670,34 @@ impl Inventory {
         })
     }
 
+    /// NETCONF SSH private-key paths named by this inventory file.
+    ///
+    /// This does not load the inventory and does not check modes. A missing,
+    /// unreadable, oversized, or unparseable file yields no paths; startup
+    /// still checks the inventory file itself. Password and `password_env`
+    /// entries are not files. Duplicate paths are returned once, in the order
+    /// the file names them.
+    pub fn netconf_private_key_paths(path: &Path) -> Vec<PathBuf> {
+        let limit = mecmcp_secret::FileLimits::default().max_bytes;
+        let bytes = match std::fs::metadata(path) {
+            // `usize as u64` does not truncate: every `usize` fits in `u64`.
+            Ok(metadata) if metadata.len() > limit as u64 => {
+                return Vec::new();
+            }
+            Ok(_) => match std::fs::read(path) {
+                Ok(bytes) if bytes.len() <= limit => bytes,
+                _ => return Vec::new(),
+            },
+            Err(_) => return Vec::new(),
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            return Vec::new();
+        };
+        let mut paths = Vec::new();
+        collect_netconf_private_key_paths(&value, &mut paths);
+        paths
+    }
+
     fn validate(devices: &HashMap<String, DeviceEntry>) -> Result<(), JmcpError> {
         use validation::*;
         for (name, entry) in devices {
@@ -727,6 +755,44 @@ impl Inventory {
             }
         }
         Ok(())
+    }
+}
+
+/// Collect `auth.type = ssh_key` private-key paths. Nested envelopes are
+/// walked so both the flat map and the versioned `devices` object match.
+fn collect_netconf_private_key_paths(value: &serde_json::Value, found: &mut Vec<PathBuf>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if map.get("type").and_then(serde_json::Value::as_str) == Some("ssh_key")
+                && let Some(path) = map
+                    .get("private_key_path")
+                    .and_then(serde_json::Value::as_str)
+            {
+                push_unique_path(found, path);
+            }
+            for child in map.values() {
+                collect_netconf_private_key_paths(child, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                collect_netconf_private_key_paths(child, found);
+            }
+        }
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {}
+    }
+}
+
+fn push_unique_path(found: &mut Vec<PathBuf>, path: &str) {
+    if path.is_empty() {
+        return;
+    }
+    let path = PathBuf::from(path);
+    if !found.iter().any(|existing| existing == &path) {
+        found.push(path);
     }
 }
 
@@ -1495,5 +1561,60 @@ mod envelope_insert_tests {
             matches!(error, JmcpError::DeviceExists(name) if name == "core-1"),
             "the refusal must name the device"
         );
+    }
+}
+
+#[cfg(test)]
+mod netconf_key_path_tests {
+    use super::Inventory;
+    use std::path::PathBuf;
+
+    #[test]
+    fn lists_ssh_key_paths_and_skips_passwords() {
+        let directory = tempfile::tempdir().unwrap();
+        let inventory = directory.path().join("devices.json");
+        std::fs::write(
+            &inventory,
+            r#"{
+                "r1": {"ip":"192.0.2.1","username":"netconf","auth":{"type":"ssh_key","private_key_path":"/keys/a"}},
+                "r2": {"ip":"192.0.2.2","username":"netconf","auth":{"type":"password","password":"x"}},
+                "r3": {"ip":"192.0.2.3","username":"netconf","auth":{"type":"password_env","password_env":"R3_PASSWORD"}},
+                "r4": {"ip":"192.0.2.4","username":"netconf","auth":{"type":"ssh_key","private_key_path":"/keys/a"}},
+                "r5": {"ip":"192.0.2.5","username":"netconf","auth":{"type":"ssh_key","private_key_path":"/keys/b"}},
+                "r6": {"ip":"192.0.2.6","username":"netconf","auth":{"type":"ssh_key","private_key_path":""}}
+            }"#,
+        )
+        .unwrap();
+
+        let paths = Inventory::netconf_private_key_paths(&inventory);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("/keys/a"), PathBuf::from("/keys/b")]
+        );
+    }
+
+    #[test]
+    fn an_envelope_inventory_is_walked() {
+        let directory = tempfile::tempdir().unwrap();
+        let inventory = directory.path().join("devices.json");
+        std::fs::write(
+            &inventory,
+            r#"{"version":1,"devices":{"r1":{"auth":{"type":"ssh_key","private_key_path":"/keys/env"}}}}"#,
+        )
+        .unwrap();
+
+        let paths = Inventory::netconf_private_key_paths(&inventory);
+        assert_eq!(paths, vec![PathBuf::from("/keys/env")]);
+    }
+
+    #[test]
+    fn a_missing_or_unparseable_file_yields_no_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("absent.json");
+        assert!(Inventory::netconf_private_key_paths(&missing).is_empty());
+
+        let broken = directory.path().join("broken.json");
+        std::fs::write(&broken, b"not json").unwrap();
+        assert!(Inventory::netconf_private_key_paths(&broken).is_empty());
     }
 }
