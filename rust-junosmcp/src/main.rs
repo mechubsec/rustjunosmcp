@@ -20,10 +20,12 @@ mod token_cmd;
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use cli::{Command, Transport};
+use mecmcp_secret::validate::{CredentialFileRole, CredentialFileSpec, validate_credential_files};
 use rmcp::ServiceExt;
 use rust_junosmcp::server::JmcpHandler;
 use rust_junosmcp_auth::TokenStoreFile;
-use rust_junosmcp_core::{DeviceManager, MecmcpScpRunner, Policy, TransferConfig};
+use rust_junosmcp_core::{DeviceManager, Inventory, MecmcpScpRunner, Policy, TransferConfig};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Resolve the token store, applying the legacy fallback ONLY for the canonical path.
@@ -35,11 +37,164 @@ use std::sync::Arc;
 /// or revoked credentials. A non-canonical path is loaded directly and fails if
 /// absent, which is the honest outcome.
 fn resolve_tokens(configured: &std::path::Path) -> Result<mecmcp_auth::ResolvedTokenPath> {
-    resolve_tokens_with(
-        configured,
-        std::path::Path::new("/var/lib/jmcp/tokens.json"),
-        std::path::Path::new("/etc/jmcp/tokens.json"),
+    let (canonical, legacy) = token_store_paths();
+    resolve_tokens_with(configured, &canonical, &legacy)
+}
+
+/// Canonical token store and the legacy `/etc` location an unmigrated install
+/// may still be using. Both come from [`cli::server_naming`], which is
+/// `jmcp`, so the paths stay `/var/lib/jmcp/tokens.json` and
+/// `/etc/jmcp/tokens.json`.
+fn token_store_paths() -> (PathBuf, PathBuf) {
+    let naming = cli::server_naming();
+    (
+        naming.state_dir.join("tokens.json"),
+        naming.config_dir.join("tokens.json"),
     )
+}
+
+/// Credential-adjacent files whose modes are checked together, before any of
+/// them is loaded.
+///
+/// A startup that checks one file and exits reports the next loose mode only
+/// on the next restart. [`validate_startup_credentials`] asks `mecmcp-secret`
+/// to report every offender in this list at once.
+///
+/// `known_hosts` is not here. Nothing mode-checks it today: the packaged mode
+/// is `0644`, and a strict check would refuse every current install. A custom
+/// CA bundle is likewise not a secret file.
+struct StartupCredentialFiles<'a> {
+    /// `devices.json`. Required. Holds credentials, so it is owner-only, the
+    /// same ceiling [`Inventory::load`] enforces.
+    inventory: &'a Path,
+    /// NETCONF SSH private keys named by the inventory. Each is required.
+    private_keys: &'a [PathBuf],
+    /// Bearer-token store this process will load. Required when set.
+    ///
+    /// This is the path [`resolve_tokens`] already selected, including the
+    /// legacy `/etc/jmcp/tokens.json` store when that fallback is in effect.
+    /// stdio does not load a token store, so it passes `None`.
+    tokens: Option<&'a Path>,
+    /// SSDF password files this process will load. Each is required.
+    ssdf_password_files: &'a [PathBuf],
+    /// SSDF segment signing key. Required when the pipeline will load it.
+    ssdf_signing_key: Option<&'a Path>,
+    /// Forward-sink bearer token. Required when the pipeline will load it.
+    audit_forward_token: Option<&'a Path>,
+    /// Audit HMAC key. Required when set; the caller creates a missing key first.
+    audit_hmac_key: Option<&'a Path>,
+    /// Listener TLS private key. Required when this process will load it.
+    tls_key: Option<&'a Path>,
+    /// Approval digest key from `--approval-digest-key-file`. Required when set.
+    approval_digest_key: Option<&'a Path>,
+}
+
+/// Check every credential-adjacent file in one pass.
+///
+/// # Errors
+/// Returns the aggregate validation error when any listed file is missing or
+/// fails its mode check. The error names every offender.
+fn validate_startup_credentials(
+    files: &StartupCredentialFiles<'_>,
+) -> Result<(), mecmcp_secret::CredentialValidationError> {
+    let mut specs =
+        Vec::with_capacity(1 + files.private_keys.len() + files.ssdf_password_files.len() + 6);
+    specs.push(CredentialFileSpec {
+        path: files.inventory,
+        role: CredentialFileRole::Secret,
+        description: "device inventory",
+        required: true,
+    });
+    for path in files.private_keys {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::Secret,
+            description: "NETCONF private key",
+            required: true,
+        });
+    }
+    if let Some(path) = files.tokens {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::Secret,
+            description: "bearer token store",
+            required: true,
+        });
+    }
+    for path in files.ssdf_password_files {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::Secret,
+            description: "SSDF password file",
+            required: true,
+        });
+    }
+    if let Some(path) = files.ssdf_signing_key {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::Secret,
+            description: "SSDF signing key",
+            required: true,
+        });
+    }
+    if let Some(path) = files.audit_forward_token {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::Secret,
+            description: "audit forward bearer token",
+            required: true,
+        });
+    }
+    if let Some(path) = files.audit_hmac_key {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::Secret,
+            description: "audit HMAC key",
+            required: true,
+        });
+    }
+    if let Some(path) = files.tls_key {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::Secret,
+            description: "TLS private key",
+            required: true,
+        });
+    }
+    if let Some(path) = files.approval_digest_key {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::Secret,
+            description: "approval digest key",
+            required: true,
+        });
+    }
+
+    validate_credential_files(&specs)
+}
+
+/// SSDF password files the evidence pipeline will actually load.
+///
+/// Absent `--ssdf-audit-endpoint`, `into_config` never opens these files, so
+/// a loose mode on an unused path must not refuse startup.
+fn ssdf_password_files(evidence: &mecmcp_runtime::cli::EvidenceArgs) -> Vec<PathBuf> {
+    if evidence.ssdf_audit_endpoint.is_none() {
+        return Vec::new();
+    }
+    let mut paths = Vec::new();
+    if let Some(path) = &evidence.ssdf_audit_password_file {
+        paths.push(path.clone());
+    }
+    if let Some(path) = &evidence.ssdf_audit_verify_password_file {
+        push_unique(&mut paths, path);
+    }
+    paths
+}
+
+fn push_unique(paths: &mut Vec<PathBuf>, path: &Path) {
+    if !paths.iter().any(|existing| existing == path) {
+        paths.push(path.to_path_buf());
+    }
 }
 
 /// The rule behind [`resolve_tokens`], with the two well-known paths injected so
@@ -235,6 +390,61 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("invalid --commit-confirm-default-mins: {e}"))?;
     rust_junosmcp_core::helpers::set_commit_confirm_default_mins(args.commit_confirm_default_mins);
 
+    // Only the files this process will load. stdio ignores `--tokens-file`.
+    // The legacy `/etc` fallback is applied here so the mode pass checks the
+    // store that will actually be loaded, not a canonical path that is not
+    // there yet. A non-canonical path is never substituted.
+    let private_keys = Inventory::netconf_private_key_paths(&args.device_mapping);
+    let tokens_resolved = match (&args.tokens_file, args.transport) {
+        (Some(configured), transport) if transport != Transport::Stdio => {
+            Some(resolve_tokens(configured)?)
+        }
+        _ => None,
+    };
+    let ssdf_passwords = ssdf_password_files(&args.evidence);
+    // The signing key and the forward token are read only once the SSDF
+    // pipeline is actually built. A path set without `--ssdf-audit-endpoint`
+    // is not opened.
+    let ssdf_signing_key = args
+        .evidence
+        .ssdf_audit_endpoint
+        .as_ref()
+        .and(args.evidence.ssdf_audit_signing_key.as_deref());
+    let audit_forward_token = match (
+        &args.evidence.ssdf_audit_endpoint,
+        &args.evidence.audit_forward_endpoint,
+    ) {
+        (Some(_), Some(_)) => args.evidence.audit_forward_token_file.as_deref(),
+        _ => None,
+    };
+    // The listener key is loaded only for streamable-http, and only when both
+    // halves of the pair are set. A stdio process never opens it.
+    #[cfg(feature = "tls")]
+    let tls_key = if args.transport == Transport::StreamableHttp {
+        match (&args.tls_cert, &args.tls_key) {
+            (Some(_), Some(key)) => Some(key.as_path()),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    #[cfg(not(feature = "tls"))]
+    let tls_key = None;
+    validate_startup_credentials(&StartupCredentialFiles {
+        inventory: &args.device_mapping,
+        private_keys: &private_keys,
+        tokens: tokens_resolved
+            .as_ref()
+            .map(|resolved| resolved.path.as_path()),
+        ssdf_password_files: &ssdf_passwords,
+        ssdf_signing_key,
+        audit_forward_token,
+        audit_hmac_key: args.audit_hmac_key_file.as_deref(),
+        tls_key,
+        approval_digest_key: args.approval_digest_key_file.as_deref(),
+    })
+    .context("credential file validation")?;
+
     let inv_path = args.device_mapping.clone();
     let (inventory, inv_hash) = rust_junosmcp_core::bootstrap::load_inventory(&inv_path)
         .map_err(anyhow::Error::from)
@@ -299,16 +509,19 @@ async fn main() -> Result<()> {
     // startup requirement for stdio too. A caller spawning the image for
     // stdio with no tokens.json mounted would otherwise fail before ever
     // reaching the MCP handshake, for a file that gates nothing it uses.
-    let token_store = match (&args.tokens_file, args.allow_no_auth, args.transport) {
-        (Some(_), _, Transport::Stdio) => {
+    let token_store = match (
+        args.tokens_file.as_deref(),
+        tokens_resolved,
+        args.allow_no_auth,
+        args.transport,
+    ) {
+        (Some(_), None, _, Transport::Stdio) => {
             tracing::info!("--tokens-file ignored: stdio has no bearer-token listener to protect");
             None
         }
-        (Some(configured_path), _, _) => {
+        (Some(configured_path), Some(resolved), _, _) => {
             // See resolve_tokens: the legacy /etc fallback applies only to the
             // canonical path, never to an operator-supplied one.
-            let resolved = resolve_tokens(configured_path)?;
-
             if let Some(from) = &resolved.fallback_from {
                 tracing::warn!(
                     configured = %configured_path.display(),
@@ -329,16 +542,21 @@ async fn main() -> Result<()> {
             );
             Some(Arc::new(store_file))
         }
-        (None, true, _) => {
+        (None, None, true, _) => {
             tracing::warn!("--allow-no-auth: streamable-http will accept unauthenticated requests");
             None
         }
-        (None, false, Transport::StreamableHttp) => {
+        (None, None, false, Transport::StreamableHttp) => {
             unreachable!(
                 "mecmcp_runtime::cli_validate::validate should have refused this combination"
             );
         }
-        _ => None,
+        (None, None, false, _) => None,
+        (Some(_), None, _, _) | (None, Some(_), _, _) => {
+            anyhow::bail!(
+                "internal: token-store resolution did not match --tokens-file and --transport"
+            );
+        }
     };
 
     match host_key_mode {
@@ -965,5 +1183,105 @@ mod audit_hmac_key_tests {
         let a = std::fs::read(&path_a).unwrap();
         let b = std::fs::read(&path_b).unwrap();
         assert_ne!(a, b, "two generated keys must not collide");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod startup_credential_tests {
+    use super::{StartupCredentialFiles, token_store_paths, validate_startup_credentials};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn deployed_token_paths_stay_on_the_jmcp_layout() {
+        let (canonical, legacy) = token_store_paths();
+        assert_eq!(canonical, PathBuf::from("/var/lib/jmcp/tokens.json"));
+        assert_eq!(legacy, PathBuf::from("/etc/jmcp/tokens.json"));
+        assert_eq!(
+            super::cli::server_naming().config_dir,
+            PathBuf::from("/etc/jmcp")
+        );
+        assert_eq!(
+            super::cli::server_naming().state_dir,
+            PathBuf::from("/var/lib/jmcp")
+        );
+    }
+
+    #[cfg(unix)]
+    fn write_file(dir: &Path, name: &str, mode: u32) -> PathBuf {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.join(name);
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(b"{}\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        path
+    }
+
+    fn files<'a>(
+        inventory: &'a Path,
+        private_keys: &'a [PathBuf],
+        tokens: Option<&'a Path>,
+        ssdf_password_files: &'a [PathBuf],
+    ) -> StartupCredentialFiles<'a> {
+        StartupCredentialFiles {
+            inventory,
+            private_keys,
+            tokens,
+            ssdf_password_files,
+            ssdf_signing_key: None,
+            audit_forward_token: None,
+            audit_hmac_key: None,
+            tls_key: None,
+            approval_digest_key: None,
+        }
+    }
+
+    /// Two loose modes must come back together. The failure this guards is a
+    /// startup that names the inventory, exits, and only names the password
+    /// file after that restart.
+    #[cfg(unix)]
+    #[test]
+    fn one_pass_reports_every_bad_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let inventory = write_file(dir.path(), "devices.json", 0o644);
+        let passwords = vec![write_file(dir.path(), "ssdf-audit.pw", 0o640)];
+
+        let error = validate_startup_credentials(&files(&inventory, &[], None, &passwords))
+            .expect_err("both files are looser than a secret file allows");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("2 credential file"),
+            "expected both failures in one error, got {message}"
+        );
+        assert!(message.contains("devices.json"), "{message}");
+        assert!(message.contains("ssdf-audit.pw"), "{message}");
+        assert!(message.contains("0644"), "{message}");
+        assert!(message.contains("0640"), "{message}");
+    }
+
+    /// Owner-only secret files pass together. A `0644` known_hosts is not an
+    /// input to this pass: nothing mode-checks that file today.
+    #[cfg(unix)]
+    #[test]
+    fn acceptable_modes_pass_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let inventory = write_file(dir.path(), "devices.json", 0o600);
+        let private_keys = vec![write_file(dir.path(), "id_ed25519", 0o600)];
+        let tokens = write_file(dir.path(), "tokens.json", 0o600);
+        let passwords = vec![
+            write_file(dir.path(), "ssdf-audit.pw", 0o600),
+            write_file(dir.path(), "ssdf-audit-verify.pw", 0o600),
+        ];
+        let hmac = write_file(dir.path(), "audit-hmac.key", 0o600);
+        let tls = write_file(dir.path(), "server.key", 0o600);
+        let _known_hosts = write_file(dir.path(), "known_hosts", 0o644);
+
+        let mut checked = files(&inventory, &private_keys, Some(&tokens), &passwords);
+        checked.audit_hmac_key = Some(&hmac);
+        checked.tls_key = Some(&tls);
+        validate_startup_credentials(&checked).expect("0600 secret files pass together");
     }
 }

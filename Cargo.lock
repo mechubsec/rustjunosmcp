@@ -3104,6 +3104,7 @@ dependencies = [
  "mecmcp-oidc",
  "mecmcp-redact",
  "mecmcp-runtime",
+ "mecmcp-secret",
  "mecmcp-transport",
  "metrics",
  "metrics-exporter-prometheus",

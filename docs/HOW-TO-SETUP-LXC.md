@@ -124,8 +124,8 @@ pct push 611 known_hosts    /etc/jmcp/known_hosts
 ```
 
 Then fix ownership and modes. **Do this for every credential file at once.** The
-server refuses to start on any file that is group- or world-readable, and it
-checks them one at a time — so getting this wrong costs you one restart per file:
+server refuses to start when any of these files is group- or world-readable, and
+it names every offender in one error:
 
 ```bash
 pct exec 611 -- bash -lc '
@@ -276,11 +276,10 @@ reconfiguring every client that talks to this rig.
 
 Both of these were hit during the rebuild this document is written from.
 
-**`mode 0644 is group- or world-accessible (owner uid 999, this process uid 999); run: chmod 600 /etc/jmcp/devices.json`**
-A credential file is too permissive. The message names the file and the exact
-fix. It is checked per file, so fix them all at once (step 5) or you will meet
-this again for the next one — which is how it was hit twice here, first for
-`devices.json` and then for `ssdf-audit.pw`.
+**`2 credential file(s) failed validation`**, naming `devices.json` and `ssdf-audit.pw`
+A credential file is too permissive. Startup names every loose file, its mode,
+and the `chmod` to run, in one error. Fix every file it lists before
+restarting. `known_hosts` stays mode `0644` and is not part of this check.
 
 **`failed to create file: /etc/systemd/system/rust-junosmcp.service.d/override.conf: No such file or directory`**
 The drop-in directory does not exist yet. `install.sh` does not create it,

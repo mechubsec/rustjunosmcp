@@ -28,7 +28,14 @@ fn stderr_for_request(extra_args: &[&str], request: &str) -> Vec<String> {
     // these tests passes the gate and goes on to actually dial the device.
     // Port 22 would hit any sshd running on the test host and attempt a
     // real (failing) login instead of failing fast on connection refused.
-    let inventory = common::write_inventory_temp(&[("r1", "127.0.0.1", 1, "u", "/dev/null")]);
+    let key = common::write_fake_netconf_key_temp();
+    let inventory = common::write_inventory_temp(&[(
+        "r1",
+        "127.0.0.1",
+        1,
+        "u",
+        key.path().to_str().expect("key path is utf8"),
+    )]);
 
     let mut cmd = Command::new(common::binary_path());
     cmd.args(["-t", "stdio"])
@@ -120,13 +127,16 @@ fn stdio_allows_load_and_commit_config_with_the_flag() {
 /// The refusal reaches the JSON-RPC caller as a tool error, not just the log.
 #[test]
 fn stdio_refusal_is_visible_to_the_caller() {
-    let mut child = common::spawn_stdio_server_with_args(&[
-        "-f",
-        common::write_inventory_temp(&[("r1", "127.0.0.1", 1, "u", "/dev/null")])
-            .path()
-            .to_str()
-            .unwrap(),
-    ]);
+    let key = common::write_fake_netconf_key_temp();
+    let inventory = common::write_inventory_temp(&[(
+        "r1",
+        "127.0.0.1",
+        1,
+        "u",
+        key.path().to_str().expect("key path is utf8"),
+    )]);
+    let mut child =
+        common::spawn_stdio_server_with_args(&["-f", inventory.path().to_str().unwrap()]);
     let result = common::call_tool(
         &mut child,
         "load_and_commit_config",
