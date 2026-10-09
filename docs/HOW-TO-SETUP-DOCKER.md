@@ -59,9 +59,10 @@ is the first thing that will stop you (see Troubleshooting):
 }
 ```
 
-Junos enables NETCONF over SSH with `set system services netconf ssh`, using
-the normal SSH port 22 by default. If NETCONF is configured on a dedicated
-port 830 instead, set `port` to 830 explicitly in the inventory.
+The server defaults to port 22, which reaches NETCONF over the device's
+regular SSH service (`set system services ssh`). If you enable the dedicated
+NETCONF listener with `set system services netconf ssh` (port 830 by
+default) and want to use it, set `port` to 830 explicitly.
 
 **`private_key_path` must be the in-container path**, not the host path. The
 file lives at `keys/id_ed25519` on the host and is mounted to `/etc/jmcp/keys`.
@@ -121,7 +122,7 @@ image=ghcr.io/mechubsec/rustjunosmcp:0.27.5
 docker pull "$image"
 image=$(docker inspect "$image" \
     --format '{{index .RepoDigests 0}}')
-# $image is now ghcr.io/...@sha256:... — pinned, and printable if you want it recorded
+# $image is now <registry>/...@sha256:... — pinned, and printable if you want it recorded
 ```
 
 The digest should be recorded wherever the deployment is tracked, since it identifies

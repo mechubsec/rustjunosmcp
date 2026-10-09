@@ -69,9 +69,10 @@ Full results, the mock-target overhead numbers, method and reproduction steps:
 > with `rustix`. A malformed token entry also no longer takes the whole store
 > offline at load.
 >
-> Tool surface is 41 tools by default (28 Junos-only with
+> Current tool surface: 44 tools by default (28 Junos-only with
 > `--no-default-features`). See the
-> [v0.10.0 release notes](https://github.com/mechubsec/rustjunosmcp/releases/tag/v0.10.0).
+> [v0.10.0 release notes](https://github.com/mechubsec/rustjunosmcp/releases/tag/v0.10.0)
+> for the authorization changes above.
 
 ## Feature scope
 
@@ -713,7 +714,7 @@ Silence means it is off.
 git clone https://github.com/mechubsec/rustjunosmcp.git
 cd RustJunosMCP
 
-# Build the default 41-tool Junos/SRX server with TLS.
+# Build the default 44-tool Junos/SRX server with TLS.
 cargo build --release
 
 # Optional: build the 28-tool Junos-only server without TLS.
@@ -732,7 +733,7 @@ $EDITOR devices.json   # set ip / username / auth
 
 ## Claude Desktop config
 
-One registration exposes every tool enabled in the built binary (41 with the
+One registration exposes every tool enabled in the built binary (44 with the
 default `srx` feature, or 28 in a Junos-only build):
 
 ```json
@@ -810,6 +811,11 @@ placeholder secret before use):
 
 This invocation leaves HTTP and TLS off because replacing the image CMD also
 removes its HTTP bind and TLS-related flags.
+
+The server defaults to port 22, which reaches NETCONF over the device's
+regular SSH service (`set system services ssh`). If you enable the dedicated
+NETCONF listener with `set system services netconf ssh` (port 830 by
+default) and want to use it, set `port` to 830 explicitly.
 
 > Running the two-person and lab-mode pair as containers, including the
 > published-vs-internal port trap that makes the allow-lists reject everything
@@ -917,13 +923,13 @@ authenticate that first connection out of band.
 Prefer to build locally instead:
 
 ```bash
-docker build -t rust-junosmcp:0.26 .
+docker build -t rust-junosmcp:local .
 
 docker run --rm -i \
   -v "$PWD/devices.json:/etc/jmcp/devices.json:ro" \
   -v "$PWD/keys:/etc/jmcp/keys:ro" \
   -v "$PWD/jmcp-state:/var/lib/jmcp" \
-  rust-junosmcp:0.26
+  rust-junosmcp:local
 ```
 
 ## LXC (Proxmox)

@@ -227,9 +227,11 @@ file:
             "private_key_path": "…", "host_key": "ssh-ed25519 AAAA…"}}
 ```
 
-Junos enables NETCONF over SSH with `set system services netconf ssh`, using
-the normal SSH port 22 by default. If NETCONF is configured on a dedicated
-port 830 instead, set `port` to 830 explicitly in the lab configuration.
+The server defaults to port 22, which reaches NETCONF over the device's
+regular SSH service (`set system services ssh`). If you enable the dedicated
+NETCONF listener with `set system services netconf ssh` (port 830 by
+default) and want to use it, set `port` to 830 explicitly in the lab
+configuration.
 
 Use a read-only Junos login class. If the device rate-limits SSH
 sessions, add `--pace-ms 2000 --settle-s 70` (the values used for our lab
