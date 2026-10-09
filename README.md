@@ -891,9 +891,10 @@ identity instead.
 dependency graph (not the image's distroless runtime base) is attached to the
 GitHub release and also pushed as an in-toto attestation on the image, signed
 keylessly the same way as above. This attestation is signed by the
-`sbom:` job in this repo's own `release-sbom.yml`, which delegates the actual
-attestation to mecmcp's reusable `reusable-attest-release-sbom.yml` workflow
-(as of v0.27.4), so the OIDC certificate subject is *that* workflow's path,
+`sbom:` job in this repo's own `release-sbom.yml`, which (starting with the
+first release after v0.27.5) delegates the actual attestation to mecmcp's
+reusable `reusable-attest-release-sbom.yml` workflow, so the OIDC certificate
+subject is *that* workflow's path,
 pinned to the exact commit SHA `release-sbom.yml`'s `uses:` line currently
 references — not this repo's own workflow file, and not a branch ref. That
 pin moves whenever `release-sbom.yml` is repinned to a newer mecmcp SHA or
@@ -923,7 +924,7 @@ cosign verify-attestation --type cyclonedx \
 The regexp is over the SHA (not an exact `--certificate-identity`) because
 dependabot or a maintainer may repin `release-sbom.yml` to a newer mecmcp
 commit; this only pins the path, not one specific commit. For releases up to
-and including v0.27.3, the attestation was instead signed directly by this
+and including v0.27.5, the attestation was instead signed directly by this
 repo's own `release-sbom.yml` workflow identity:
 
 ```bash
