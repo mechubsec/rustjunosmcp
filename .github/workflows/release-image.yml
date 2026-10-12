@@ -44,3 +44,29 @@ jobs:
     secrets:
       dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  tag-version:
+    name: Resolve tag version
+    # reusable-registry-publish.yml re-verifies the pushed tag's signature
+    # itself and has no workflow_dispatch story, so this job (and the
+    # registry-publish job below) only runs for the tag-push trigger.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Strip leading v from the pushed tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+  registry-publish:
+    name: Publish to MCP Registry
+    if: github.event_name == 'push'
+    needs: [release, tag-version]
+    permissions:
+      contents: read
+      id-token: write
+    uses: mechubsec/mecmcp/.github/workflows/reusable-registry-publish.yml@19401120439cd1420701bb59b6495bfdd3718b93 # v0.27.0
+    with:
+      version: ${{ needs.tag-version.outputs.version }}
+      oci-image: ghcr.io/${{ github.repository }}:${{ needs.tag-version.outputs.version }}
