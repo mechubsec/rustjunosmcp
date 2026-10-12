@@ -51,6 +51,7 @@ jobs:
     # itself and has no workflow_dispatch story, so this job (and the
     # registry-publish job below) only runs for the tag-push trigger.
     if: github.event_name == 'push'
+    permissions: {}
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -66,7 +67,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: mechubsec/mecmcp/.github/workflows/reusable-registry-publish.yml@19401120439cd1420701bb59b6495bfdd3718b93 # v0.27.0
+    uses: mechubsec/mecmcp/.github/workflows/reusable-registry-publish.yml@b1ca7b0a24cf7e7179e46b94a86e97ac8ebc23ba # v0.28.0
     with:
       version: ${{ needs.tag-version.outputs.version }}
       oci-image: ghcr.io/${{ github.repository }}:${{ needs.tag-version.outputs.version }}
