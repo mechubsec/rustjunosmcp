@@ -11,16 +11,23 @@
 /// Bare `session`/`sessions` is shielded only as a CLI word, i.e. when the
 /// next token is one of these keywords (`show security flow session
 /// summary`); `session <value>` stays masked.
-const KEYWORD_FOLLOWERS: &[&str] = &[
-    "summary",
-    "table",
-    "extensive",
-    "brief",
-    "terse",
-    "count",
-    "close",
-    "init",
+const KEYWORD_FOLLOWERS: &[&str] = &["summary", "table", "extensive", "brief", "terse", "count"];
+
+/// Words other than digits that may follow a shielded keyword within the same
+/// statement. Anything else means the keyword may be introducing a value, so
+/// it is not shielded and the generic pass masks the statement (fail closed).
+const STATEMENT_WORDS: &[&str] = &[
+    "session-init",
+    "session-close",
+    "limit-session",
+    "session",
+    "sessions",
+    "source-ip-based",
+    "destination-ip-based",
 ];
+
+/// Longest digit run accepted as a numeric argument (a limit or count).
+const MAX_DIGITS: usize = 10;
 
 fn is_token_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-' || c == '_'
@@ -44,6 +51,26 @@ pub fn redact_junos_text(input: &str) -> String {
     out
 }
 
+/// True when the rest of the statement (up to `;` or end of line) holds only
+/// numbers, whitespace, `{}|` and known non-secret keywords.
+fn statement_is_keywords_only(after: &str) -> bool {
+    let stmt = after.split([';', '\n', '\r']).next().unwrap_or("");
+    if !stmt
+        .chars()
+        .all(|c| is_token_char(c) || matches!(c, ' ' | '\t' | '{' | '}' | '|'))
+    {
+        return false;
+    }
+    stmt.split(|c: char| !is_token_char(c))
+        .filter(|w| !w.is_empty())
+        .all(|w| {
+            let w = w.to_ascii_lowercase();
+            (w.len() <= MAX_DIGITS && w.bytes().all(|b| b.is_ascii_digit()))
+                || STATEMENT_WORDS.contains(&w.as_str())
+                || KEYWORD_FOLLOWERS.contains(&w.as_str())
+        })
+}
+
 fn shield(input: &str, prefix: &str, kept: &mut Vec<String>) -> String {
     let mut out = String::with_capacity(input.len());
     let mut rest = input;
@@ -59,13 +86,14 @@ fn shield(input: &str, prefix: &str, kept: &mut Vec<String>) -> String {
         let after = &rest[end..];
         let lower = token.to_ascii_lowercase();
         let shield_it = match lower.as_str() {
-            "session-init" | "session-close" | "limit-session" => true,
+            "session-init" | "session-close" | "limit-session" => statement_is_keywords_only(after),
             // Bare words are CLI vocabulary only when a keyword follows
             // (`show security flow session summary`).
             "session" | "sessions" => {
                 let next = after.trim_start_matches([' ', '\t']);
                 let word_end = next.find(|c: char| !is_token_char(c)).unwrap_or(next.len());
                 KEYWORD_FOLLOWERS.contains(&next[..word_end].to_ascii_lowercase().as_str())
+                    && statement_is_keywords_only(after)
             }
             _ => false,
         };
@@ -133,6 +161,23 @@ mod tests {
         );
         assert!(out.contains("session-init"), "{out}");
         assert!(!out.contains("hunter2hunter2"), "{out}");
+    }
+
+    #[test]
+    fn values_after_session_keywords_are_masked() {
+        let cases = [
+            "session init 0123456789abcdef0123456789abcdef01234567",
+            "session close id=0123456789abcdef0123456789abcdef01234567",
+            "limit-session notanumber9f8e7d6c5b4a",
+            "session summary token 0123456789abcdef",
+        ];
+        for c in cases {
+            let out = redact_junos_text(c);
+            assert!(
+                !out.contains("0123456789abcdef") && !out.contains("notanumber"),
+                "value survived redaction: {out}"
+            );
+        }
     }
 
     #[test]
