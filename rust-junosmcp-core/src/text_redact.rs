@@ -29,6 +29,10 @@ const STATEMENT_WORDS: &[&str] = &[
 /// Longest digit run accepted as a numeric argument (a limit or count).
 const MAX_DIGITS: usize = 10;
 
+/// Longest statement tail (in chars) inspected after a shielded keyword.
+/// Longer tails are not shielded (fail closed), which keeps the scan linear.
+const MAX_STATEMENT_CHARS: usize = 256;
+
 fn is_token_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-' || c == '_'
 }
@@ -44,17 +48,51 @@ pub fn redact_junos_text(input: &str) -> String {
     }
     let mut kept: Vec<String> = Vec::new();
     let shielded = shield(input, &prefix, &mut kept);
-    let mut out = mecmcp_redact::junos::redact_log_text(&mecmcp_redact::redact_text(&shielded));
-    for (i, tok) in kept.iter().enumerate().rev() {
-        out = out.replace(&format!("{prefix}{i}Z"), tok);
+    let out = mecmcp_redact::junos::redact_log_text(&mecmcp_redact::redact_text(&shielded));
+    restore(&out, &prefix, &kept)
+}
+
+/// Replace every surviving `{prefix}{i}Z` marker with `kept[i]` in a single
+/// pass, so the cost stays linear in the output size.
+fn restore(out: &str, prefix: &str, kept: &[String]) -> String {
+    let mut res = String::with_capacity(out.len());
+    let mut rest = out;
+    while let Some(pos) = rest.find(prefix) {
+        res.push_str(&rest[..pos]);
+        let after = &rest[pos + prefix.len()..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        let tok = after[..digits]
+            .parse::<usize>()
+            .ok()
+            .and_then(|i| kept.get(i));
+        match tok {
+            Some(tok) if after[digits..].starts_with('Z') => {
+                res.push_str(tok);
+                rest = &after[digits + 1..];
+            }
+            _ => {
+                res.push_str(prefix);
+                rest = after;
+            }
+        }
     }
-    out
+    res.push_str(rest);
+    res
 }
 
 /// True when the rest of the statement (up to `;` or end of line) holds only
 /// numbers, whitespace, `{}|` and known non-secret keywords.
 fn statement_is_keywords_only(after: &str) -> bool {
-    let stmt = after.split([';', '\n', '\r']).next().unwrap_or("");
+    let window = after
+        .char_indices()
+        .nth(MAX_STATEMENT_CHARS)
+        .map_or(after, |(i, _)| &after[..i]);
+    let Some(stmt) = window.split([';', '\n', '\r']).next() else {
+        return false;
+    };
+    if stmt.len() == window.len() && window.len() < after.len() {
+        return false;
+    }
     if !stmt
         .chars()
         .all(|c| is_token_char(c) || matches!(c, ' ' | '\t' | '{' | '}' | '|'))
@@ -178,6 +216,25 @@ mod tests {
                 "value survived redaction: {out}"
             );
         }
+    }
+
+    /// Large configs carry one shielded keyword per policy; restoring them
+    /// must not rescan the whole output per marker.
+    #[test]
+    fn many_shielded_keywords_restore_in_order() {
+        let line = "set security policies from-zone a to-zone b policy p then log session-init\n\
+                    set security policies from-zone a to-zone b policy p then log session-close\n";
+        let big = line.repeat(20_000);
+        assert_eq!(redact_junos_text(&big), big);
+    }
+
+    /// A statement tail too long to inspect is not shielded (fail closed).
+    #[test]
+    fn overlong_statement_is_not_shielded() {
+        let long = format!("session-init {}", "session-init ".repeat(100));
+        assert!(!redact_junos_text(&long).starts_with("session-init session-init"));
+        let short = "limit-session { source-ip-based 100; destination-ip-based 50; }";
+        assert_eq!(redact_junos_text(short), short);
     }
 
     #[test]
