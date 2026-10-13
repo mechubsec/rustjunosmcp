@@ -116,22 +116,11 @@ pub(super) fn mint_request_id() -> String {
 /// layers [`mecmcp_redact::junos::redact_log_text`]'s closed, whole-word
 /// Junos key vocabulary *on top of* [`mecmcp_redact::redact_text`]'s
 /// cross-vendor substring denylist (via [`junos_log_text_fallback`]),
-/// rather than replacing it. The generic scan's `session` entry (kept
-/// broad for `session_id`/`session_token` shapes other vendors use,
-/// MEC-537) has no config-syntax awareness and blanks the rest of the
-/// *line* once it matches — so `then log session-init session-close;`,
-/// `limit-session 1000;`, and `show security flow session summary`
-/// counters all lost real, non-secret operational data to a line that
-/// merely contained the word "session". Running `redact_log_text` after
-/// `redact_text` does **not** fix that `session` false positive — by the
-/// time the Junos pass (whole-word-matching a closed key list with no
-/// `session` entry) runs, `redact_text` has already blanked the line. The
-/// `session` over-masking remains an accepted tradeoff until it is fixed
-/// upstream in `mecmcp` (tracked on MEC-2519). What running `redact_text`
-/// first adds back is the generic denylist's much broader secret coverage
-/// (PEM blocks, URL-userinfo passwords, bearer tokens,
-/// `api-key`/`shared-secret`/`psk`/`passphrase`, prose `password <value>`,
-/// ...) that the Junos-only vocabulary does not know about.
+/// rather than replacing it. A closed set of non-secret Junos `session`
+/// keywords (`session-init`, `session-close`, `limit-session`) is preserved
+/// around the generic pass; all other secret shapes (PEM blocks,
+/// URL-userinfo passwords, bearer tokens, `session-id`/`session-token`, ...)
+/// stay masked. See [`rust_junosmcp_core::text_redact`].
 pub(super) fn redact_body(s: &str) -> String {
     if let Ok(mut value) = serde_json::from_str::<Value>(s) {
         redact_json_preserving_server_fields(&mut value);
@@ -149,15 +138,9 @@ pub(super) fn redact_body(s: &str) -> String {
 /// Junos-specific [`mecmcp_redact::junos::redact_log_text`] pass on top of
 /// its output, so unstructured Junos CLI/config text gets the broader
 /// generic secret coverage plus whole-word Junos-key coverage the generic
-/// pass lacks. This does **not** fix the generic pass's `session`
-/// false-positive (MEC-2558 review of MEC-2519); that remains until the
-/// denylist is fixed upstream in `mecmcp`. Mirrors the composition
-/// `mecmcp_redact::junos::redact_log_artefact` uses for non-XML-shaped
-/// input, without going through its `Result`/XML-shape dispatch — callers
-/// here already know the input isn't XML (they tried that path and it
-/// either doesn't apply or already failed).
+/// pass lacks, while preserving non-secret Junos `session` keywords.
 pub(super) fn junos_log_text_fallback(s: &str) -> String {
-    mecmcp_redact::junos::redact_log_text(&mecmcp_redact::redact_text(s))
+    rust_junosmcp_core::text_redact::redact_junos_text(s)
 }
 
 /// Server-defined field names that survive [`redact_body`] /
@@ -3437,12 +3420,8 @@ mod redact_last_mile_tests {
     /// run `redact_text` first (restoring that coverage) and layer
     /// `redact_log_text` on top, so all of these keep getting caught.
     ///
-    /// Running `redact_text` first reintroduces its documented `session`
-    /// substring over-masking (MEC-2519/MEC-537) for genuinely non-secret
-    /// CLI text until that false positive is fixed upstream in `mecmcp`
-    /// (tracked on MEC-2519) — an accepted, explicitly reviewed tradeoff:
-    /// losing some non-secret "session" text is far cheaper than leaking a
-    /// real credential.
+    /// Non-secret Junos `session` keywords are preserved by the shared
+    /// text redactor; see its own tests.
     #[test]
     fn redact_body_still_catches_secret_shapes_the_junos_only_vocabulary_misses() {
         let body = format!(

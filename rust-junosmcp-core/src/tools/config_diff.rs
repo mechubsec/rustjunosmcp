@@ -59,9 +59,7 @@ pub async fn handle(args: ConfigDiffArgs, dm: Arc<DeviceManager>) -> Result<Valu
     // on top — see `get_config::redact_config_output`'s doc comment
     // (MEC-2519/MEC-2558) for why neither pass alone is sufficient.
     let stripped = strip_config_xml_wrapper(&result);
-    Ok(json!(mecmcp_redact::junos::redact_log_text(
-        &mecmcp_redact::redact_text(&stripped)
-    )))
+    Ok(json!(crate::text_redact::redact_junos_text(&stripped)))
 }
 
 #[cfg(test)]

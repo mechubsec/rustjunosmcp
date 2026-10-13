@@ -27,12 +27,10 @@ use std::time::Duration;
 /// pass alone is not a superset of the generic one — it has no entries for
 /// PEM bodies, URL-userinfo passwords, plaintext bearer tokens, or several
 /// generic secret-shaped keys, so using it *instead of* the generic pass
-/// let those shapes through unredacted). This still carries the generic
-/// denylist's documented `session`-substring over-masking (MEC-2519,
-/// tracked upstream in `mecmcp`) for genuinely non-secret Junos syntax like
-/// `then log session-init session-close;` or `limit-session 1000;` — an
-/// accepted, explicitly reviewed tradeoff until that false positive is
-/// fixed at its root in `mecmcp`'s denylist.
+/// let those shapes through unredacted). A closed set of non-secret Junos
+/// `session` keywords (`session-init`, `limit-session`, ...) is preserved by
+/// [`crate::text_redact::redact_junos_text`]; every other secret shape is
+/// still masked.
 ///
 /// `xml` and `json` output is parsed and structurally redacted via
 /// [`mecmcp_redact::redact_xml_str`] / [`mecmcp_redact::redact_json_value`]
@@ -67,7 +65,7 @@ fn redact_config_output(text: &str, format: &str) -> String {
 /// [`mecmcp_redact::junos::redact_log_text`]) replaced a bare
 /// `redact_log_text` call.
 fn junos_text_fallback(text: &str) -> String {
-    mecmcp_redact::junos::redact_log_text(&mecmcp_redact::redact_text(text))
+    crate::text_redact::redact_junos_text(text)
 }
 
 /// Build the `show configuration [<config_path>]` command for the requested
