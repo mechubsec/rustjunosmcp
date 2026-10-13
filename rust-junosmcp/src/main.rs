@@ -353,7 +353,7 @@ async fn main() -> Result<()> {
         evidence: args.evidence.clone(),
         approval_digest_key_file: args.approval_digest_key_file.clone(),
     };
-    mecmcp_runtime::cli_validate::validate(&shared_cli).map_err(|e| anyhow::anyhow!("{}", e))?;
+    mecmcp_runtime::cli_validate::validate_or_exit(&shared_cli);
 
     // Cross-check the verified-approver flags against this binary's own
     // --approval-digest-key-file and --lab-mode, which `VerifiedApproverArgs`
