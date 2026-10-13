@@ -121,7 +121,7 @@ mod tests {
                 "s3cr3tcomm",
                 "$6$abc",
             ] {
-                assert!(!out.contains(secret), "leaked {secret} in {out:?}");
+                assert!(!out.contains(secret), "secret survived redaction: {c}");
             }
         }
     }
