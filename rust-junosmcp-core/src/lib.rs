@@ -19,6 +19,7 @@ pub mod output;
 pub mod policy;
 pub mod progress;
 pub mod schema_alias;
+pub mod text_redact;
 pub mod tools;
 
 // Re-export mecmcp-device primitives
