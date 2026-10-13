@@ -41,10 +41,21 @@ fn is_token_char(c: char) -> bool {
 /// with the closed non-secret `session` keywords preserved.
 #[must_use]
 pub fn redact_junos_text(input: &str) -> String {
-    // Pick a marker prefix that cannot already occur in the input.
+    // Pick a marker prefix that cannot already occur in the input: one more
+    // `X` than the longest `X` run following any existing occurrence. A
+    // single pass, so device-supplied text cannot make this quadratic.
+    let longest_x_run = input
+        .match_indices("JMCPKEEP")
+        .map(|(i, m)| {
+            input[i + m.len()..]
+                .bytes()
+                .take_while(|&b| b == b'X')
+                .count()
+        })
+        .max();
     let mut prefix = String::from("JMCPKEEP");
-    while input.contains(&prefix) {
-        prefix.push('X');
+    if let Some(run) = longest_x_run {
+        prefix.push_str(&"X".repeat(run + 1));
     }
     let mut kept: Vec<String> = Vec::new();
     let shielded = shield(input, &prefix, &mut kept);
@@ -235,6 +246,16 @@ mod tests {
         assert!(!redact_junos_text(&long).starts_with("session-init session-init"));
         let short = "limit-session { source-ip-based 100; destination-ip-based 50; }";
         assert_eq!(redact_junos_text(short), short);
+    }
+
+    /// Picking a marker prefix absent from the input must stay linear even
+    /// when the input carries long runs that look like grown prefixes.
+    #[test]
+    fn marker_prefix_selection_is_linear_and_collision_free() {
+        let crafted = format!("JMCPKEEP{} session-init", "X".repeat(200_000));
+        assert_eq!(redact_junos_text(&crafted), crafted);
+        let mixed = "JMCPKEEPX0Z JMCPKEEPXX JMCPKEEP1Z then log session-init";
+        assert_eq!(redact_junos_text(mixed), mixed);
     }
 
     #[test]
