@@ -105,7 +105,9 @@ fn enabled_metrics_are_unauthenticated_bounded_and_live() {
             && line.contains("limit=\"request_body\"")
             && line.contains("event=\"request_rejected\"")
     }));
-    for forbidden in [
+    // Report a leak by position only: the failure message must not echo the
+    // forbidden value (a token or session id) or the scraped body that contains it.
+    for (index, forbidden) in [
         "secret-srx-token",
         token.expose_secret(),
         "secret-srx",
@@ -115,11 +117,13 @@ fn enabled_metrics_are_unauthenticated_bounded_and_live() {
         "session_id=",
         "correlation_id=",
         "error=",
-    ] {
+    ]
+    .iter()
+    .enumerate()
+    {
         assert!(
-            !scrape.body.contains(forbidden),
-            "metrics leaked {forbidden}: {}",
-            scrape.body
+            !scrape.body.contains(*forbidden),
+            "metrics leaked forbidden item #{index} of the list above"
         );
     }
 
