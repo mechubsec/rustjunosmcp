@@ -1406,8 +1406,8 @@ mod archive_security_tests {
         assert_eq!(
             link.1,
             tar::EntryType::Symlink,
-            "the link must be stored as a link; storing its target would put \
-             {secret:?}'s contents in the bundle"
+            "the link must be stored as a link; storing its target would put the \
+             secret file's contents in the bundle"
         );
 
         assert!(

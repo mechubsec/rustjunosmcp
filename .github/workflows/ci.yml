@@ -10,6 +10,10 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
+# Least privilege: every job only checks out and builds; none needs write access.
+permissions:
+  contents: read
+
 concurrency:
   # Cancel superseded runs on pull requests (each push / branch update restarts CI);
   # runs on the default branch always finish.
@@ -178,7 +182,7 @@ jobs:
         # Pinned past mecmcp#492, which adds the `audit_hmac_flag` manifest
         # key this repo's conformance.toml declares (MEC-1793). No mecmcp
         # tag covers it yet; repin to a tag once one is cut.
-        uses: mechubsec/mecmcp/packaging/conformance@f927c820f39369b2601e11e31334cc5b504b1fd1
+        uses: mechubsec/mecmcp/packaging/conformance@c1511e2fb2178687e15fc4a882899c17145bfa50
         with:
           staging: staging
           manifest: staging/conformance.toml
