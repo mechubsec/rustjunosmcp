@@ -127,7 +127,7 @@ pub(super) fn redact_body(s: &str) -> String {
         return serde_json::to_string_pretty(&value).unwrap_or_else(|_| junos_log_text_fallback(s));
     }
     if s.trim_start().starts_with('<')
-        && let Ok(redacted) = mecmcp_redact::redact_xml_str(s)
+        && let Ok(redacted) = mecmcp_redact::junos::redact_xml(s)
     {
         return redacted;
     }
@@ -223,7 +223,7 @@ fn restore_exempt_fields(original: &Value, redacted: &mut Value) {
 /// `mecmcp-redact`.
 pub(super) fn redact_json_preserving_server_fields(value: &mut Value) {
     let original = value.clone();
-    mecmcp_redact::redact_json_value(value);
+    mecmcp_redact::junos::redact_json_value(value);
     restore_exempt_fields(&original, value);
 }
 
@@ -3371,6 +3371,36 @@ mod redact_last_mile_tests {
         );
         mecmcp_redact::redact_xml_str(&redacted)
             .expect("redact_body must return input that still parses as XML");
+    }
+
+    /// Non-secret Junos `session` keywords survive the last-mile pass in
+    /// structured XML and JSON bodies, while real session secrets stay masked.
+    #[test]
+    fn redact_body_keeps_non_secret_session_keywords_in_structured_output() {
+        let xml = "<configuration><security><policies><policy><then><permit/><log><session-init/><session-close/></log></then></policy></policies><screen><limit-session><source-ip-based>100</source-ip-based></limit-session></screen></security></configuration>";
+        let redacted = redact_body(xml);
+        assert_eq!(redacted, xml, "non-secret session keywords were masked");
+
+        let json = serde_json::json!({
+            "then": { "log": { "session-init": [null], "session-close": [null] } },
+            "limit-session": { "source-ip-based": 100 },
+        });
+        let redacted = redact_body(&serde_json::to_string_pretty(&json).unwrap());
+        let value: Value = serde_json::from_str(&redacted).unwrap();
+        assert_eq!(value, json, "non-secret session keywords were masked");
+
+        let secret = serde_json::json!({
+            "session-id": "FAKEsessionvalue",
+            "session-token": "FAKEsessiontoken",
+            "limit-session": { "password": "FAKEpw" },
+        });
+        let redacted = redact_body(&secret.to_string());
+        assert!(
+            !redacted.contains("FAKEsession") && !redacted.contains("FAKEpw"),
+            "session secret leaked"
+        );
+        let redacted = redact_body("<c><session-id>FAKEsessionvalue</session-id></c>");
+        assert!(!redacted.contains("FAKEsession"), "session secret leaked");
     }
 
     /// Genuinely unstructured input (CLI/`set`-style output, a plain error
