@@ -33,7 +33,7 @@ use std::time::Duration;
 /// still masked.
 ///
 /// `xml` and `json` output is parsed and structurally redacted via
-/// [`mecmcp_redact::redact_xml_str`] / [`mecmcp_redact::redact_json_value`]
+/// [`mecmcp_redact::junos::redact_xml`] / [`mecmcp_redact::junos::redact_json_value`]
 /// so secrets are caught regardless of where they sit in the structure; if
 /// an unexpected or malformed device reply makes the fragment unparseable,
 /// this falls back to the same composed line redactor rather than shipping
@@ -42,13 +42,13 @@ use std::time::Duration;
 /// is never what reaches this function.
 fn redact_config_output(text: &str, format: &str) -> String {
     match format {
-        "xml" => match mecmcp_redact::redact_xml_str(text) {
+        "xml" => match mecmcp_redact::junos::redact_xml(text) {
             Ok(redacted) => redacted,
             Err(_) => junos_text_fallback(text),
         },
         "json" => match serde_json::from_str::<Value>(text) {
             Ok(mut value) => {
-                mecmcp_redact::redact_json_value(&mut value);
+                mecmcp_redact::junos::redact_json_value(&mut value);
                 serde_json::to_string_pretty(&value).unwrap_or_else(|_| junos_text_fallback(text))
             }
             Err(_) => junos_text_fallback(text),
