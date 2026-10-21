@@ -6,6 +6,18 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.28.1] - 2026-10-21
+
+### Fixed
+
+- **tokio 1.54.1.** 0.28.0 shipped tokio 1.54.0, which upstream yanked; 1.54.1
+  reverts its timer change ("remove the runtime handle from timers").
+- **Docker how-to matches the image's entrypoint** (#552). The image already
+  passes `--tokens-file` and `--audit-hmac-key-file`, so the documented run
+  commands, which passed `--tokens-file` again, failed to start. The token store
+  now mounts at `/var/lib/jmcp/tokens.json`, and `--audit-journald` is
+  documented as unavailable inside a container.
+
 ## [0.28.0] - 2026-10-21
 
 ### Security
