@@ -69,5 +69,5 @@ uuid         = "1"
 # proves `SshHostKeyMode::AcceptNew` refuses a changed host key end-to-end,
 # not just that it maps to the right enum variant. Same version rustnetconf
 # depends on; never shipped in the server binary.
-russh        = { version = "0.64", default-features = false, features = ["ring"] }
+russh        = { version = "0.64.1", default-features = false, features = ["ring"] }
 zeroize      = "1"
