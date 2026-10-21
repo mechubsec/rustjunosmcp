@@ -22,17 +22,23 @@ If you see that line and did not intend it, stop and fix the flag.
 ## What the image already supplies
 
 The image runs as numeric UID/GID `65532:65532` and its `ENTRYPOINT` already
-passes four arguments:
+passes six arguments:
 
 ```
 -f /etc/jmcp/devices.json
 --staging-dir /var/lib/jmcp/staging
 --known-hosts-file /var/lib/jmcp/known_hosts
 --device-lease-dir /var/lib/jmcp/device-leases
+--tokens-file /var/lib/jmcp/tokens.json
+--audit-hmac-key-file /var/lib/jmcp/audit-hmac.key
 ```
 
-So you append only what is left: transport, bind, tokens, allow-lists, and
-`--lab-mode` when you want it. Do not repeat the four above.
+So you append only what is left: transport, bind, allow-lists, and
+`--lab-mode` when you want it. Do not repeat the six above: passing one again
+stops startup with `the argument '--tokens-file <TOKENS_FILE>' cannot be used
+multiple times`. Put the token store where the image expects it by mounting it
+at `/var/lib/jmcp/tokens.json`. The audit HMAC key is generated in the state
+directory on first start if it is missing.
 
 ## 1. Prepare host paths
 
@@ -136,11 +142,10 @@ docker run -d --name junos-twoperson \
   -p 127.0.0.1:30030:30030 \
   -v "$PWD/devices.json:/etc/jmcp/devices.json:ro" \
   -v "$PWD/keys:/etc/jmcp/keys:ro" \
-  -v "$PWD/tokens.json:/etc/jmcp/tokens.json:ro" \
+  -v "$PWD/tokens.json:/var/lib/jmcp/tokens.json:ro" \
   -v "$PWD/state:/var/lib/jmcp" \
   "$image" \
   --transport streamable-http --host 0.0.0.0 --port 30030 \
-  --tokens-file /etc/jmcp/tokens.json \
   --allow-insecure-bind \
   --allowed-host 127.0.0.1:30030 --allowed-host localhost:30030 \
   --allowed-origin http://127.0.0.1:30030 --allowed-origin http://localhost:30030
@@ -168,11 +173,10 @@ docker run -d --name junos-labmode \
   -p 127.0.0.1:30040:30030 \
   -v "$PWD/devices.json:/etc/jmcp/devices.json:ro" \
   -v "$PWD/keys:/etc/jmcp/keys:ro" \
-  -v "$PWD/tokens.json:/etc/jmcp/tokens.json:ro" \
+  -v "$PWD/tokens.json:/var/lib/jmcp/tokens.json:ro" \
   -v "$PWD/state:/var/lib/jmcp" \
   "$image" \
   --transport streamable-http --host 0.0.0.0 --port 30030 \
-  --tokens-file /etc/jmcp/tokens.json \
   --allow-insecure-bind \
   --allowed-host 127.0.0.1:30040 --allowed-host localhost:30040 \
   --allowed-origin http://127.0.0.1:30040 --allowed-origin http://localhost:30040 \
@@ -254,6 +258,11 @@ the time you look for it with plain `docker ps`.
 an OpenSSH-compatible `scp -O`. The published image includes it; a custom image
 that strips it fails this check before the server accepts requests, so a broken
 image is never advertised as transfer-ready.
+
+**`Error: initializing audit tracing` / `No such file or directory (os error 2)`**
+`--audit-journald` needs the host's journald socket, which a container does not
+have. Leave it off and read the audit stream with `docker logs`, or keep it in
+the state directory with `--audit-log-file /var/lib/jmcp/audit.jsonl`.
 
 **Permission denied reading the inventory or writing state** — the container
 process is UID 65532 and does not own your files. Either `chown -R 65532:65532`
