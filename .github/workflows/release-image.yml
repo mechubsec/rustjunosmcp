@@ -32,7 +32,7 @@ jobs:
       # them itself -- see mecmcp's docs/RELEASE-WORKFLOWS.md.
       id-token: write
     # Pinned to mecmcp main after #440 merged (squash). Repin to a mecmcp tag once one is cut.
-    uses: mechubsec/mecmcp/.github/workflows/reusable-release-image.yml@c1511e2fb2178687e15fc4a882899c17145bfa50
+    uses: mechubsec/mecmcp/.github/workflows/reusable-release-image.yml@4815d7b4121be78745ceeae12c25ed86d6da9b2f
     with:
       # GHCR requires a lowercase image path; github.repository is already lowercase.
       image: ghcr.io/${{ github.repository }}
@@ -67,7 +67,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: mechubsec/mecmcp/.github/workflows/reusable-registry-publish.yml@b1ca7b0a24cf7e7179e46b94a86e97ac8ebc23ba # v0.28.0
+    uses: mechubsec/mecmcp/.github/workflows/reusable-registry-publish.yml@982b4d3e8cc660c97fe99826febac1476542cce5 # v0.28.2
     with:
       version: ${{ needs.tag-version.outputs.version }}
       oci-image: ghcr.io/${{ github.repository }}:${{ needs.tag-version.outputs.version }}
