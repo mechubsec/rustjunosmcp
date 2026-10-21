@@ -6,6 +6,22 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-10-21
+
+### Security
+
+- **russh is now 0.64.1** through rustnetconf 0.18.2 and rustez 0.19.1
+  (GHSA-4wc5-f2rc-q74m, GHSA-j7h2-66j4-ghjf; #535, #550). Both advisories
+  affect russh's server side, which this client does not use.
+- **Plain-text and structured tool output go through vendor-scoped Junos
+  redaction** (#526, #541). Non-secret session keywords are preserved.
+- CI uses a least-privilege workflow token and keeps secrets out of test
+  failure messages (#540).
+
+### Added
+
+- Tagged releases are published to the MCP Registry (#529).
+
 ### Changed
 
 - **Startup reports every credential-file mode problem in one pass.** The
@@ -28,6 +44,15 @@ All notable user-facing changes are recorded here. Format loosely follows
   an existing GitHub-verified signed tag that already has a published
   release. A dispatch is refused when that release already has a tarball
   signature bundle.
+- Startup refusals use mecmcp's shared CLI refusal guard (#530); mecmcp is
+  pinned to 0.28.2 (#541).
+
+### Upgrade note
+
+- The startup check now requires the audit HMAC key and every NETCONF
+  private key to be mode `0600`, owned by the service user, and not a
+  symlink. Deployments with looser permissions will refuse to start
+  until those files are fixed.
 
 ## [0.27.5] - 2026-10-07
 
