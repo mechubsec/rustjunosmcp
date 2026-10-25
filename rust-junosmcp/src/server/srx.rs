@@ -64,9 +64,7 @@ impl JmcpHandler {
     }
 
     fn srx_scope_to_call_result(e: ScopeError) -> Result<CallToolResult, rmcp::ErrorData> {
-        Ok(CallToolResult::error(vec![ContentBlock::text(
-            e.to_string(),
-        )]))
+        Ok(super::scope_denied_result(&e))
     }
 
     fn check_srx_tool_scope(
