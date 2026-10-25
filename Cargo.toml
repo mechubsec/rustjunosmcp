@@ -54,7 +54,7 @@ async-trait      = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 schemars     = "1.0"
 anyhow       = "1"
-rustez       = "0.19.1"
+rustez       = "0.20.0"
 # `version` is redundant for resolution alongside `tag`, but cargo-deny reads a
 # versionless dependency as a wildcard and rejects it under [bans].
 # All mecmcp crates MUST resolve to the same git ref. Cargo keys a git
@@ -129,7 +129,7 @@ ureq             = "2"
 minijinja        = { version = "2", default-features = false, features = ["builtins", "loader", "serde"] }
 dashmap          = "6"
 http-body        = "1"
-rustnetconf      = "0.18.2"
+rustnetconf      = "0.19.0"
 rustix           = "1.1"
 
 # Release build profile: LTO + strip for smaller binaries.

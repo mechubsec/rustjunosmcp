@@ -481,7 +481,7 @@ fn appid_cluster_install_syncs_both_nodes() {
             let lab_gap = msg.contains("[code=license_inactive]")
                 || msg.contains("[code=signatures_server_unreachable]")
                 || msg.contains("Connection reset")
-                || msg.contains("opening device");
+                || msg.contains("connection failed");
             assert!(lab_gap, "unexpected preview error: {msg}");
             return;
         }
@@ -510,7 +510,7 @@ fn appid_cluster_install_syncs_both_nodes() {
             let lab_gap = msg.contains("[code=license_inactive]")
                 || msg.contains("[code=signatures_server_unreachable]")
                 || msg.contains("Connection reset")
-                || msg.contains("opening device");
+                || msg.contains("connection failed");
             assert!(
                 lab_gap,
                 "expected completed/already_at_target OR a lab-gap error (license_inactive, signatures_server_unreachable, or connection failure), got: {msg}"
@@ -647,10 +647,15 @@ impl Client {
         let r = self.post_raw(Some(&sid), body);
         assert_eq!(r.code, 200, "{name} HTTP {}: {:?}", r.code, r.body);
         if r.body.pointer("/error/message").is_some() {
-            Err(r.body)
-        } else {
-            Ok(r.body)
+            return Err(r.body);
         }
+        // Device-open failures are coded tool errors (isError), not JSON-RPC
+        // errors; present them the same way so callers read one shape.
+        if r.body.pointer("/result/isError") == Some(&Value::Bool(true)) {
+            let text = r.body.pointer("/result/content/0/text").cloned();
+            return Err(json!({ "error": { "message": text.unwrap_or_default() } }));
+        }
+        Ok(r.body)
     }
 
     fn post_raw(&self, session: Option<&str>, body: Value) -> PostResult {

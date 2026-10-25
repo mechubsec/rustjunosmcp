@@ -203,7 +203,10 @@ fn sighup_reloads_readonly_inventory_for_junos_and_srx_tools() {
         }}),
     );
     let srx_body = srx.body.to_string();
-    assert!(srx_body.contains("opening device"), "body: {srx_body}");
+    assert!(
+        srx_body.contains("connection failed"),
+        "expected a connection error: {srx_body}"
+    );
     assert!(
         !srx_body.contains("not found in device mapping"),
         "SRX used stale inventory: {srx_body}"

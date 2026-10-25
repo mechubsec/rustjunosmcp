@@ -810,6 +810,21 @@ impl mecmcp_device::cancel::Cancellable for JmcpError {
 }
 
 impl JmcpError {
+    /// The typed NETCONF transport failure underneath, if this is one, so
+    /// callers can tell unreachable from rejected from locally misconfigured.
+    #[must_use]
+    pub fn netconf_transport(&self) -> Option<&rustnetconf::error::TransportError> {
+        match self {
+            Self::Rustez(inner) => match &**inner {
+                rustez::RustEzError::Netconf(rustnetconf::error::NetconfError::Transport(
+                    transport,
+                )) => Some(transport),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Returns the stable audit `error_kind` string for this error variant.
     ///
     /// Used by `AuditScope::fail_kind` to emit structured error classes to SIEM.

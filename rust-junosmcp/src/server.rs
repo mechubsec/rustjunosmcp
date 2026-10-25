@@ -228,6 +228,36 @@ pub(super) fn redact_json_preserving_server_fields(value: &mut Value) {
     restore_exempt_fields(&original, value);
 }
 
+/// Tools whose every device RPC is a read, so a `Connect` failure during them
+/// is safe to retry. An allow-list on purpose: a tool that can act (any write
+/// tool, but also `execute_junos_command`, which may run `request system
+/// reboot`) can reconnect after acting, and must not invite a repeat.
+const RETRY_SAFE_TOOLS: &[&str] = &[
+    "check_srx_feature_license",
+    "gather_device_facts",
+    "get_chassis_cluster_status",
+    "get_junos_candidate_fingerprint",
+    "get_junos_config",
+    "get_srx_security_services_status",
+    "junos_config_diff",
+    "list_staged_files",
+    "srx_flow_sessions",
+    "srx_list_nat_rules",
+    "srx_list_policies",
+    "srx_policy_match",
+    "srx_resolve_address",
+    "srx_resolve_application",
+    "validate_chassis_cluster_health",
+    "vpn_lifecycle_report",
+];
+
+tokio::task_local! {
+    /// Whether the call being served is on [`RETRY_SAFE_TOOLS`], set by
+    /// `call_tool` from the effective tool. Unset (a spawned task) reads as
+    /// "not known to be safe".
+    static READ_ONLY_CALL: bool;
+}
+
 /// Classify a [`rust_junosmcp_core::JmcpError`] for the structured tool-error
 /// body (mecmcp#547). `retryable` is derived from the code, so the policy is:
 /// only errors that provably happened before anything reached the device are
@@ -239,6 +269,27 @@ pub(super) fn tool_error_code(error: &rust_junosmcp_core::JmcpError) -> ToolErro
         InvalidArgument, NotFound, OutcomeUnknown, Unauthorized, UpstreamUnavailable,
     };
     use rust_junosmcp_core::JmcpError as E;
+    use rust_junosmcp_core::NetconfTransportError as T;
+    // Session-setup failures are typed since rustnetconf 0.19, but only a
+    // retry-safe read tool proves this was the first connect. Any other tool
+    // may be reconnecting after it acted (upgrade_junos after the reboot), so
+    // there every one of these stays outcome_unknown: verify before retrying.
+    let retry_safe_call = READ_ONLY_CALL.try_with(|read_only| *read_only) == Ok(true);
+    match error.netconf_transport() {
+        _ if !retry_safe_call => {}
+        Some(T::Connect(_)) => return UpstreamUnavailable,
+        Some(T::Auth(_) | T::Credentials(_)) => return Unauthorized,
+        Some(T::Config(_)) => return InvalidArgument,
+        Some(
+            T::HostKeyMismatch { .. } | T::HostKeyNotInKnownHosts { .. } | T::HostKeyRevoked { .. },
+        ) => return Unauthorized,
+        // Io/Ssh/Channel also occur mid-session, so they stay ambiguous.
+        _ => {}
+    }
+    // A retry-safe tool only reads, so even a stalled call is safe to repeat.
+    if retry_safe_call && matches!(error, E::Timeout(_)) {
+        return UpstreamUnavailable;
+    }
     match error {
         E::UnknownRouter(_)
         | E::RemoteFileMissing { .. }
@@ -2331,8 +2382,11 @@ impl ServerHandler for JmcpHandler {
             .protocol_version()
             .is_some_and(|version| version >= rmcp::model::ProtocolVersion::V_2025_06_18);
 
+        let read_only = RETRY_SAFE_TOOLS.contains(&effective_tool);
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        let mut result = self.tool_router.call(tcc).await;
+        let mut result = READ_ONLY_CALL
+            .scope(read_only, self.tool_router.call(tcc))
+            .await;
 
         // Last-mile redaction (MEC-859 F2): every tool response — Junos and
         // SRX, success and error — passes through here before anything else
@@ -3849,6 +3903,28 @@ mod redact_last_mile_tests {
 
     /// The code policy spot checks, including the retryable flag.
     #[test]
+    fn retry_safe_tools_are_real_read_tools() {
+        for tool in RETRY_SAFE_TOOLS {
+            assert!(
+                rust_junosmcp_auth::KNOWN_TOOLS.contains(tool),
+                "{tool} is not a tool"
+            );
+            assert!(
+                !rust_junosmcp_auth::WRITE_TOOLS.contains(tool),
+                "{tool} is a write tool"
+            );
+        }
+        // Not write tools, but each can run an arbitrary (mutating) command.
+        for tool in [
+            "execute_junos_command",
+            "execute_junos_command_batch",
+            "execute_junos_pfe_command",
+        ] {
+            assert!(!RETRY_SAFE_TOOLS.contains(&tool), "{tool}");
+        }
+    }
+
+    #[test]
     fn coded_error_mapping_spot_checks() {
         use rust_junosmcp_core::JmcpError;
         let body = |err: JmcpError| {
@@ -3856,8 +3932,51 @@ mod redact_last_mile_tests {
             assert_eq!(result.is_error, Some(true));
             result.structured_content.expect("coded error has a body")
         };
+        let transport = |err: rustnetconf::error::TransportError| {
+            body(JmcpError::from(rustez::RustEzError::Netconf(
+                rustnetconf::error::NetconfError::Transport(err),
+            )))
+        };
+        use rustnetconf::error::TransportError as T;
+        let refused = || transport(T::Connect("connection refused".into()));
+        let read = READ_ONLY_CALL.sync_scope(true, refused);
+        assert_eq!(read["code"], "upstream_unavailable");
+        assert_eq!(read["retryable"], true);
+        // A write tool may have acted before reconnecting; so may an unknown one.
+        assert_eq!(
+            READ_ONLY_CALL.sync_scope(false, refused)["code"],
+            "outcome_unknown"
+        );
+        assert_eq!(refused()["code"], "outcome_unknown");
+        // Outside a retry-safe read tool every setup error is outcome_unknown.
+        assert_eq!(
+            READ_ONLY_CALL.sync_scope(false, || transport(T::Auth("denied".into())))["code"],
+            "outcome_unknown"
+        );
+        for (err, code) in [
+            (T::Auth("denied".into()), "unauthorized"),
+            (
+                T::Credentials("failed to read SSH key file".into()),
+                "unauthorized",
+            ),
+            (
+                T::Config("proxy_command and jump_hosts".into()),
+                "invalid_argument",
+            ),
+            (T::HostKeyRevoked { host: "r1".into() }, "unauthorized"),
+            // Also occurs mid-session (a commit may have landed): ambiguous.
+            (T::Ssh("reset".into()), "outcome_unknown"),
+        ] {
+            let coded = READ_ONLY_CALL.sync_scope(true, || transport(err));
+            assert_eq!(coded["code"], code, "{coded}");
+            assert_eq!(coded["retryable"], false, "{coded}");
+        }
         let timeout = body(JmcpError::Timeout(std::time::Duration::from_secs(1)));
         assert_eq!(timeout["code"], "outcome_unknown");
+        let read_timeout = READ_ONLY_CALL.sync_scope(true, || {
+            body(JmcpError::Timeout(std::time::Duration::from_secs(1)))
+        });
+        assert_eq!(read_timeout["code"], "upstream_unavailable");
         assert_eq!(timeout["retryable"], false);
         assert_eq!(
             body(JmcpError::UnknownRouter("r1".into()))["code"],
