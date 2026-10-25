@@ -747,6 +747,18 @@ default `srx` feature, or 28 in a Junos-only build):
 }
 ```
 
+[`examples/`](examples/) has ready-to-edit configs for Claude Desktop
+(`claude_desktop_config.json`) and VS Code (`vscode-mcp.json`, for
+`.vscode/mcp.json`: stdio, plus streamable HTTP with the bearer token prompted
+rather than stored). Both run as your own user, so they pass per-user
+`--device-lease-dir`, `--state-file`, `--known-hosts-file`, `--staging-dir`
+and `--support-bundle-staging-dir` paths (the defaults under `/var/lib/jmcp`
+and `/etc/jmcp` belong to the service account; drop the last flag in a
+Junos-only build),
+and `devices.json` must be mode `0600`. Add `"--tool-mode", "compact"` to
+`args` to list only `execute` and `get_router_list`. Register one stdio
+instance per state file: a second process on the same file exits.
+
 ## Docker
 
 ### Run with Docker

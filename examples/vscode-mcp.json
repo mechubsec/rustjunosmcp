@@ -1,0 +1,29 @@
+{
+  "inputs": [
+    {
+      "id": "junos-token",
+      "type": "promptString",
+      "description": "rust-junosmcp bearer token",
+      "password": true
+    }
+  ],
+  "servers": {
+    "junos": {
+      "type": "stdio",
+      "command": "/path/to/rust-junosmcp",
+      "args": [
+        "-f", "/home/you/.config/rust-junosmcp/devices.json",
+        "--known-hosts-file", "/home/you/.config/rust-junosmcp/known_hosts",
+        "--device-lease-dir", "/home/you/.local/state/rust-junosmcp/device-leases",
+        "--state-file", "/home/you/.local/state/rust-junosmcp/changeset-state.json",
+        "--staging-dir", "/home/you/.local/state/rust-junosmcp/staging",
+        "--support-bundle-staging-dir", "/home/you/.local/state/rust-junosmcp/srx-staging"
+      ]
+    },
+    "junos-remote": {
+      "type": "http",
+      "url": "https://junos01.example:8443/mcp",
+      "headers": { "Authorization": "Bearer ${input:junos-token}" }
+    }
+  }
+}

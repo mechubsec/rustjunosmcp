@@ -219,6 +219,23 @@ pub fn spawn_stdio_server_with_protocol(extra_args: &[&str], protocol_version: &
     }
 }
 
+/// Send a `tools/list` and return the listed tool names.
+pub fn list_tool_names(child: &mut StdioChild) -> Vec<String> {
+    let id = child.next_id;
+    child.next_id += 1;
+    send(
+        &mut child.stdin,
+        &json!({ "jsonrpc": "2.0", "id": id, "method": "tools/list", "params": {} }),
+    );
+    let resp = read_response_with_id(&child.lines, id);
+    resp.pointer("/result/tools")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("missing /result/tools: {resp}"))
+        .iter()
+        .filter_map(|tool| tool.get("name")?.as_str().map(str::to_owned))
+        .collect()
+}
+
 /// Send a `tools/call` and block until the matching response arrives.
 ///
 /// Returns:

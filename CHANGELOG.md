@@ -6,6 +6,15 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **`--tool-mode full|compact`** (env `MCP_TOOL_MODE`, #554, mecmcp#547).
+  Compact lists only `execute` and `get_router_list`, for clients that pay per
+  listed tool; every tool stays callable through `execute`. Listing only:
+  per-token scopes still filter the list and authorize each call.
+- **Client config examples** (#554): `examples/claude_desktop_config.json` and
+  `examples/vscode-mcp.json` (stdio and bearer-token HTTP).
+
 ## [0.28.1] - 2026-10-21
 
 ### Fixed
