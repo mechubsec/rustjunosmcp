@@ -826,7 +826,8 @@ async fn main() -> Result<()> {
         args.allow_plane_owned_writes,
         args.web_approver.web_enabled_approver,
         direct_commit,
-    );
+    )
+    .with_tool_mode(args.tool_mode.tool_mode);
     #[cfg(feature = "srx")]
     let handler = handler.with_srx_runtime(
         token_store.is_some() && matches!(args.transport, Transport::StreamableHttp),

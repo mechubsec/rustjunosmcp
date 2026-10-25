@@ -286,6 +286,11 @@ pub struct Cli {
     #[command(flatten)]
     pub verified_approver: VerifiedApproverArgs,
 
+    /// `--tool-mode full|compact` (env `MCP_TOOL_MODE`): compact lists only
+    /// `execute` and `get_router_list`. Listing only; scopes still authorize.
+    #[command(flatten)]
+    pub tool_mode: mecmcp_runtime::cli::ToolModeArgs,
+
     /// File containing the HMAC key for the change-set approval digest.
     ///
     /// Required by `--require-verified-approver`, which signs the

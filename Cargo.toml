@@ -88,20 +88,20 @@ rustez       = "0.19.1"
 #
 # mecmcp is consumed at an exact pinned tag; all crates must resolve to the
 # same git ref (see the TypeId note above).
-mecmcp-audit = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
-mecmcp-auth  = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
-mecmcp-transport = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
-mecmcp-runtime = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
-mecmcp-policy = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
-mecmcp-inventory = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
-mecmcp-device = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
-mecmcp-changeset = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
-mecmcp-scp = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
-mecmcp-secret = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
-mecmcp-redact = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
-mecmcp-oidc = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
-mecmcp-http = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
-mecmcp-server = { version = "0.28.3", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.3" }
+mecmcp-audit = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-auth  = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-transport = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-runtime = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-policy = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-inventory = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-device = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-changeset = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-scp = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-secret = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-redact = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-oidc = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-http = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-server = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
 globset      = "0.4"
 regex        = "1"
 metrics                     = "0.24.6"

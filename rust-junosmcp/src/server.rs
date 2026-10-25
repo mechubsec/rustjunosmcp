@@ -546,6 +546,10 @@ pub(super) fn classify_router_access(allows: bool, in_inventory: bool) -> Router
     }
 }
 
+/// What `--tool-mode compact` lists (mecmcp#547): the `execute` facade, whose
+/// description carries the operation catalogue, and device discovery.
+pub(super) const COMPACT_TOOLS: &[&str] = &[execute::NAME, "get_router_list"];
+
 /// MCP server handler implementing the Junos and SRX tool surface.
 ///
 /// Coordinates tool dispatch through `rmcp::ServerHandler`, enforces caller
@@ -569,6 +573,8 @@ pub struct JmcpHandler {
     /// Gate for tools that commit to a device with no change-set approval at
     /// all. Refused by default; set via --allow-direct-commit CLI flag.
     direct_commit: mecmcp_audit::DirectCommitPolicy,
+    /// `Some(COMPACT_TOOLS)` under `--tool-mode compact`; `None` lists all.
+    compact_tools: Option<&'static [&'static str]>,
     #[cfg(feature = "srx")]
     pub(super) started: Arc<tokio::time::Instant>,
     #[cfg(feature = "srx")]
@@ -627,6 +633,7 @@ impl JmcpHandler {
             allow_plane_owned_writes,
             web_enabled_approver,
             direct_commit,
+            compact_tools: None,
             #[cfg(feature = "srx")]
             started: Arc::new(tokio::time::Instant::now()),
             #[cfg(feature = "srx")]
@@ -638,6 +645,15 @@ impl JmcpHandler {
             #[cfg(feature = "srx")]
             support_bundle_staging: Default::default(),
         }
+    }
+
+    /// List only [`COMPACT_TOOLS`] under [`ToolMode::Compact`](mecmcp_runtime::cli::ToolMode).
+    /// Listing only: every tool stays callable within the caller's scope.
+    #[must_use]
+    pub fn with_tool_mode(mut self, mode: mecmcp_runtime::cli::ToolMode) -> Self {
+        self.compact_tools =
+            (mode == mecmcp_runtime::cli::ToolMode::Compact).then_some(COMPACT_TOOLS);
+        self
     }
 
     /// Configure SRX-specific runtime settings: whether authorization is required for
@@ -2359,8 +2375,11 @@ impl ServerHandler for JmcpHandler {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
-        let tools =
-            filter_tools_for_scope(self.tool_router.list_all(), caller_ctx(&context.extensions));
+        // Mode first: it only removes tools, so scope still has the last word.
+        let tools = filter_tools_for_scope(
+            mecmcp_server::filter_tools_for_mode(self.tool_router.list_all(), self.compact_tools),
+            caller_ctx(&context.extensions),
+        );
         // `with_all_items` leaves `ttl_ms` and `cache_scope` unset, and both are
         // omitted on the wire. A 2026-07-28 client validates the tools/list
         // result and rejects one without them — reported as "tools fetch
