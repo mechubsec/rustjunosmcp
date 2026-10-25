@@ -3130,6 +3130,7 @@ dependencies = [
  "rcgen",
  "reqwest 0.12.28",
  "rmcp",
+ "russh",
  "rust-junosmcp-auth",
  "rust-junosmcp-core",
  "rust-junosmcp-srx-core",
