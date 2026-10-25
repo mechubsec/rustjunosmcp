@@ -8,6 +8,8 @@
 //! - streamable-http helpers: spawn the binary on an ephemeral port, POST
 //!   JSON-RPC, parse SSE, assert HTTP behavior (auth, sessions, etc.).
 
+pub mod fake_netconf;
+
 use serde_json::{Value, json};
 use std::io::{BufReader, Write};
 use std::net::TcpListener;
