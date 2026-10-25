@@ -161,6 +161,12 @@ fn read_response_with_id(lines: &BoundedLines, id: i64) -> Value {
 /// `initialize` (id=0) + `notifications/initialized` handshake before
 /// returning. Subsequent `tools/call` ids start at 2.
 pub fn spawn_stdio_server_with_args(extra_args: &[&str]) -> StdioChild {
+    spawn_stdio_server_with_protocol(extra_args, "2025-03-26")
+}
+
+/// [`spawn_stdio_server_with_args`], negotiating `protocol_version` instead
+/// of the default 2025-03-26.
+pub fn spawn_stdio_server_with_protocol(extra_args: &[&str], protocol_version: &str) -> StdioChild {
     ensure_built();
 
     let device_lease_dir = tempfile::tempdir().expect("create device lease directory");
@@ -191,7 +197,7 @@ pub fn spawn_stdio_server_with_args(extra_args: &[&str]) -> StdioChild {
         &json!({
             "jsonrpc": "2.0", "id": 0, "method": "initialize",
             "params": {
-                "protocolVersion": "2025-03-26",
+                "protocolVersion": protocol_version,
                 "capabilities": {},
                 "clientInfo": { "name": "smoke", "version": "0.1" }
             }

@@ -938,7 +938,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1810,8 +1810,8 @@ checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
 
 [[package]]
 name = "mecmcp-audit"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -1840,8 +1840,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-auth"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -1859,8 +1859,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-changeset"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "async-trait",
  "getrandom 0.4.3",
@@ -1884,8 +1884,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-device"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "async-trait",
  "rustix",
@@ -1900,8 +1900,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-http"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "mecmcp-openapi",
  "mecmcp-secret",
@@ -1916,8 +1916,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-inventory"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "mecmcp-secret",
  "serde",
@@ -1930,8 +1930,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-oidc"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "async-trait",
  "jsonwebtoken",
@@ -1947,16 +1947,16 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-openapi"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "mecmcp-policy"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "globset",
  "quick-xml",
@@ -1966,8 +1966,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-redact"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "hmac",
  "quick-xml",
@@ -1979,8 +1979,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-runtime"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "anyhow",
  "clap",
@@ -1998,8 +1998,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-scp"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2017,8 +2017,8 @@ dependencies = [
 
 [[package]]
 name = "mecmcp-secret"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "rustix",
  "thiserror",
@@ -2026,9 +2026,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "mecmcp-server"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
+dependencies = [
+ "http",
+ "mecmcp-audit",
+ "mecmcp-auth",
+ "mecmcp-redact",
+ "quick-xml",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "mecmcp-transport"
-version = "0.28.2"
-source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.2#982b4d3e8cc660c97fe99826febac1476542cce5"
+version = "0.28.3"
+source = "git+https://github.com/mechubsec/mecmcp?tag=v0.28.3#d23d283c1e170845779607b99220e724fbaa3ecd"
 dependencies = [
  "axum",
  "axum-server",
@@ -2654,7 +2671,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3105,6 +3122,7 @@ dependencies = [
  "mecmcp-redact",
  "mecmcp-runtime",
  "mecmcp-secret",
+ "mecmcp-server",
  "mecmcp-transport",
  "metrics",
  "metrics-exporter-prometheus",
@@ -3269,7 +3287,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3327,7 +3345,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3902,7 +3920,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4472,7 +4490,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

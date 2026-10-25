@@ -5,7 +5,7 @@ use rmcp::handler::server::{
     router::tool::{ToolRoute, ToolRouter},
     tool::{ToolCallContext, parse_json_object},
 };
-use rmcp::model::{CallToolRequestParams, CallToolResult, ContentBlock, Tool, ToolAnnotations};
+use rmcp::model::{CallToolRequestParams, CallToolResult, Tool, ToolAnnotations};
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
 
@@ -82,11 +82,14 @@ fn unknown_operation_result(
     audit.meta("operation", summary.clone());
     audit.meta("operation_bytes", operation.len() as u64);
     audit.fail_kind("unknown_operation", UNKNOWN_CODE);
-    CallToolResult::error(vec![ContentBlock::text(format!(
-        "{UNKNOWN_CODE}: rejected operation {summary:?} ({} bytes); retry with an exact operation name. Allowed operations: {}",
-        operation.len(),
-        allowed.join(", ")
-    ))])
+    super::coded_error(
+        mecmcp_server::ToolErrorCode::InvalidArgument,
+        &format!(
+            "{UNKNOWN_CODE}: rejected operation {summary:?} ({} bytes); retry with an exact operation name. Allowed operations: {}",
+            operation.len(),
+            allowed.join(", ")
+        ),
+    )
 }
 
 /// Resolve a raw facade operation only when it exactly matches a compiled
