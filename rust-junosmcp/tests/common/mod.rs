@@ -266,12 +266,26 @@ pub fn call_tool(child: &mut StdioChild, name: &str, args: Value) -> Value {
 // are reused as-is.
 // ---------------------------------------------------------------------------
 
+///
+/// The kernel can hand the same ephemeral port to two parallel tests once the
+/// probe listener is dropped and before either server binds. The loser's server
+/// fails to bind, yet `wait_for_port` succeeds against the winner and the test
+/// then sees 401 `invalid_token`. Remember every port issued in this process
+/// and never reissue one.
 pub fn pick_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    static ISSUED: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+    loop {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut issued = ISSUED.lock().unwrap();
+        if !issued.contains(&port) {
+            issued.push(port);
+            return port;
+        }
+    }
 }
 
 /// RAII child guard: kills + waits on drop so panics don't leak processes.
