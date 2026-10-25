@@ -108,3 +108,28 @@ fn a_refused_connection_is_coded_for_an_srx_tool() {
     );
     assert_eq!(body["code"], "upstream_unavailable", "{body}");
 }
+
+/// rmcp rejects a malformed argument before any handler runs; that error
+/// carries the coded body too.
+#[test]
+fn a_malformed_argument_is_a_coded_invalid_argument() {
+    let inv = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(inv.path(), "{}").unwrap();
+    let mut server =
+        spawn_stdio_server_with_protocol(&["-f", inv.path().to_str().unwrap()], "2025-06-18");
+    let resp = call_tool(
+        &mut server,
+        "gather_device_facts",
+        json!({ "routre": "r1" }),
+    );
+    assert!(
+        resp.to_string()
+            .contains("failed to deserialize parameters"),
+        "{resp}"
+    );
+    assert_eq!(
+        resp["structuredContent"]["code"], "invalid_argument",
+        "{resp}"
+    );
+    assert_eq!(resp["structuredContent"]["retryable"], false, "{resp}");
+}

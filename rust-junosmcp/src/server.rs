@@ -2393,6 +2393,15 @@ impl ServerHandler for JmcpHandler {
         // inspects or returns it, so a tool that forgot its own redaction
         // still cannot leak a secret to the model. See `redact_last_mile`.
         redact_last_mile(&mut result);
+        // rmcp turns a bad argument into a text-only error before any handler
+        // runs; give it the same coded body every handler error carries.
+        if let Ok(rmcp::model::CallToolResponse::Complete(call_result)) = &mut result
+            && call_result.structured_content.is_none()
+            && let Some(message) = argument_rejection_message(call_result).map(str::to_owned)
+        {
+            call_result.structured_content =
+                coded_error(ToolErrorCode::InvalidArgument, &message).structured_content;
+        }
         if !structured_ok {
             strip_structured_content(&mut result);
         }
