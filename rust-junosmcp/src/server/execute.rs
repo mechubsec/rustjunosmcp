@@ -11,6 +11,9 @@ use std::sync::Arc;
 
 pub(super) const NAME: &str = "execute";
 const UNKNOWN_CODE: &str = "RJMCP_EXECUTE_UNKNOWN_OPERATION";
+/// Also the prefix `call_tool` recognises to audit the rejection once, under
+/// the concrete operation and its device, like rmcp's own argument errors.
+pub(super) const INVALID_ARGUMENT_CODE: &str = "RJMCP_EXECUTE_INVALID_ARGUMENT";
 const MAX_REJECTED_OPERATION_CHARS: usize = 96;
 const MAX_OPERATION_CHARS: usize = 128;
 
@@ -29,9 +32,15 @@ pub(super) fn route(concrete: ToolRouter<JmcpHandler>) -> ToolRoute<JmcpHandler>
         .map(|tool| tool.name.into_owned())
         .collect::<Vec<_>>();
     allowed.sort_unstable();
+    let schemas = concrete
+        .list_all()
+        .into_iter()
+        .map(|tool| (tool.name.into_owned(), tool.input_schema))
+        .collect::<std::collections::HashMap<_, _>>();
     ToolRoute::new_dyn(attr, move |context: ToolCallContext<'_, JmcpHandler>| {
         let concrete = concrete.clone();
         let allowed = allowed.clone();
+        let schemas = schemas.clone();
         Box::pin(async move {
             let caller = caller_ctx(&context.request_context.extensions);
             if let Err(error) = context.service.check_tool_scope(caller, NAME) {
@@ -54,6 +63,12 @@ pub(super) fn route(concrete: ToolRouter<JmcpHandler>) -> ToolRoute<JmcpHandler>
             let Some(operation) = operation else {
                 return Ok(unknown_operation_result(&outer.operation, &allowed, caller).into());
             };
+            if let Some(problem) = schemas
+                .get(operation)
+                .and_then(|schema| validate_arguments(schema, &outer.arguments))
+            {
+                return Ok(invalid_argument_result(&problem).into());
+            }
             let mut request =
                 CallToolRequestParams::new(operation.clone()).with_arguments(outer.arguments);
             request.input_responses = context.input_responses;
@@ -92,6 +107,67 @@ fn unknown_operation_result(
     )
 }
 
+/// Not audited here: `call_tool` records it under the concrete operation.
+fn invalid_argument_result(problem: &str) -> CallToolResult {
+    super::coded_error(
+        mecmcp_server::ToolErrorCode::InvalidArgument,
+        // No operation name: a `session` word later on the line (srx_flow_sessions)
+        // makes last-mile redaction blank the quoted field name. The caller sent
+        // the operation, and the audit record carries it.
+        &format!("{INVALID_ARGUMENT_CODE}: {problem}"),
+    )
+}
+
+/// Check forwarded arguments against the target tool's input schema before
+/// dispatch: top-level `required` names are present and each supplied value
+/// has the JSON type its property declares. Returns a message naming only the
+/// offending field (never its value), or `None` when the arguments pass.
+///
+/// Required-ness follows `allOf` (every branch) and `anyOf`/`oneOf` (at least
+/// one branch), which is how the device/router alias group is expressed.
+///
+/// shortcut: `oneOf`'s at-most-one half, `$ref`, `const`, bounds and nested
+/// objects are left to the tool's own serde deserialisation; extend here if a
+/// tool's schema starts relying on them.
+fn validate_arguments(
+    schema: &Map<String, Value>,
+    arguments: &Map<String, Value>,
+) -> Option<String> {
+    let properties = schema.get("properties").and_then(Value::as_object)?;
+    // An unknown name is usually a typo (`routre`); serde's unknown-field error
+    // names it, where "missing device" would point the caller the wrong way.
+    if arguments.keys().any(|name| !properties.contains_key(name)) {
+        return None;
+    }
+    if let Some(problem) = missing_required(&Value::Object(schema.clone()), arguments) {
+        return Some(problem);
+    }
+    arguments.iter().find_map(|(name, value)| {
+        let declared = properties.get(name)?.get("type")?;
+        let declared = match declared {
+            Value::String(single) => vec![single.as_str()],
+            Value::Array(many) => many.iter().filter_map(Value::as_str).collect(),
+            _ => return None,
+        };
+        let matches = declared.iter().any(|json_type| match *json_type {
+            "string" => value.is_string(),
+            "integer" => value.is_i64() || value.is_u64(),
+            "number" => value.is_number(),
+            "boolean" => value.is_boolean(),
+            "array" => value.is_array(),
+            "object" => value.is_object(),
+            "null" => value.is_null(),
+            _ => true,
+        });
+        (!matches).then(|| {
+            format!(
+                "argument {name:?} must be of type {}",
+                declared.join(" or ")
+            )
+        })
+    })
+}
+
 /// Resolve a raw facade operation only when it exactly matches a compiled
 /// concrete tool, without echoing caller-controlled strings into audit fields.
 pub(super) fn concrete_operation(arguments: Option<&Map<String, Value>>) -> Option<&'static str> {
@@ -100,6 +176,45 @@ pub(super) fn concrete_operation(arguments: Option<&Map<String, Value>>) -> Opti
     #[cfg(feature = "srx")]
     let names = names.chain(rust_junosmcp_auth::SRX_TOOLS);
     names.copied().find(|name| *name == operation)
+}
+
+/// The first unmet requirement in `schema`, named from the schema only.
+fn missing_required(schema: &Value, arguments: &Map<String, Value>) -> Option<String> {
+    let missing = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .find(|name| !arguments.contains_key(*name));
+    if let Some(name) = missing {
+        return Some(format!("missing required argument {name:?}"));
+    }
+    let branches = |keyword| schema.get(keyword).and_then(Value::as_array);
+    if let Some(problem) = branches("allOf")
+        .into_iter()
+        .flatten()
+        .find_map(|branch| missing_required(branch, arguments))
+    {
+        return Some(problem);
+    }
+    for keyword in ["anyOf", "oneOf"] {
+        let Some(alternatives) = branches(keyword) else {
+            continue;
+        };
+        if !alternatives
+            .iter()
+            .any(|branch| missing_required(branch, arguments).is_none())
+        {
+            let group = alternatives
+                .iter()
+                .map(required_groups)
+                .collect::<Vec<_>>()
+                .join(" or ");
+            return Some(format!("missing required argument: one of {group}"));
+        }
+    }
+    None
 }
 
 fn required_groups(schema: &Value) -> String {
@@ -296,6 +411,45 @@ mod tests {
             required_groups(&schema),
             "action and (device or router) and (file and checksum or package)"
         );
+    }
+
+    #[test]
+    fn validation_follows_the_device_alias_group() {
+        let schema = json!({"allOf":[{"oneOf":[
+            {"required":["device"]},{"required":["router_name"]},{"required":["router"]}]}],
+            "required":["command"],
+            "properties":{"device":{"type":"string"},"router_name":{"type":"string"},
+                "router":{"type":"string"},"command":{"type":"string"}}});
+        let schema = schema.as_object().unwrap();
+        let check = |args: Value| validate_arguments(schema, args.as_object().unwrap());
+        assert_eq!(check(json!({"command":"x","router":"r1"})), None);
+        let missing = check(json!({"command":"x"})).unwrap();
+        assert!(
+            missing.contains("device") && missing.contains("router_name"),
+            "{missing}"
+        );
+        assert!(
+            check(json!({"router":"r1"}))
+                .unwrap()
+                .contains("\"command\"")
+        );
+        // A typo is left to serde, whose unknown-field error names it.
+        assert_eq!(check(json!({"command":"x","routre":"r1"})), None);
+    }
+
+    #[test]
+    fn validation_flags_missing_required_and_wrong_types_without_values() {
+        let schema = json!({"required":["a"],"properties":{
+            "a":{"type":"string"},"n":{"type":["integer","null"]},"b":{"type":"boolean"},
+            "r":{"$ref":"#/x"}}});
+        let schema = schema.as_object().unwrap();
+        let check = |args: Value| validate_arguments(schema, args.as_object().unwrap());
+        assert_eq!(check(json!({"a":"x","n":null,"b":true,"r":1})), None);
+        assert!(check(json!({})).unwrap().contains("\"a\""));
+        let wrong = check(json!({"a":"x","n":"s3cret"})).unwrap();
+        assert!(wrong.contains("\"n\"") && !wrong.contains("s3cret"));
+        assert!(check(json!({"a":"x","n":1.5})).is_some());
+        assert!(check(json!({"a":7})).is_some());
     }
 
     #[test]
