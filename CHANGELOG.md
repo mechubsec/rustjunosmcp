@@ -6,7 +6,33 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-25
+
+**1.0: rust-junosmcp is no longer beta.** The README's new
+[Stability](README.md#stability) section lists the surfaces now covered by
+semantic versioning: tool names and schemas, tool-error codes, CLI flags,
+environment variables, inventory and token formats, audit fields and metric
+names.
+
 ### Added
+
+- **Coded tool errors** (#556, #565, mecmcp#547). Every tool error carries a
+  structured body, `{code, message, retryable}`, for peers that negotiated
+  2025-06-18 or later; older peers get the text block alone. That includes
+  rmcp's own argument rejections (`failed to deserialize parameters`), which
+  are `invalid_argument`.
+- **Session-setup failures are classified by type** (#554). Through
+  rustnetconf 0.19's typed transport errors, a retry-safe read tool reports
+  an unreachable device or a stalled read as `upstream_unavailable`
+  (retryable), rejected or unusable credentials and host-key refusals as
+  `unauthorized`, and local setup that cannot succeed as `invalid_argument`.
+  Any other tool keeps `outcome_unknown`, because it may reconnect after it
+  has acted (for example `upgrade_junos` after the reboot); verify before
+  retrying.
+- **`execute` validates arguments before dispatch** (#559): required names,
+  including the device/router alias group, and declared JSON types. Failures
+  are coded `invalid_argument`, name the field and never its value, and are
+  audited once under the concrete operation.
 
 - **`--tool-mode full|compact`** (env `MCP_TOOL_MODE`, #554, mecmcp#547).
   Compact lists only `execute` and `get_router_list`, for clients that pay per
@@ -14,6 +40,29 @@ All notable user-facing changes are recorded here. Format loosely follows
   per-token scopes still filter the list and authorize each call.
 - **Client config examples** (#554): `examples/claude_desktop_config.json` and
   `examples/vscode-mcp.json` (stdio and bearer-token HTTP).
+
+### Changed
+
+- **SRX tools' device-open failures are coded tool errors**, as Junos tools'
+  already were, instead of JSON-RPC `-32603` internal errors.
+- **`get_junos_candidate_fingerprint`** no longer rewrites a device failure
+  as a validation error, so it keeps its type and code.
+- **Fresh-connect retries back off exponentially** (#558): `base * 2^(n-1)`,
+  capped at 10 s, instead of a fixed 3 s.
+- **mecmcp 0.28.4, rustez 0.20.0, rustnetconf 0.19.0.**
+
+### Security
+
+- **crypto-bigint 0.7.9** (RUSTSEC-2026-0387; 0.7.6 to 0.7.8 were yanked)
+  and **ctutils 0.4.5** (RUSTSEC-2026-0385) (#555, #563).
+
+### Tests
+
+- **Loopback fake NETCONF device** (#560). CI now covers a read, a refused
+  lock and a failed commit (with rollback and unlock) end to end through the
+  real binary.
+- **Port-reuse flake fixed** (#561): parallel HTTP tests could be handed the
+  same port.
 
 ## [0.28.1] - 2026-10-21
 
