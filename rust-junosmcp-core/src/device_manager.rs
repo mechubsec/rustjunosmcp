@@ -35,8 +35,21 @@ const POOL_RPC_TIMEOUT: Duration = Duration::from_secs(3600);
 /// `upgrade_junos::wait_for_netconf`; this only absorbs short transients.
 const CONNECT_MAX_ATTEMPTS: u32 = 3;
 
-/// Fixed backoff between fresh-connect retry attempts.
+/// Base backoff between fresh-connect retry attempts; doubles each retry.
 const CONNECT_RETRY_BACKOFF: Duration = Duration::from_secs(3);
+
+/// Ceiling on any single retry delay, so a raised attempt count cannot stall a
+/// tool call for minutes behind a dead device.
+const RETRY_BACKOFF_CAP: Duration = Duration::from_secs(10);
+
+/// Delay before retry following the 1-based `attempt`: `base * 2^(attempt-1)`,
+/// saturating, capped at [`RETRY_BACKOFF_CAP`].
+fn backoff_delay(base: Duration, attempt: u32) -> Duration {
+    let factor = 1u32
+        .checked_shl(attempt.saturating_sub(1))
+        .unwrap_or(u32::MAX);
+    base.saturating_mul(factor).min(RETRY_BACKOFF_CAP)
+}
 
 // ── Transient-error classification ──────────────────────────────────────
 
@@ -70,7 +83,7 @@ pub(crate) fn error_is_transient(err: &str) -> bool {
 }
 
 /// Retry an async operation on transient errors with bounded attempts and a
-/// fixed backoff. The op closure receives the 1-based attempt number. Returns
+/// capped exponential backoff. The op closure receives the 1-based attempt number. Returns
 /// the first `Ok`, or the last `Err`. Non-transient errors short-circuit
 /// immediately (no retry), so genuine failures (auth, unknown router, RPC
 /// errors) still fail fast.
@@ -95,7 +108,7 @@ where
                     error = %err,
                     "transient error; retrying after backoff"
                 );
-                tokio::time::sleep(backoff).await;
+                tokio::time::sleep(backoff_delay(backoff, attempt)).await;
             }
             Err(err) => return Err(err),
         }
@@ -846,6 +859,15 @@ mod tests {
     }
 
     // ── retry_transient bounded-backoff helper (issue #83) ───────────────
+
+    #[test]
+    fn backoff_delay_doubles_then_caps() {
+        let base = Duration::from_secs(3);
+        let secs: Vec<u64> = (1..=5).map(|n| backoff_delay(base, n).as_secs()).collect();
+        assert_eq!(secs, [3, 6, 10, 10, 10]);
+        assert_eq!(backoff_delay(base, u32::MAX), RETRY_BACKOFF_CAP);
+        assert_eq!(backoff_delay(Duration::ZERO, 4), Duration::ZERO);
+    }
 
     #[tokio::test]
     async fn retry_transient_succeeds_after_two_transient_failures() {

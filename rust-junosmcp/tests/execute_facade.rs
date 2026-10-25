@@ -225,3 +225,59 @@ fn execute_cannot_recurse() {
         assert!(error_text(&result).contains("RJMCP_EXECUTE_UNKNOWN_OPERATION"));
     });
 }
+
+#[test]
+fn execute_rejects_a_missing_required_argument_before_dispatch() {
+    with_server(|server| {
+        let result = execute(
+            server,
+            "execute_junos_command",
+            json!({"router":"unreachable"}),
+        );
+        let text = error_text(&result);
+        assert!(text.contains("RJMCP_EXECUTE_INVALID_ARGUMENT"), "{text}");
+        assert!(text.contains("\"command\""), "{text}");
+    });
+}
+
+#[test]
+fn execute_rejects_a_wrong_typed_argument_without_echoing_it() {
+    with_server(|server| {
+        let result = execute(
+            server,
+            "gather_device_facts",
+            json!({"device":"unreachable","timeout":"do-not-echo"}),
+        );
+        let text = error_text(&result);
+        assert!(text.contains("RJMCP_EXECUTE_INVALID_ARGUMENT"), "{text}");
+        assert!(text.contains("\"timeout\""), "{text}");
+        assert!(!text.contains("do-not-echo"), "{text}");
+    });
+}
+
+/// A `session` word on the line makes last-mile redaction blank a quoted field
+/// name, so the message must not carry the operation name.
+#[cfg(feature = "srx")]
+#[test]
+fn execute_names_the_field_even_for_a_session_operation() {
+    with_server(|server| {
+        let result = execute(
+            server,
+            "srx_flow_sessions",
+            json!({"router":"unreachable","include_raw":"yes"}),
+        );
+        let text = error_text(&result);
+        assert!(text.contains("RJMCP_EXECUTE_INVALID_ARGUMENT"), "{text}");
+        assert!(text.contains("\"include_raw\""), "{text}");
+    });
+}
+
+#[test]
+fn execute_rejects_a_missing_device_alias_before_dispatch() {
+    with_server(|server| {
+        let result = execute(server, "gather_device_facts", json!({}));
+        let text = error_text(&result);
+        assert!(text.contains("RJMCP_EXECUTE_INVALID_ARGUMENT"), "{text}");
+        assert!(text.contains("router_name"), "{text}");
+    });
+}
