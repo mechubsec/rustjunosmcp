@@ -21,6 +21,30 @@ inventory format and core tool surface, but built on async Rust
 ([rustEZ](https://github.com/mechubsec/rustez) +
 [rustnetconf](https://github.com/mechubsec/rustnetconf)) instead of PyEZ.
 
+## Stability
+
+rust-junosmcp is **1.0**: no longer beta. From 1.0.0 on, the surfaces below
+change incompatibly only in a new major version, and anything deprecated is
+announced in the [CHANGELOG](CHANGELOG.md) at least one minor release first.
+
+- **MCP tools:** names, input schemas (required arguments and their types),
+  and the `execute` facade's operation names. Pinned by
+  `tests/stdio_smoke.rs` and `tests/compat_surface_v0_12_0.rs`.
+- **Tool errors:** the structured body's `code` values (`invalid_argument`,
+  `unauthorized`, `not_found`, `rate_limited`, `upstream_unavailable`,
+  `outcome_unknown`) and what `retryable` means, plus the `RJMCP_*` and
+  `[code=...]` tags in error text.
+- **Configuration:** CLI flags, `JMCP_*` and `MCP_TOOL_MODE` environment
+  variables, and the `devices.json` and `tokens.json` formats, including
+  token tool and device scopes.
+- **Operations:** audit record fields and Prometheus metric names (pinned by
+  `tests/prometheus_contract.rs`).
+
+Not covered: the wording of human-readable messages and logs, the shape of
+free-text tool output, and the Rust APIs of the workspace's internal crates.
+Supported platforms are Linux only, in LXC or Docker; see
+[Remote transport + auth](#remote-transport--auth) for the deployment model.
+
 ## Beyond Juniper/junos-mcp-server
 
 Drop-in on `devices.json` and the core tools — plus a lot the Python/PyEZ server doesn't have:
