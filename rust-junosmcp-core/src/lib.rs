@@ -49,6 +49,7 @@ pub use error::JmcpError;
 pub use inventory::{AddDeviceAuth, AuthConfig, DeviceEntry, Inventory};
 pub use policy::Policy;
 pub use rustez::HostKeyVerification;
+pub use rustnetconf::error::TransportError as NetconfTransportError;
 pub use tools::transfer_file::{
     MecmcpScpRunner, MockScpRunner, ScpJob, ScpOutcome, ScpRunner, TransferConfig,
 };

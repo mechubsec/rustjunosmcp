@@ -3134,9 +3134,11 @@ dependencies = [
  "rust-junosmcp-auth",
  "rust-junosmcp-core",
  "rust-junosmcp-srx-core",
+ "rustez",
  "rustix",
  "rustls",
  "rustls-pki-types",
+ "rustnetconf",
  "schemars",
  "serde",
  "serde_json",
@@ -3257,9 +3259,9 @@ dependencies = [
 
 [[package]]
 name = "rustez"
-version = "0.19.1"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a1ec2b29fc3cb049933473e28a651aa7445a4b1a8931eab3cad9caa6e5036e8"
+checksum = "427aba5bbb0f60f89e8fcebfc9f733ae97dbfdd364ac561f69e7953341017528"
 dependencies = [
  "quick-xml",
  "rustnetconf",
@@ -3368,12 +3370,14 @@ dependencies = [
 
 [[package]]
 name = "rustnetconf"
-version = "0.18.2"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70369f31866c08801ee265d4fb06cf1f5a63a8cd9b07e2a918bac198d0211ae4"
+checksum = "65cb4c9a1a9ce892f0a7f2e2b198a7cb1c19dbca8a9fae316ce297bfde5c418c"
 dependencies = [
  "async-trait",
  "base64ct",
+ "crypto-bigint",
+ "ctutils",
  "quick-xml",
  "ring",
  "russh",

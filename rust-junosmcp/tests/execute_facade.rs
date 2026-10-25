@@ -178,7 +178,8 @@ fn routes_connection_error(operation: &str, args: Value) {
             json!({"operation":operation,"arguments":args}),
         );
         if operation == "check_srx_feature_license" {
-            assert_eq!(result["error"]["code"], -32603);
+            // SRX device-open failures are coded tool errors, like Junos ones.
+            assert_eq!(result["result"]["isError"], true, "{result}");
         }
         let text = result
             .pointer("/error/message")

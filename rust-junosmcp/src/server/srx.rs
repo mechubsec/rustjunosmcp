@@ -401,10 +401,14 @@ impl JmcpHandler {
             });
             return Self::srx_scope_to_call_result(e);
         }
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let resp = rust_junosmcp_srx_core::workflows::cluster_status::run(&mut device, args)
             .await
             .map_err(|e| match e {
@@ -458,10 +462,14 @@ impl JmcpHandler {
             });
             return Self::srx_scope_to_call_result(e);
         }
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let resp = rust_junosmcp_srx_core::workflows::services_status::run(&mut device, args)
             .await
             .map_err(|e| match e {
@@ -516,10 +524,14 @@ impl JmcpHandler {
             });
             return Self::srx_scope_to_call_result(e);
         }
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let resp = rust_junosmcp_srx_core::workflows::license::run(&mut device, args)
             .await
             .map_err(|e| match e {
@@ -571,10 +583,14 @@ impl JmcpHandler {
             });
             return Self::srx_scope_to_call_result(e);
         }
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let resp = rust_junosmcp_srx_core::workflows::vpn_lifecycle::run(&mut device, args)
             .await
             .map_err(|e| match e {
@@ -621,10 +637,14 @@ impl JmcpHandler {
             });
             return Self::srx_scope_to_call_result(e);
         }
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let resp = rust_junosmcp_srx_core::workflows::list_policies::run(&mut device, args)
             .await
             .map_err(|e| match e {
@@ -678,10 +698,14 @@ impl JmcpHandler {
             });
             return Self::srx_scope_to_call_result(e);
         }
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let resp = rust_junosmcp_srx_core::workflows::resolve_address::run(&mut device, args)
             .await
             .map_err(|e| match e {
@@ -741,10 +765,14 @@ impl JmcpHandler {
             });
             return Self::srx_scope_to_call_result(e);
         }
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let resp = rust_junosmcp_srx_core::workflows::resolve_application::run(&mut device, args)
             .await
             .map_err(|e| match e {
@@ -793,10 +821,14 @@ impl JmcpHandler {
             });
             return Self::srx_scope_to_call_result(e);
         }
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let resp = rust_junosmcp_srx_core::workflows::list_nat_rules::run(&mut device, args)
             .await
             .map_err(|e| match e {
@@ -882,10 +914,14 @@ impl JmcpHandler {
             .map_err(Self::signature_error_to_rmcp)?;
         }
 
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let result = rust_junosmcp_srx_core::workflows::idp_package::run(
             &mut device,
             &self.device_leases,
@@ -969,10 +1005,14 @@ impl JmcpHandler {
             .map_err(Self::signature_error_to_rmcp)?;
         }
 
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let result = rust_junosmcp_srx_core::workflows::appid_package::run(
             &mut device,
             &self.device_leases,
@@ -1032,10 +1072,14 @@ impl JmcpHandler {
             });
             return Self::srx_scope_to_call_result(e);
         }
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let resp = rust_junosmcp_srx_core::workflows::cluster_health::run(&mut device, args)
             .await
             .map_err(|e| match e {
@@ -1108,10 +1152,14 @@ impl JmcpHandler {
         }
         rust_junosmcp_srx_core::workflows::support_bundle::validate_path_inputs(&args)
             .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let result = rust_junosmcp_srx_core::workflows::support_bundle::run(
             &mut device,
             args,
@@ -1169,10 +1217,14 @@ impl JmcpHandler {
             });
             return Self::srx_scope_to_call_result(e);
         }
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let resp = rust_junosmcp_srx_core::workflows::flow_sessions::run(&mut device, args)
             .await
             .map_err(|e| match e {
@@ -1224,10 +1276,14 @@ impl JmcpHandler {
             });
             return Self::srx_scope_to_call_result(e);
         }
-        let mut device =
-            self.dm.open(&args.router).await.map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("opening device: {e}"), None)
-            })?;
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
         let resp = rust_junosmcp_srx_core::workflows::policy_match::run(&mut device, args)
             .await
             .map_err(|e| match e {

@@ -1786,10 +1786,8 @@ pub async fn get_candidate_fingerprint(
     dm: Arc<DeviceManager>,
 ) -> Result<Value, JmcpError> {
     let transaction = JunosTransaction::new(dm, args.device.clone());
-    let fingerprint = transaction
-        .fingerprint()
-        .await
-        .map_err(|e| JmcpError::Validation(e.to_string()))?;
+    // Propagated as-is, so a refused port or bad credentials keep their type.
+    let fingerprint = transaction.fingerprint().await?;
 
     Ok(json!({
         "device": args.device,

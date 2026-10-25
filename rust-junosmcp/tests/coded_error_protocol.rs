@@ -46,3 +46,65 @@ fn structured_error_body_is_withheld_from_a_2025_03_26_peer() {
     let resp = unknown_router_error("2025-03-26");
     assert!(resp.get("structuredContent").is_none(), "{resp}");
 }
+
+/// Call `tool` against a device on a closed local port (a typed `Connect`
+/// failure). One server per case, so the cases' connect backoffs overlap.
+fn code_against_closed_port(tool: &str, args: serde_json::Value) -> Value {
+    let closed_port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let key = write_fake_netconf_key_temp();
+    let inv = write_inventory_temp(&[(
+        "closed",
+        "127.0.0.1",
+        closed_port,
+        "admin",
+        key.path().to_str().unwrap(),
+    )]);
+    let mut server = spawn_stdio_server_with_protocol(
+        &["-f", inv.path().to_str().unwrap(), "--allow-direct-commit"],
+        "2025-06-18",
+    );
+    let resp = call_tool(&mut server, tool, args);
+    resp["structuredContent"].clone()
+}
+
+/// A refused connection is retryable for a retry-safe read tool, but not for
+/// a write tool, which may reconnect after acting (`call_tool` scopes this).
+#[test]
+fn a_refused_connection_is_retryable_for_a_read_tool() {
+    let body = code_against_closed_port("gather_device_facts", json!({ "router_name": "closed" }));
+    assert_eq!(body["code"], "upstream_unavailable", "{body}");
+    assert_eq!(body["retryable"], true, "{body}");
+}
+
+#[test]
+fn a_refused_connection_keeps_its_type_through_the_fingerprint_tool() {
+    let body = code_against_closed_port(
+        "get_junos_candidate_fingerprint",
+        json!({ "device": "closed" }),
+    );
+    assert_eq!(body["code"], "upstream_unavailable", "{body}");
+}
+
+#[test]
+fn a_refused_connection_is_not_retryable_for_a_write_tool() {
+    let body = code_against_closed_port(
+        "load_and_commit_config",
+        json!({ "device": "closed", "config_text": "set system host-name x", "config_format": "set" }),
+    );
+    assert_eq!(body["code"], "outcome_unknown", "{body}");
+}
+
+/// SRX tools open the device themselves; that path is coded too.
+#[cfg(feature = "srx")]
+#[test]
+fn a_refused_connection_is_coded_for_an_srx_tool() {
+    let body = code_against_closed_port(
+        "get_srx_security_services_status",
+        json!({ "router": "closed" }),
+    );
+    assert_eq!(body["code"], "upstream_unavailable", "{body}");
+}

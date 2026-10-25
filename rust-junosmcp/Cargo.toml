@@ -115,6 +115,8 @@ rustix             = { workspace = true, features = ["process"] }
 # Loopback fake NETCONF server (tests/common/fake_netconf.rs); already in the
 # lockfile via rustez, same version.
 russh = { version = "0.64.1", default-features = false, features = ["flate2", "ring"] }
+rustez = { workspace = true }
+rustnetconf = { workspace = true }
 mecmcp-audit = { workspace = true, features = ["test-util"] }
 mecmcp-runtime = { workspace = true, features = ["test-util"] }
 mecmcp-transport = { workspace = true }
