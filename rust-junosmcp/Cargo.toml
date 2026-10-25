@@ -80,6 +80,7 @@ mecmcp-secret = { workspace = true }
 mecmcp-redact = { workspace = true }
 mecmcp-oidc = { workspace = true }
 mecmcp-http = { workspace = true }
+mecmcp-server = { workspace = true }
 rust-junosmcp-srx-core = { version = "0.28.1", path = "../rust-junosmcp-srx-core", optional = true }
 tokio              = { workspace = true }
 tokio-util         = { workspace = true }

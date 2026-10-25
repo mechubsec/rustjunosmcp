@@ -5,6 +5,7 @@
 //! the `Result<serde_json::Value, JmcpError>` into the appropriate rmcp content.
 
 use mecmcp_audit::AuditScope;
+use mecmcp_server::{ToolErrorCode, tool_error_coded};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
@@ -227,6 +228,179 @@ pub(super) fn redact_json_preserving_server_fields(value: &mut Value) {
     restore_exempt_fields(&original, value);
 }
 
+/// Classify a [`rust_junosmcp_core::JmcpError`] for the structured tool-error
+/// body (mecmcp#547). `retryable` is derived from the code, so the policy is:
+/// only errors that provably happened before anything reached the device are
+/// `UpstreamUnavailable`; anything where the device may have acted is
+/// `OutcomeUnknown` (never retryable). The match is deliberately exhaustive —
+/// a new `JmcpError` variant must be classified here to compile.
+pub(super) fn tool_error_code(error: &rust_junosmcp_core::JmcpError) -> ToolErrorCode {
+    use ToolErrorCode::{
+        InvalidArgument, NotFound, OutcomeUnknown, Unauthorized, UpstreamUnavailable,
+    };
+    use rust_junosmcp_core::JmcpError as E;
+    match error {
+        E::UnknownRouter(_)
+        | E::RemoteFileMissing { .. }
+        | E::EmptyInventory => NotFound,
+
+        E::BadFormat(_)
+        | E::BadConfigFormat(_)
+        | E::BadLoadMode(_)
+        | E::IncompatibleFormatMode { .. }
+        | E::BadPfeCommand(_)
+        | E::BadRollbackVersion(_)
+        | E::BadSourcePath(_)
+        | E::AllowlistEntryInvalid { .. }
+        | E::BlocklistRuleInvalid { .. }
+        | E::ConfigFormatNotAllowedWithRules { .. }
+        | E::TemplateSyntax(_)
+        | E::TemplateVars(_)
+        | E::TemplateRender(_)
+        | E::TemplateFormatMismatch { .. }
+        | E::Validation(_)
+        | E::ConfigParseHint(_)
+        | E::DeviceExists(_)
+        | E::InvalidDeviceName(_)
+        | E::InvalidDeviceIp(_)
+        | E::InvalidDevicePort(_)
+        | E::MissingArguments(_)
+        // The remaining rows are refusals the caller or operator must act on
+        // before a retry can succeed; nothing was sent, so InvalidArgument
+        // (never retryable) is the closest honest code.
+        | E::InventoryInvalid(_)
+        | E::InventoryParse(_)
+        | E::InventoryDriftedOnDisk
+        | E::SshConfigInvalid { .. }
+        | E::UnsupportedAuth(_)
+        | E::DestExistsDiffers { .. }
+        | E::LocalDestExistsDiffers { .. }
+        | E::ConfirmationRequired { .. }
+        | E::UpgradeClusterUnsupported { .. }
+        | E::UpgradeCommitConfirmedActive { .. }
+        | E::CommitLogMoved { .. } => InvalidArgument,
+
+        E::Denied { .. }
+        | E::DeniedAllowlist { .. }
+        | E::DirectCommitDisabled(_)
+        | E::PasswordAuthDisabled
+        | E::InventoryReadonly
+        | E::OverrideRequiresChangeSet { .. }
+        | E::OverrideRequiresHumanApproval { .. }
+        | E::PlaneOwnedDevice { .. }
+        | E::PlaneOwnedRollbackDepthRefused { .. }
+        | E::PlaneOwnedRollbackOneRefused { .. }
+        | E::PlaneOwnedRollbackMixedAction { .. }
+        | E::PlaneOwnedRollbackLabMode { .. }
+        | E::PlaneOwnedRollbackConfigRefused { .. }
+        // Host-key rejections are a trust refusal, not an outage: retrying
+        // the same key can never succeed.
+        | E::HostKeyMismatch { .. }
+        | E::HostKeyRevoked { .. } => Unauthorized,
+
+        // Failed before any request reached the device.
+        E::ConnectTimeout(_)
+        | E::KeyFileMissing(_)
+        | E::KnownHostsMissing(_)
+        | E::DeviceLeaseBusy { .. }
+        | E::DeviceLeaseError { .. } => UpstreamUnavailable,
+
+        // Only the read-only pre-action probes are retryable. `install_rpc`
+        // follows `request system software add ... reboot` and
+        // `verify_checksum` follows a transfer, and an unlisted phase is
+        // assumed to be post-action too.
+        E::DeviceProbeFailed { phase, .. } => match phase.as_str() {
+            "cluster_probe" | "version_probe" | "commit_probe" | "storage_probe"
+            | "list_var_tmp" | "version_parse" | "storage_parse" | "remote_checksum" => {
+                UpstreamUnavailable
+            }
+            _ => OutcomeUnknown,
+        },
+
+        // The device may have acted (or local state is unknown): never retryable.
+        E::Timeout(_)
+        | E::TransferOuterTimeout(_)
+        | E::UpgradeOuterTimeout(_)
+        | E::UpgradeInstallTimeout { .. }
+        | E::UpgradeRebootTimeout { .. }
+        | E::UpgradePostVerifyMismatch { .. }
+        | E::Cancelled
+        | E::Rustez(_)
+        | E::Io(_)
+        | E::Json(_)
+        | E::ScpFailed { .. }
+        | E::VerifyMismatch { .. }
+        | E::FetchVerifyMismatch { .. }
+        | E::CandidateCleanupFailed { .. }
+        | E::InventoryRead(_)
+        | E::InventoryWrite(_)
+        // No better-fitting code: a retry cannot fix these without operator
+        // action, so they must not be advertised as retryable.
+        | E::InsufficientDisk { .. }
+        | E::ScpDependencyUnavailable { .. }
+        | E::ConfigDomainAllowlistInvariant { .. } => OutcomeUnknown,
+    }
+}
+
+/// Build a coded tool-error result whose text block and structured `message`
+/// are both [`redact_body`] of `raw`.
+///
+/// `tool_error_coded` applies the generic `redact_text`, which also masks the
+/// non-secret Junos keywords `redact_body` deliberately preserves
+/// (`show security flow session summary`), so the text would no longer match
+/// what these errors printed before. The Junos redaction is the stronger and
+/// the established one; its output is written over both copies (it already
+/// contains the generic pass), and `redact_last_mile` re-redacts both.
+pub(super) fn coded_error(code: ToolErrorCode, raw: &str) -> CallToolResult {
+    let message = redact_body(raw);
+    let mut result = tool_error_coded(code, &message);
+    if let Some(ContentBlock::Text(text_content)) = result.content.first_mut() {
+        text_content.text.clone_from(&message);
+    }
+    if let Some(Value::Object(body)) = &mut result.structured_content {
+        body.insert("message".to_owned(), Value::String(message));
+    }
+    result
+}
+
+/// Coded result for a [`rust_junosmcp_core::JmcpError`].
+pub(super) fn coded_error_result(error: &rust_junosmcp_core::JmcpError) -> CallToolResult {
+    coded_error(tool_error_code(error), &error.to_string())
+}
+
+/// Coded `unauthorized` result for a scope denial.
+pub(super) fn scope_denied_result(error: &impl std::fmt::Display) -> CallToolResult {
+    coded_error(ToolErrorCode::Unauthorized, &error.to_string())
+}
+
+/// Redact a result's `structured_content`. A coded-error body
+/// (`{"code","message","retryable"}`) has its `message` run through
+/// [`redact_body`] exactly like the text block it mirrors; any other value
+/// takes the same JSON redaction as a successful tool payload.
+/// Drop `structured_content` for a peer that negotiated a protocol version
+/// without it; the text block carries the same message.
+fn strip_structured_content(result: &mut Result<rmcp::model::CallToolResponse, rmcp::ErrorData>) {
+    if let Ok(rmcp::model::CallToolResponse::Complete(call_result)) = result {
+        call_result.structured_content = None;
+    }
+}
+
+fn redact_structured_content(structured: &mut Value) {
+    // Exact shape only: a device payload that merely has a `code` field must
+    // still get full JSON redaction, not just its `message`.
+    let is_coded_error = structured.as_object().is_some_and(|body| {
+        body.len() == 3
+            && body.get("code").is_some_and(Value::is_string)
+            && body.get("message").is_some_and(Value::is_string)
+            && body.get("retryable").is_some_and(Value::is_boolean)
+    });
+    if is_coded_error && let Some(Value::String(message)) = structured.get_mut("message") {
+        *message = redact_body(message);
+        return;
+    }
+    redact_json_preserving_server_fields(structured);
+}
+
 /// The last-mile redaction pass: runs once, in `ServerHandler::call_tool`,
 /// over every tool response leaving this server — Junos and SRX alike,
 /// success and error alike.
@@ -274,6 +448,10 @@ pub(super) fn redact_last_mile(
                 if let ContentBlock::Text(text_content) = block {
                     text_content.text = redact_body(&text_content.text);
                 }
+            }
+            // The structured copy must never be less redacted than the text.
+            if let Some(structured) = &mut call_result.structured_content {
+                redact_structured_content(structured);
             }
         }
         Ok(_) => {}
@@ -520,16 +698,14 @@ impl JmcpHandler {
                 let pretty = serde_json::to_string_pretty(&other).unwrap_or_else(|e| e.to_string());
                 CallToolResult::success(vec![ContentBlock::text(pretty)])
             }
-            Err(e) => CallToolResult::error(vec![ContentBlock::text(redact_body(&e.to_string()))]),
+            Err(e) => coded_error_result(&e),
         })
     }
 
     /// Convert `ScopeError` into the same kind of `CallToolResult { isError: true }`
     /// that `JmcpError::Denied` produces. Mirrors `to_call_result`.
     fn scope_to_call_result(e: ScopeError) -> Result<CallToolResult, rmcp::ErrorData> {
-        Ok(CallToolResult::error(vec![ContentBlock::text(
-            e.to_string(),
-        )]))
+        Ok(scope_denied_result(&e))
     }
 
     /// Check tool scope. Returns `Err(ScopeError)` if denied, `Ok(())` if allowed
@@ -2131,6 +2307,11 @@ impl ServerHandler for JmcpHandler {
         // Cloned before `context` is moved into the call context below. Only
         // needed on the rejection path, but that path cannot reach back for it.
         let caller = caller_ctx(&context.extensions).cloned();
+        // `structuredContent` entered MCP in 2025-06-18; an older (or unknown)
+        // peer gets the text block alone, as `list_tools` gates its fields.
+        let structured_ok = context
+            .protocol_version()
+            .is_some_and(|version| version >= rmcp::model::ProtocolVersion::V_2025_06_18);
 
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         let mut result = self.tool_router.call(tcc).await;
@@ -2140,6 +2321,9 @@ impl ServerHandler for JmcpHandler {
         // inspects or returns it, so a tool that forgot its own redaction
         // still cannot leak a secret to the model. See `redact_last_mile`.
         redact_last_mile(&mut result);
+        if !structured_ok {
+            strip_structured_content(&mut result);
+        }
 
         // Two shapes reach here without a handler having run, and neither
         // recorded itself. See `record_rejected_call`.
@@ -3202,6 +3386,25 @@ mod redaction_coverage_tests {
         }
     }
 
+    /// Coded errors (mecmcp#547): no fixture secret inside a `JmcpError` may
+    /// survive anywhere in the serialized result, structured body included.
+    #[test]
+    fn coded_error_result_never_leaks_a_fixture_secret_into_structured_content() {
+        let err = rust_junosmcp_core::JmcpError::ConfigParseHint(synthetic_device_payload());
+        let result = JmcpHandler::to_call_result(Err(err)).unwrap();
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(
+            wire.contains("structuredContent"),
+            "coded error lost its structured body"
+        );
+        for (idx, secret) in FIXTURE_SECRETS.iter().enumerate() {
+            assert!(
+                !wire.contains(secret),
+                "FIXTURE_SECRETS[{idx}] leaked into the serialized coded error (value not printed)"
+            );
+        }
+    }
+
     /// The error path: device error text (e.g. a config-parse error, which
     /// `config_diff::parse_error_hint` deliberately preserves verbatim in
     /// its hint) can echo raw device output too.
@@ -3570,6 +3773,118 @@ mod redact_last_mile_tests {
         let once = redact_body(&body);
         let twice = redact_body(&once);
         assert_eq!(once, twice, "second redact_body pass must be a no-op");
+    }
+
+    /// `redact_last_mile` is the backstop for the structured copy: a secret
+    /// placed directly in `structured_content.message` is redacted.
+    #[test]
+    fn redact_last_mile_redacts_structured_content_message() {
+        let mut call_result = CallToolResult::error(vec![ContentBlock::text("boom")]);
+        call_result.structured_content = Some(serde_json::json!({
+            "code": "invalid_argument",
+            "message": format!("pre-shared-key ascii-text \"{FAKE_PSK}\""),
+            "retryable": false,
+        }));
+        let mut result: Result<rmcp::model::CallToolResponse, rmcp::ErrorData> =
+            Ok(rmcp::model::CallToolResponse::Complete(call_result));
+
+        redact_last_mile(&mut result);
+
+        let Ok(rmcp::model::CallToolResponse::Complete(redacted)) = result else {
+            panic!("expected a complete result");
+        };
+        let wire = serde_json::to_string(&redacted).unwrap();
+        assert!(
+            !wire.contains(FAKE_PSK),
+            "secret survived in structured_content (not printed)"
+        );
+        assert!(wire.contains("invalid_argument"), "code must be preserved");
+    }
+
+    /// A payload that only looks like a coded body (it has `code` and
+    /// `message`) must not escape full JSON redaction of its other fields.
+    #[test]
+    fn redact_last_mile_fully_redacts_a_payload_that_merely_has_a_code_field() {
+        let mut call_result = CallToolResult::success(vec![ContentBlock::text("ok")]);
+        call_result.structured_content = Some(serde_json::json!({
+            "code": "ok",
+            "message": "fine",
+            "pre-shared-key": FAKE_PSK,
+        }));
+        let mut result: Result<rmcp::model::CallToolResponse, rmcp::ErrorData> =
+            Ok(rmcp::model::CallToolResponse::Complete(call_result));
+
+        redact_last_mile(&mut result);
+
+        let Ok(rmcp::model::CallToolResponse::Complete(redacted)) = result else {
+            panic!("expected a complete result");
+        };
+        let wire = serde_json::to_string(&redacted).unwrap();
+        assert!(
+            !wire.contains(FAKE_PSK),
+            "secret survived beside a `code` field (not printed)"
+        );
+    }
+
+    /// The code policy spot checks, including the retryable flag.
+    #[test]
+    fn coded_error_mapping_spot_checks() {
+        use rust_junosmcp_core::JmcpError;
+        let body = |err: JmcpError| {
+            let result = coded_error_result(&err);
+            assert_eq!(result.is_error, Some(true));
+            result.structured_content.expect("coded error has a body")
+        };
+        let timeout = body(JmcpError::Timeout(std::time::Duration::from_secs(1)));
+        assert_eq!(timeout["code"], "outcome_unknown");
+        assert_eq!(timeout["retryable"], false);
+        assert_eq!(
+            body(JmcpError::UnknownRouter("r1".into()))["code"],
+            "not_found"
+        );
+        assert_eq!(
+            body(JmcpError::BadFormat("x".into()))["code"],
+            "invalid_argument"
+        );
+        let lease = body(JmcpError::DeviceLeaseBusy {
+            router: "r1".into(),
+            waited_secs: 1,
+        });
+        assert_eq!(lease["code"], "upstream_unavailable");
+        assert_eq!(lease["retryable"], true);
+        let probe = |phase: &str| {
+            body(JmcpError::DeviceProbeFailed {
+                phase: phase.into(),
+                message: "rpc timed out".into(),
+            })
+        };
+        assert_eq!(probe("storage_probe")["code"], "upstream_unavailable");
+        // The install RPC may already be rebooting the device into new code.
+        assert_eq!(probe("install_rpc")["code"], "outcome_unknown");
+        assert_eq!(probe("install_rpc")["retryable"], false);
+        assert_eq!(probe("verify_checksum")["code"], "outcome_unknown");
+        let scope = scope_denied_result(&"token 't' lacks tool 'x'");
+        assert_eq!(scope.structured_content.unwrap()["code"], "unauthorized");
+    }
+
+    /// The coded text block and structured message are byte-identical to the
+    /// `redact_body` text these errors printed before. The session case is the
+    /// one the generic `redact_text` inside `tool_error_coded` would over-mask.
+    #[test]
+    fn coded_error_text_matches_the_legacy_redact_body_text() {
+        for message in [
+            "show security flow session summary",
+            "router 'edge1' not found",
+        ] {
+            let err = rust_junosmcp_core::JmcpError::ConfigParseHint(message.to_string());
+            let result = coded_error_result(&err);
+            let text = result.content[0].as_text().unwrap().text.clone();
+            assert_eq!(text, redact_body(message));
+            assert_eq!(
+                result.structured_content.unwrap()["message"],
+                redact_body(message)
+            );
+        }
     }
 
     /// F2: an SRX workflow error (`SrxError::Rpc`/`Transport`/`XmlParse`,
