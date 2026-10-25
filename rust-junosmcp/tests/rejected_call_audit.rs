@@ -222,6 +222,36 @@ fn invalid_inner_arguments_are_audited_once_under_the_concrete_operation() {
     );
 }
 
+/// The facade's own schema check is audited like rmcp's argument errors:
+/// once, under the concrete operation and its device, never as `execute`.
+#[test]
+fn schema_rejected_inner_arguments_are_audited_under_the_concrete_operation() {
+    let lines = stderr_for_request(
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"operation":"gather_device_facts","arguments":{"router":"r1","timeout":"soon"}}}}"#,
+    );
+    let audits = audit_lines(&lines);
+    let rejected = audits
+        .iter()
+        .filter(|line| line.contains("dispatch_rejected"))
+        .collect::<Vec<_>>();
+    assert_eq!(rejected.len(), 1, "{audits:#?}");
+    assert!(
+        rejected[0].contains("gather_device_facts"),
+        "{}",
+        rejected[0]
+    );
+    assert!(rejected[0].contains("r1"), "device hint: {}", rejected[0]);
+    assert!(
+        !rejected[0].contains("soon"),
+        "argument value leaked: {}",
+        rejected[0]
+    );
+    assert!(
+        !audits.iter().any(|line| line.contains("tool=execute")),
+        "{audits:#?}"
+    );
+}
+
 #[test]
 fn unknown_facade_operation_is_audited_once_and_bounded() {
     let operation = "x".repeat(2048);

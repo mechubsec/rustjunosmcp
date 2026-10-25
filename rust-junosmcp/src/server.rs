@@ -2196,15 +2196,17 @@ fn effective_arguments<'a>(
 /// silently going back to recording nothing.
 const RMCP_ARGUMENT_ERROR_PREFIX: &str = "failed to deserialize parameters:";
 
-/// The message from a result rmcp produced for a bad argument, or `None` if this
-/// result came from a handler.
+/// The message from a result rmcp (or the `execute` facade's schema check)
+/// produced for a bad argument, or `None` if this result came from a handler.
 fn argument_rejection_message(result: &CallToolResult) -> Option<&str> {
     if result.is_error != Some(true) {
         return None;
     }
     result.content.iter().find_map(|block| {
         let text = block.as_text()?.text.as_str();
-        text.starts_with(RMCP_ARGUMENT_ERROR_PREFIX).then_some(text)
+        (text.starts_with(RMCP_ARGUMENT_ERROR_PREFIX)
+            || text.starts_with(execute::INVALID_ARGUMENT_CODE))
+        .then_some(text)
     })
 }
 
