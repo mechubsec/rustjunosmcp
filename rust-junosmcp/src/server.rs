@@ -530,14 +530,15 @@ pub(super) fn audit_scope(
 ///
 /// The out-of-scope targets are server-derived: the caller supplied only the primary
 /// device, so naming them in the response would disclose inventory they may not see. The
-/// caller-visible text is therefore generic, and the rejected targets go to the audit
-/// record (`denied_targets`) so the denial stays attributable (mecmcp#400).
+/// caller-visible text is therefore generic. The audit event carries only
+/// `denied_targets_count`: metadata keys bypass `--audit-redact devices=...`, so no
+/// device name may go there; the change-set id identifies the targets (mecmcp#400).
 pub(super) fn deny_hidden_targets(
     audit: &mut AuditScope,
     tool: &'static str,
     hidden: &[String],
 ) -> CallToolResult {
-    audit.meta("denied_targets", hidden.join(","));
+    audit.meta("denied_targets_count", hidden.len());
     audit.deny("router_scope");
     // No "token ..." phrasing: the body redactor would blank the rest of the line.
     scope_denied_result(&format!(
@@ -3510,7 +3511,7 @@ mod redaction_coverage_tests {
 
     /// A hidden secondary target must not reach the caller, and must reach the audit record.
     #[test]
-    fn hidden_target_denial_is_generic_to_the_caller_and_named_in_the_audit() {
+    fn hidden_target_denial_names_no_device_to_the_caller_or_the_audit() {
         let logs = LogBuffer::default();
         let subscriber = tracing_subscriber::fmt()
             .with_writer(logs.clone())
@@ -3538,9 +3539,10 @@ mod redaction_coverage_tests {
         assert!(text.contains("not authorized for every device"), "{text}");
         let logged = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
         assert!(
-            logged.contains("prod-1"),
-            "audit lacks the rejected target: {logged}"
+            !logged.contains("prod-1"),
+            "audit leaked the hidden target past --audit-redact: {logged}"
         );
+        assert!(logged.contains("denied_targets_count=1"), "{logged}");
         assert!(logged.contains("router_scope"), "{logged}");
     }
 
