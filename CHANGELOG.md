@@ -37,7 +37,8 @@ All notable user-facing changes are recorded here. Format loosely follows
   Operational `target: "audit"` events (flush, startup, redaction warnings)
   do not carry them.
 - **mecmcp 0.29.1** (breaking upstream). Apart from the audit fields above,
-  static-token callers see no change. Once an OAuth caller (possible only in
+  static-token callers whose names do not start with the reserved `oauth:`
+  prefix see no change. Once an OAuth caller (possible only in
   an `oauth-resource` build) has created a change set, older binaries cannot
   read the change-set state file; snapshot before upgrading. Static tokens
   named `oauth:*` are now reserved, and a token file containing one fails to
