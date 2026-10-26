@@ -12,6 +12,7 @@ use crate::policy::{Decision, Policy};
 use mecmcp_audit::Attribution;
 use mecmcp_changeset::{
     ApproverIdentity, ChangesetCoordinator, CommitOptions, DeviceTransaction as _, OwnerSubject,
+    ProposerIdentity,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -748,17 +749,26 @@ pub async fn create_change_set_with_cancel(
     let device_name = args.device.clone();
     let owner_principal = owner.clone();
 
+    // IdP-verified when the caller presented a `Mecmcp-Proposer-Assertion` (or is
+    // an OAuth principal); otherwise the token's bound subject, token-asserted.
+    // Built from `Attribution`, never by hand, so a call site cannot claim a
+    // verification the transport did not perform (mecmcp#400).
+    let proposer = ProposerIdentity::from_attribution(
+        &attribution,
+        owner_subject.map(|s| OwnerSubject {
+            issuer: s.issuer,
+            subject: s.subject,
+        }),
+    );
+
     let result = coordinator
-        .create_change_set(
+        .create_change_set_as(
             args.device,
             args.actions,
             owner,
             args.expected_fingerprint,
             policy_signature,
-            owner_subject.map(|s| OwnerSubject {
-                issuer: s.issuer,
-                subject: s.subject,
-            }),
+            &proposer,
         )
         .await
         .map_err(|e| JmcpError::Validation(e.to_string()))?;

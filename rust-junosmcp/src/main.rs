@@ -877,6 +877,15 @@ async fn main() -> Result<()> {
         );
     }
 
+    if args.verified_approver.require_verified_proposer {
+        tracing::warn!(
+            target: "audit",
+            "strict verified-proposer mode enabled: create_junos_change_set requires a fresh \
+             IdP-verified Mecmcp-Proposer-Assertion bound to the proposing token's oidc_subject \
+             (or an OAuth caller)."
+        );
+    }
+
     let mut changeset_coordinator = mecmcp_changeset::ChangesetCoordinator::load_with_key(
         Some(&args.changeset_state_file),
         mecmcp_changeset::OperationLimits::default(),
@@ -894,7 +903,8 @@ async fn main() -> Result<()> {
         changeset_coordinator = changeset_coordinator.with_evidence(service.recorder());
     }
     changeset_coordinator = changeset_coordinator
-        .with_require_verified_approver(args.verified_approver.require_verified_approver);
+        .with_require_verified_approver(args.verified_approver.require_verified_approver)
+        .with_require_verified_proposer(args.verified_approver.require_verified_proposer);
     let coordinator = std::sync::Arc::new(changeset_coordinator);
 
     // #370: settle commits this process's predecessor died in the middle of.

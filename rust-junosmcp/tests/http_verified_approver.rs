@@ -28,7 +28,9 @@ const ISSUER: &str = "https://idp.example.com";
 const AUDIENCE: &str = "junos-mcp";
 const KID: &str = "approver-test-key";
 const APPROVE: &str = "approve_junos_change_set";
+const CREATE: &str = "create_junos_change_set";
 const HEADER: &str = "Mecmcp-Approver-Assertion";
+const PROPOSER_HEADER: &str = "Mecmcp-Proposer-Assertion";
 static PORT: AtomicU16 = AtomicU16::new(18950);
 
 struct TestKey {
@@ -129,6 +131,7 @@ struct Setup {
     verifier: bool,
     strict: bool,
     idp_up: bool,
+    strict_proposer: bool,
 }
 
 async fn rig(setup: Setup) -> Rig {
@@ -142,7 +145,7 @@ async fn rig_with_store(setup: Setup, replay_store: Option<&std::path::Path>) ->
     let key = generate_key();
 
     let tokens = dir.path().join("tokens.json");
-    let tools = format!("{APPROVE},get_router_list");
+    let tools = format!("{APPROVE},{CREATE},get_router_list");
     let alice = mint(&tokens, "alice", &tools, Some("alice"));
     let store = Arc::new(rust_junosmcp_auth::TokenStoreFile::load(&tokens).unwrap());
 
@@ -179,7 +182,8 @@ async fn rig_with_store(setup: Setup, replay_store: Option<&std::path::Path>) ->
             Some(ApprovalDigestKey::load_from_file(&digest_key).unwrap()),
         )
         .unwrap()
-        .with_require_verified_approver(setup.strict),
+        .with_require_verified_approver(setup.strict)
+        .with_require_verified_proposer(setup.strict_proposer),
     );
     let handler = JmcpHandler::new(
         device_manager,
@@ -271,6 +275,16 @@ impl Rig {
     }
 
     async fn post(&self, session: Option<&str>, assertion: Option<&str>, body: Value) -> Reply {
+        self.post_with(session, assertion.map(|jwt| (HEADER, jwt)), body)
+            .await
+    }
+
+    async fn post_with(
+        &self,
+        session: Option<&str>,
+        assertion: Option<(&str, &str)>,
+        body: Value,
+    ) -> Reply {
         let mut request = reqwest::Client::new()
             .post(format!("{}/mcp", self.base))
             .bearer_auth(&self.alice)
@@ -279,8 +293,8 @@ impl Rig {
         if let Some(session) = session {
             request = request.header("Mcp-Session-Id", session);
         }
-        if let Some(assertion) = assertion {
-            request = request.header(HEADER, assertion);
+        if let Some((header, jwt)) = assertion {
+            request = request.header(header, jwt);
         }
         let response = request.body(body.to_string()).send().await.unwrap();
         let status = response.status().as_u16();
@@ -311,6 +325,20 @@ impl Rig {
         session
     }
 
+    /// `create_junos_change_set` as alice, optionally with a proposer assertion.
+    async fn create(&self, session: &str, assertion: Option<&str>) -> Reply {
+        let fingerprint = format!("sha256:{}", "0".repeat(64));
+        self.post_with(
+            Some(session),
+            assertion.map(|jwt| (PROPOSER_HEADER, jwt)),
+            json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                "name": CREATE,
+                "arguments": {"device": "r1", "expected_fingerprint": fingerprint,
+                    "actions": [{"payload": {"text": "set system host-name x", "format": "set"}}]}}}),
+        )
+        .await
+    }
+
     async fn approve(
         &self,
         session: &str,
@@ -336,6 +364,11 @@ struct Reply {
 }
 
 impl Reply {
+    /// Whether the change set was created (HTTP 200 and the success message).
+    fn created(&self) -> bool {
+        self.status == 200 && self.text.contains("change set created")
+    }
+
     /// Whether the tool call itself succeeded (HTTP 200 and no tool error).
     fn approved(&self) -> bool {
         self.status == 200 && self.text.contains("change set approved")
@@ -346,6 +379,7 @@ const STRICT: Setup = Setup {
     verifier: true,
     strict: true,
     idp_up: true,
+    strict_proposer: false,
 };
 
 #[tokio::test]
@@ -459,6 +493,7 @@ async fn without_a_verifier_approval_is_unchanged() {
         verifier: false,
         strict: false,
         idp_up: true,
+        strict_proposer: false,
     })
     .await;
     let (id, digest) = rig.propose().await;
@@ -470,6 +505,53 @@ async fn without_a_verifier_approval_is_unchanged() {
 
     let plain = rig.approve(&session, None, &id, &digest).await;
     assert!(plain.approved(), "{} {}", plain.status, plain.text);
+    rig.shutdown.cancel();
+}
+
+const STRICT_PROPOSER: Setup = Setup {
+    verifier: true,
+    strict: false,
+    idp_up: true,
+    strict_proposer: true,
+};
+
+#[tokio::test]
+async fn strict_proposer_refuses_create_without_an_assertion() {
+    let rig = rig(STRICT_PROPOSER).await;
+    let session = rig.session().await;
+    let refused = rig.create(&session, None).await;
+    assert!(!refused.created(), "{}", refused.text);
+    assert!(
+        refused.text.contains("verified-proposer"),
+        "{}",
+        refused.text
+    );
+    // The refusal changed nothing: the same call with an assertion now succeeds.
+    let jwt = assertion(&rig.key, "alice", "jti-propose-ok");
+    let created = rig.create(&session, Some(&jwt)).await;
+    assert!(created.created(), "{} {}", created.status, created.text);
+    rig.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn strict_proposer_refuses_an_assertion_for_another_subject() {
+    let rig = rig(STRICT_PROPOSER).await;
+    let session = rig.session().await;
+    let jwt = assertion(&rig.key, "mallory", "jti-propose-wrong");
+    let reply = rig.create(&session, Some(&jwt)).await;
+    // The boundary rejects the bearer+assertion pair itself: 401, never a tool result.
+    assert_eq!(reply.status, 401, "{}", reply.text);
+    assert!(!reply.created(), "{}", reply.text);
+    rig.shutdown.cancel();
+}
+
+/// Off (the default): a token-asserted proposal is unchanged.
+#[tokio::test]
+async fn without_strict_proposer_a_plain_create_is_unchanged() {
+    let rig = rig(STRICT).await;
+    let session = rig.session().await;
+    let reply = rig.create(&session, None).await;
+    assert!(reply.created(), "{} {}", reply.status, reply.text);
     rig.shutdown.cancel();
 }
 
@@ -498,8 +580,10 @@ fn approver_identities_are_never_built_by_hand() {
             let text = std::fs::read_to_string(&path).unwrap();
             assert!(
                 !text.contains("ApproverIdentity::TokenAsserted")
-                    && !text.contains("ApproverIdentity::OidcVerified"),
-                "{} builds an ApproverIdentity by hand; use from_attribution",
+                    && !text.contains("ApproverIdentity::OidcVerified")
+                    && !text.contains("ProposerIdentity::TokenAsserted")
+                    && !text.contains("ProposerIdentity::OidcVerified"),
+                "{} builds an Approver/ProposerIdentity by hand; use from_attribution",
                 path.display()
             );
         }
