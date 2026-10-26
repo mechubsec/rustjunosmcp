@@ -4,7 +4,14 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-10-26
+
+> **Major release for one narrow break.** mecmcp 0.29 reserves static token names
+> starting with `oauth:` (they would collide with OAuth callers' change-set owner
+> keys), and a `tokens.json` containing such a name now fails to load as a whole.
+> 1.0.0 accepted those names, and the [Stability](README.md#stability) promise
+> covers the `tokens.json` format, so this is 2.0.0 rather than 1.1.0. Rename any
+> `oauth:*` token before upgrading; nothing else in the stable surface breaks.
 
 ### Tests
 
