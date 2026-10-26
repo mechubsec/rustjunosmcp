@@ -6,6 +6,12 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Changed
+
+- **mecmcp 0.29.0** (breaking upstream; no behaviour change for static-token
+  callers). Change-set state written by an OAuth caller cannot be read by
+  older binaries; this server does not yet enable OAuth.
+
 ## [1.0.0] - 2026-10-25
 
 **1.0: rust-junosmcp is no longer beta.** The README's new

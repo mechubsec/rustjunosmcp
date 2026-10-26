@@ -1410,6 +1410,7 @@ mod scope_tests {
         let wildcard_ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            oauth: None,
             token_name: "srx-admin".into(),
             client_name: None,
             model_id: None,
@@ -1452,6 +1453,7 @@ mod scope_tests {
         let explicit_ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            oauth: None,
             token_name: "srx-write".into(),
             client_name: None,
             model_id: None,

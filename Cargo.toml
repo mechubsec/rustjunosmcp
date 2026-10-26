@@ -86,22 +86,26 @@ rustez       = "0.20.0"
 # adds mecmcp-oidc and mecmcp-http, newly pulled in directly to build the
 # TokenVerifier this server's --oidc-issuer wiring needs (MEC-995).
 #
+# mecmcp 0.29.0: adds opt-in OAuth 2.1 resource-server mode (mecmcp#498): the
+# mecmcp-transport `oauth-resource` feature and mecmcp-runtime's OAuthResourceArgs.
+# Principal gains an OAuth variant and CallerCtx an `oauth` field.
+#
 # mecmcp is consumed at an exact pinned tag; all crates must resolve to the
 # same git ref (see the TypeId note above).
-mecmcp-audit = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
-mecmcp-auth  = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
-mecmcp-transport = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
-mecmcp-runtime = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
-mecmcp-policy = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
-mecmcp-inventory = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
-mecmcp-device = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
-mecmcp-changeset = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
-mecmcp-scp = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
-mecmcp-secret = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
-mecmcp-redact = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
-mecmcp-oidc = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
-mecmcp-http = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
-mecmcp-server = { version = "0.28.4", git = "https://github.com/mechubsec/mecmcp", tag = "v0.28.4" }
+mecmcp-audit = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
+mecmcp-auth  = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
+mecmcp-transport = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
+mecmcp-runtime = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
+mecmcp-policy = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
+mecmcp-inventory = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
+mecmcp-device = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
+mecmcp-changeset = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
+mecmcp-scp = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
+mecmcp-secret = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
+mecmcp-redact = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
+mecmcp-oidc = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
+mecmcp-http = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
+mecmcp-server = { version = "0.29.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.29.0" }
 globset      = "0.4"
 regex        = "1"
 metrics                     = "0.24.6"
