@@ -6,6 +6,16 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **Optional OAuth 2.1 resource-server mode** (mecmcp#498), behind the new
+  `oauth-resource` cargo feature (off by default; release images and the LXC
+  package do not include it). Adds `--oauth-issuer`, `--oauth-resource`,
+  `--oauth-scope-map`, `--oauth-audience`, `--oauth-role-claim` and
+  `--oauth-require-at-jwt-typ`, the RFC 9728 metadata route and
+  `resource_metadata` on 401 challenges. Requires `--tokens-file`. Builds
+  without the feature are unchanged.
+
 ### Changed
 
 - **mecmcp 0.29.0** (breaking upstream; no behaviour change for static-token

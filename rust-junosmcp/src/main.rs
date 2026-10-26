@@ -363,6 +363,11 @@ async fn main() -> Result<()> {
         .validate(args.approval_digest_key_file.is_some(), args.lab_mode)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
+    // OAuth flag consistency (`build_oauth_resource` re-checks it, but failing
+    // here keeps the error ahead of any state being created).
+    #[cfg(feature = "oauth-resource")]
+    args.oauth.validate().map_err(|e| anyhow::anyhow!("{e}"))?;
+
     // Vendor-specific validation.
     //
     // These two rules cannot live in mecmcp-runtime: --inventory-readonly,
@@ -752,6 +757,19 @@ async fn main() -> Result<()> {
         })
         .transpose()
         .context("configuring the verified-approver assertion verifier")?;
+    #[cfg(feature = "oauth-resource")]
+    let oauth_resource = {
+        if args.oauth.enabled() && token_store.is_none() {
+            anyhow::bail!(
+                "--oauth-* needs bearer-token authentication on the HTTP transport: \
+                 supply --tokens-file (OAuth tokens are checked after the static store)"
+            );
+        }
+        rust_junosmcp::http_transport::build_oauth_resource(&args.oauth)
+            .context("configuring OAuth resource-server mode")?
+    };
+    #[cfg(not(feature = "oauth-resource"))]
+    let oauth_resource: rust_junosmcp::http_transport::OAuthResourceHandle = None;
     if args.verified_approver.require_verified_approver {
         tracing::warn!(
             target: "audit",
@@ -1013,6 +1031,7 @@ async fn main() -> Result<()> {
                 shutdown_token,
                 shutdown_timeout,
                 approver_assertion_verifier,
+                oauth_resource,
             )
             .await?;
         }
