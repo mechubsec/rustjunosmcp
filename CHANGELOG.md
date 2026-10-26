@@ -8,6 +8,15 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ### Added
 
+- **Forward-only audit evidence pipeline** (mecmcp#378). With
+  `--audit-forward-endpoint` (plus `--ssdf-audit-server-id`,
+  `--audit-forward-outbox` and `--audit-forward-ledger`) and no
+  `--ssdf-audit-endpoint`, the server now ships the hash-chained evidence log
+  to the forward collector instead of refusing to start, and fails closed on
+  the forward spool. Startup mode checks now cover the signing key and forward
+  token in this mode. The forward endpoint uses `--audit-forward-ca-file`
+  (falling back to the SSDF CA when SSDF is configured). A forward endpoint
+  without a server id is refused. SSDF configurations behave as before.
 - **Optional OAuth 2.1 resource-server mode** (mecmcp#498), behind the new
   `oauth-resource` cargo feature (off by default; release images and the LXC
   package do not include it). Adds `--oauth-issuer`, `--oauth-resource`,
