@@ -13,21 +13,26 @@ All notable user-facing changes are recorded here. Format loosely follows
   package do not include it). Adds `--oauth-issuer`, `--oauth-resource`,
   `--oauth-scope-map`, `--oauth-audience`, `--oauth-role-claim` and
   `--oauth-require-at-jwt-typ`, the RFC 9728 metadata route and
-  `resource_metadata` on 401 challenges. Requires `--tokens-file`; the scope map is mode-checked at startup like
-  other credential files (no group/world write, no symlink). Builds
-  without the feature are unchanged.
+  `resource_metadata` on 401 challenges. Requires `--tokens-file`; the scope
+  map is mode-checked at startup like other credential files (no
+  group/world write, no symlink). Builds without the feature have no
+  `--oauth-*` flags and no metadata route.
 
 ### Changed
 
 - **Audit line format: three new fields.** With mecmcp 0.29.0 every per-call
   audit record gains `oauth_issuer=`, `oauth_subject=` and `oauth_client_id=`.
-  They are empty for static-token and stdio callers (everyone, unless the
-  `oauth-resource` build is in use). Strict SIEM parsers must accept them.
+  They are empty for static-token and stdio callers (every caller in a
+  default build). Strict SIEM parsers must accept them, even with the
+  `oauth-resource` feature off.
   Operational `target: "audit"` events (flush, startup, redaction warnings)
   do not carry them.
-- **mecmcp 0.29.0** (breaking upstream; no behaviour change for static-token
-  callers). Change-set state written by an OAuth caller cannot be read by
-  older binaries; this server does not yet enable OAuth.
+- **mecmcp 0.29.0** (breaking upstream). Apart from the audit fields above,
+  static-token callers see no change. Once an OAuth caller (possible only in
+  an `oauth-resource` build) has created a change set, older binaries cannot
+  read the change-set state file; snapshot before upgrading. Static tokens
+  named `oauth:*` are now reserved, and a token file containing one fails to
+  load as a whole, so rename any such token first.
 
 ## [1.0.0] - 2026-10-25
 
