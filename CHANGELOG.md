@@ -4,6 +4,17 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `--approver-replay-store <PATH>` (mecmcp#400, mecmcp 0.29.2): an opt-in,
+  fsynced store of used approver-assertion `jti` hashes, so a restart no longer
+  lets an unexpired assertion be replayed once. Requires `--oidc-issuer`; the
+  server refuses to start if the store cannot be opened (symlink, loose mode,
+  wrong owner, corrupt). Recommended path `/var/lib/jmcp/approver-replay.log`,
+  which the packaged unit already makes writable.
+
 ## [2.0.0] - 2026-10-26
 
 > **Major release for one narrow break.** mecmcp 0.29 reserves static token names

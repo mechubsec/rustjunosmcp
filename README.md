@@ -623,7 +623,7 @@ it as what it is: one operator exercising the API shape, not an approval.
 
 Compiled into every build (not a cargo feature) and inert until `--oidc-issuer`
 is set. Setup follows mecmcp's
-[ONBOARDING](https://github.com/mechubsec/mecmcp/blob/v0.29.1/docs/ONBOARDING.md);
+[ONBOARDING](https://github.com/mechubsec/mecmcp/blob/v0.29.2/docs/ONBOARDING.md);
 the one difference for this server is the tool name:
 
 ```fish
@@ -648,8 +648,14 @@ sudo -u jmcp rust-junosmcp --device-mapping /etc/jmcp/devices.json \
   --tokens-file /var/lib/jmcp/tokens.json \
   --oidc-issuer https://idp.example.com/ --oidc-audience YOUR_AUDIENCE \
   --approval-digest-key-file /etc/jmcp/approval-digest.key \
+  --approver-replay-store /var/lib/jmcp/approver-replay.log \
   --require-verified-approver
 ```
+
+`--approver-replay-store` persists used assertion `jti`s across restarts
+(created 0600 by the service user, so `/var/lib/jmcp` is the right place;
+without it an assertion used just before a restart can be replayed once until
+it expires). It requires `--oidc-issuer`.
 
 - With `--require-verified-approver`, an approval with no valid assertion is
   refused, and so is a proposal from an owner token with no bound subject.
@@ -1380,7 +1386,7 @@ rust-junosmcp --transport streamable-http --tokens-file /etc/jmcp/tokens.json \
 Upgrading to mecmcp 0.29 reserves the `oauth:` prefix: rename any static token
 with that name first, or the whole token file fails to load. Scope-map format,
 IdP setup, audience rules and rollback notes are in mecmcp's
-[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.29.1/docs/OAUTH.md).
+[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.29.2/docs/OAUTH.md).
 
 [mecmcp#498]: https://github.com/mechubsec/mecmcp/issues/498
 

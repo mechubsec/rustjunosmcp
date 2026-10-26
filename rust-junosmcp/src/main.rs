@@ -91,6 +91,9 @@ struct StartupCredentialFiles<'a> {
     /// secret but defines every OAuth caller's tool and device authority, so
     /// a writable or symlinked file must refuse startup.
     oauth_scope_map: Option<&'a Path>,
+    /// Approver-assertion replay store (`--approver-replay-store`). Not required
+    /// to exist: the store creates it 0600 on first start.
+    approver_replay_store: Option<&'a Path>,
 }
 
 /// Check every credential-adjacent file in one pass.
@@ -102,7 +105,7 @@ fn validate_startup_credentials(
     files: &StartupCredentialFiles<'_>,
 ) -> Result<(), mecmcp_secret::CredentialValidationError> {
     let mut specs =
-        Vec::with_capacity(1 + files.private_keys.len() + files.ssdf_password_files.len() + 7);
+        Vec::with_capacity(1 + files.private_keys.len() + files.ssdf_password_files.len() + 8);
     specs.push(CredentialFileSpec {
         path: files.inventory,
         role: CredentialFileRole::Secret,
@@ -179,6 +182,15 @@ fn validate_startup_credentials(
             role: CredentialFileRole::ConfigNoSecret,
             description: "OAuth scope map",
             required: true,
+        });
+    }
+
+    if let Some(path) = files.approver_replay_store {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::Secret,
+            description: "approver replay store",
+            required: false,
         });
     }
 
@@ -522,6 +534,7 @@ async fn main() -> Result<()> {
         audit_hmac_key: args.audit_hmac_key_file.as_deref(),
         tls_key,
         approval_digest_key: args.approval_digest_key_file.as_deref(),
+        approver_replay_store: args.verified_approver.approver_replay_store.as_deref(),
         #[cfg(feature = "oauth-resource")]
         oauth_scope_map: args.oauth.oauth_scope_map.as_deref(),
         #[cfg(not(feature = "oauth-resource"))]
@@ -823,9 +836,15 @@ async fn main() -> Result<()> {
                 .verified_approver
                 .approver_policy()
                 .context("--oidc-issuer is set, so approver_policy() must be Some")?;
-            Ok(std::sync::Arc::new(
-                mecmcp_transport::ApproverAssertionVerifier::new(token_verifier, issuer, policy),
-            ))
+            let verifier =
+                mecmcp_transport::ApproverAssertionVerifier::new(token_verifier, issuer, policy);
+            let verifier = match args.verified_approver.approver_replay_store.as_deref() {
+                Some(path) => verifier.with_replay_store(path).with_context(|| {
+                    format!("opening --approver-replay-store {}", path.display())
+                })?,
+                None => verifier,
+            };
+            Ok(std::sync::Arc::new(verifier))
         })
         .transpose()
         .context("configuring the verified-approver assertion verifier")?;
@@ -1328,6 +1347,7 @@ mod startup_credential_tests {
             tls_key: None,
             approval_digest_key: None,
             oauth_scope_map: None,
+            approver_replay_store: None,
         }
     }
 
@@ -1358,6 +1378,25 @@ mod startup_credential_tests {
         std::os::unix::fs::symlink(&real, &link).unwrap();
         assert!(check(&link).is_err(), "symlinked scope map must be refused");
         assert!(check(&dir.path().join("missing.json")).is_err());
+    }
+
+    /// The replay store is created by the verifier on first start, so a missing
+    /// file passes; an existing one must be a 0600 secret.
+    #[cfg(unix)]
+    #[test]
+    fn approver_replay_store_may_be_absent_but_not_loose() {
+        let dir = tempfile::tempdir().unwrap();
+        let inventory = write_file(dir.path(), "devices.json", 0o600);
+        let check = |store: &Path| {
+            let mut checked = files(&inventory, &[], None, &[]);
+            checked.approver_replay_store = Some(store);
+            validate_startup_credentials(&checked)
+        };
+        check(&dir.path().join("absent.log")).expect("absent store passes");
+        check(&write_file(dir.path(), "ok.log", 0o600)).expect("0600 store passes");
+        let loose = write_file(dir.path(), "loose.log", 0o644);
+        let message = check(&loose).expect_err("loose store").to_string();
+        assert!(message.contains("approver replay store"), "{message}");
     }
 
     /// Two loose modes must come back together. The failure this guards is a

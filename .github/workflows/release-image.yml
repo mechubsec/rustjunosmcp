@@ -67,7 +67,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: mechubsec/mecmcp/.github/workflows/reusable-registry-publish.yml@cb7949afdd69592938ef61f790367f9623591545 # v0.29.1
+    uses: mechubsec/mecmcp/.github/workflows/reusable-registry-publish.yml@8c512a6d8cbf1d666cf3b4d8a7a677a7556b2639 # v0.29.2
     with:
       version: ${{ needs.tag-version.outputs.version }}
       oci-image: ghcr.io/${{ github.repository }}:${{ needs.tag-version.outputs.version }}

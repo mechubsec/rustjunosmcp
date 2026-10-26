@@ -37,6 +37,7 @@ state that the server must write lives in `/var/lib/jmcp` instead.
 
 - `/var/lib/jmcp/tokens.json` — bearer tokens (moved from `/etc/jmcp` in v0.22.0, #333)
 - `/var/lib/jmcp/audit-hmac.key` — HMAC key for tamper-evident audit log (added v0.22.0, #334)
+- `/var/lib/jmcp/approver-replay.log` — used approver-assertion `jti` hashes (`--approver-replay-store`, created 0600 on first start)
 - `/var/lib/jmcp/changeset-state.json` — two-person approval lifecycle state
 - `/var/lib/jmcp/audit.jsonl` — JSON audit log (when configured via site override)
 - `/var/lib/jmcp/device-leases/` — cross-process destructive-operation leases

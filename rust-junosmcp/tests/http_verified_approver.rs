@@ -132,6 +132,11 @@ struct Setup {
 }
 
 async fn rig(setup: Setup) -> Rig {
+    rig_with_store(setup, None).await
+}
+
+/// `replay_store` is the durable `jti` store, as `--approver-replay-store` sets it.
+async fn rig_with_store(setup: Setup, replay_store: Option<&std::path::Path>) -> Rig {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let dir = tempfile::tempdir().unwrap();
     let key = generate_key();
@@ -195,7 +200,7 @@ async fn rig(setup: Setup) -> Rig {
             OidcConfig::new(ISSUER, AUDIENCE, "groups"),
             Arc::new(FixtureSource { jwks }),
         );
-        Arc::new(ApproverAssertionVerifier::new(
+        let verifier = ApproverAssertionVerifier::new(
             Arc::new(verifier),
             ISSUER,
             ApproverPolicy {
@@ -203,7 +208,11 @@ async fn rig(setup: Setup) -> Rig {
                 max_age: Duration::from_secs(300),
                 require_auth_time: false,
             },
-        ))
+        );
+        Arc::new(match replay_store {
+            Some(path) => verifier.with_replay_store(path).unwrap(),
+            None => verifier,
+        })
     });
 
     let shutdown = CancellationToken::new();
@@ -362,6 +371,38 @@ async fn strict_mode_refuses_approval_without_an_assertion() {
     let retry = rig.approve(&session, Some(&jwt), &id, &digest).await;
     assert!(retry.approved(), "{} {}", retry.status, retry.text);
     rig.shutdown.cancel();
+}
+
+/// A used assertion stays refused after a restart (a second server over the same
+/// replay store), which the in-memory set alone cannot give.
+#[tokio::test]
+async fn a_used_assertion_is_refused_after_a_restart_with_a_replay_store() {
+    let state = tempfile::tempdir().unwrap();
+    let store = state.path().join("approver-replay.log");
+    {
+        let first = rig_with_store(STRICT, Some(&store)).await;
+        let jwt = assertion(&first.key, "alice", "jti-once");
+        let (id, digest) = first.propose().await;
+        let session = first.session().await;
+        let reply = first.approve(&session, Some(&jwt), &id, &digest).await;
+        assert!(reply.approved(), "{} {}", reply.status, reply.text);
+        first.shutdown.cancel();
+    }
+    // Restart: new coordinator, verifier and listener; only the store file survives.
+    let second = rig_with_store(STRICT, Some(&store)).await;
+    let (id, digest) = second.propose().await;
+    let session = second.session().await;
+    // The fixture key is regenerated per rig, so re-sign the same jti with the new key.
+    let replayed = assertion(&second.key, "alice", "jti-once");
+    let reply = second
+        .approve(&session, Some(&replayed), &id, &digest)
+        .await;
+    assert_eq!(reply.status, 401, "{}", reply.text);
+    assert!(!reply.approved(), "{} {}", reply.status, reply.text);
+    let fresh = assertion(&second.key, "alice", "jti-fresh");
+    let retry = second.approve(&session, Some(&fresh), &id, &digest).await;
+    assert!(retry.approved(), "{} {}", retry.status, retry.text);
+    second.shutdown.cancel();
 }
 
 #[tokio::test]
