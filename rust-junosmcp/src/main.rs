@@ -87,6 +87,10 @@ struct StartupCredentialFiles<'a> {
     tls_key: Option<&'a Path>,
     /// Approval digest key from `--approval-digest-key-file`. Required when set.
     approval_digest_key: Option<&'a Path>,
+    /// OAuth scope map (`--oauth-scope-map`). Required when set. Holds no
+    /// secret but defines every OAuth caller's tool and device authority, so
+    /// a writable or symlinked file must refuse startup.
+    oauth_scope_map: Option<&'a Path>,
 }
 
 /// Check every credential-adjacent file in one pass.
@@ -98,7 +102,7 @@ fn validate_startup_credentials(
     files: &StartupCredentialFiles<'_>,
 ) -> Result<(), mecmcp_secret::CredentialValidationError> {
     let mut specs =
-        Vec::with_capacity(1 + files.private_keys.len() + files.ssdf_password_files.len() + 6);
+        Vec::with_capacity(1 + files.private_keys.len() + files.ssdf_password_files.len() + 7);
     specs.push(CredentialFileSpec {
         path: files.inventory,
         role: CredentialFileRole::Secret,
@@ -166,6 +170,14 @@ fn validate_startup_credentials(
             path,
             role: CredentialFileRole::Secret,
             description: "approval digest key",
+            required: true,
+        });
+    }
+    if let Some(path) = files.oauth_scope_map {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::ConfigNoSecret,
+            description: "OAuth scope map",
             required: true,
         });
     }
@@ -447,6 +459,10 @@ async fn main() -> Result<()> {
         audit_hmac_key: args.audit_hmac_key_file.as_deref(),
         tls_key,
         approval_digest_key: args.approval_digest_key_file.as_deref(),
+        #[cfg(feature = "oauth-resource")]
+        oauth_scope_map: args.oauth.oauth_scope_map.as_deref(),
+        #[cfg(not(feature = "oauth-resource"))]
+        oauth_scope_map: None,
     })
     .context("credential file validation")?;
 
@@ -1255,7 +1271,37 @@ mod startup_credential_tests {
             audit_hmac_key: None,
             tls_key: None,
             approval_digest_key: None,
+            oauth_scope_map: None,
         }
+    }
+
+    /// The scope map defines OAuth callers' authority: group/world-writable
+    /// and symlinked files must refuse startup; 0640 and 0600 pass.
+    #[cfg(unix)]
+    #[test]
+    fn oauth_scope_map_must_not_be_writable_or_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let inventory = write_file(dir.path(), "devices.json", 0o600);
+        let check = |map: &Path| {
+            let mut checked = files(&inventory, &[], None, &[]);
+            checked.oauth_scope_map = Some(map);
+            validate_startup_credentials(&checked)
+        };
+
+        for mode in [0o660, 0o666, 0o602] {
+            let map = write_file(dir.path(), &format!("scopes-{mode:o}.json"), mode);
+            let message = check(&map).expect_err("writable scope map").to_string();
+            assert!(message.contains("OAuth scope map"), "{message}");
+        }
+        for mode in [0o600, 0o640] {
+            let map = write_file(dir.path(), &format!("ok-{mode:o}.json"), mode);
+            check(&map).expect("owner-writable scope map passes");
+        }
+        let real = write_file(dir.path(), "real.json", 0o600);
+        let link = dir.path().join("link.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(check(&link).is_err(), "symlinked scope map must be refused");
+        assert!(check(&dir.path().join("missing.json")).is_err());
     }
 
     /// Two loose modes must come back together. The failure this guards is a

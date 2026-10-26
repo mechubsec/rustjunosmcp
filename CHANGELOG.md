@@ -13,7 +13,8 @@ All notable user-facing changes are recorded here. Format loosely follows
   package do not include it). Adds `--oauth-issuer`, `--oauth-resource`,
   `--oauth-scope-map`, `--oauth-audience`, `--oauth-role-claim` and
   `--oauth-require-at-jwt-typ`, the RFC 9728 metadata route and
-  `resource_metadata` on 401 challenges. Requires `--tokens-file`. Builds
+  `resource_metadata` on 401 challenges. Requires `--tokens-file`; the scope map is mode-checked at startup like
+  other credential files (no group/world write, no symlink). Builds
   without the feature are unchanged.
 
 ### Changed
