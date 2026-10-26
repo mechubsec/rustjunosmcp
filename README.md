@@ -619,6 +619,49 @@ The two-token workaround above still has a place for pure functional
 testing of the plan→approve→apply flow when no IdP is available, but treat
 it as what it is: one operator exercising the API shape, not an approval.
 
+### Verified approver: setup and failure behaviour
+
+Compiled into every build (not a cargo feature) and inert until `--oidc-issuer`
+is set. Setup follows mecmcp's
+[ONBOARDING](https://github.com/mechubsec/mecmcp/blob/v0.29.1/docs/ONBOARDING.md);
+the one difference for this server is the tool name:
+
+```fish
+# 1. Bind the approver's token to their IdP identity. Packaged installs keep the
+#    store at /var/lib/jmcp/tokens.json. If yours is still at /etc/jmcp/tokens.json
+#    (pre-0.22), migrate it first as install.sh prints; never create a second one.
+sudo -u jmcp rust-junosmcp token add --tokens-file /var/lib/jmcp/tokens.json --name alice \
+  --actor-type human --tools approve_junos_change_set --devices '*' \
+  --oidc-issuer https://idp.example.com/ --oidc-subject alice@example.com
+
+# 2. Create the approval digest key strict mode requires: at least 32 random
+#    bytes, mode 0600, owned by the service user (`jmcp` on a package install).
+#    Written as jmcp, never as root (/etc/jmcp is service-owned on packaged installs).
+#    `set -C` keeps an existing key, since replacing it orphans pending approvals;
+#    if one exists, confirm it is 0600 jmcp with `stat -c '%a %U' <path>`.
+sudo -u jmcp sh -c 'umask 077; set -C; head -c 48 /dev/urandom | base64 > /etc/jmcp/approval-digest.key'
+
+# 3. Run on the HTTP transport with the token store (assertions apply to
+#    bearer-token callers only) and the verifier configured.
+sudo -u jmcp rust-junosmcp --device-mapping /etc/jmcp/devices.json \
+  --transport streamable-http -H 127.0.0.1 -p 8765 \
+  --tokens-file /var/lib/jmcp/tokens.json \
+  --oidc-issuer https://idp.example.com/ --oidc-audience YOUR_AUDIENCE \
+  --approval-digest-key-file /etc/jmcp/approval-digest.key \
+  --require-verified-approver
+```
+
+- With `--require-verified-approver`, an approval with no valid assertion is
+  refused, and so is a proposal from an owner token with no bound subject.
+- **Send `Mecmcp-Approver-Assertion` only on the approve call.** The transport
+  verifies it on *any* request that carries it, whatever the tool: an invalid
+  one (different subject than the token is bound to, expired, replayed, or the
+  IdP's keys unreachable) gets `401`, and a valid one on an earlier read or
+  proposal spends its single-use `jti`, so the later approval is rejected as a
+  replay. Only requests without the header are unaffected by the verifier.
+- A server with no `--oidc-issuer` rejects any request carrying the header
+  with `400`.
+
 ### Enabling it
 
 Add `--lab-mode` to the service unit. On a package install, use a systemd

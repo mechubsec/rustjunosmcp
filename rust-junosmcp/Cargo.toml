@@ -116,6 +116,12 @@ axum-server        = { workspace = true, optional = true, default-features = fal
 rustix             = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
+# Offline IdP fixture for tests/http_verified_approver.rs (same versions and
+# features mecmcp's own approver_assertion test uses; already in the lockfile).
+async-trait = { workspace = true }
+aws-lc-rs = "1"
+jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "aws_lc_rs"] }
+pem = "4"
 # Loopback fake NETCONF server (tests/common/fake_netconf.rs); already in the
 # lockfile via rustez, same version.
 russh = { version = "0.64.1", default-features = false, features = ["flate2", "ring"] }
@@ -141,3 +147,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 name = "http_oauth_resource"
 path = "tests/http_oauth_resource.rs"
 required-features = ["oauth-resource"]
+
+[[test]]
+name = "http_verified_approver"
+path = "tests/http_verified_approver.rs"
