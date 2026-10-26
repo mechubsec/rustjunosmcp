@@ -18,6 +18,12 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ### Changed
 
+- **Audit line format: three new fields.** With mecmcp 0.29.0 every per-call
+  audit record gains `oauth_issuer=`, `oauth_subject=` and `oauth_client_id=`.
+  They are empty for static-token and stdio callers (everyone, unless the
+  `oauth-resource` build is in use). Strict SIEM parsers must accept them.
+  Operational `target: "audit"` events (flush, startup, redaction warnings)
+  do not carry them.
 - **mecmcp 0.29.0** (breaking upstream; no behaviour change for static-token
   callers). Change-set state written by an OAuth caller cannot be read by
   older binaries; this server does not yet enable OAuth.
