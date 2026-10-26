@@ -656,6 +656,13 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Deprecation signal only (mecmcp#400): count of unbound human tokens when
+    // --oidc-issuer is set without --require-verified-approver.
+    if let Some(token_file) = &token_store {
+        args.verified_approver
+            .warn_unbound_human_tokens(&token_file.store());
+    }
+
     match host_key_mode {
         SshHostKeyMode::AcceptNew => {
             tracing::warn!(

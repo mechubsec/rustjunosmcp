@@ -4,6 +4,17 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `--oauth-max-token-lifetime-secs <N>` (mecmcp#400, mecmcp 0.29.3): refuse OAuth
+  access tokens whose `exp - iat` exceeds N seconds, bounding the revocation
+  window. Off by default.
+- Startup warning with the count of live `human` tokens lacking an `oidc_subject`
+  binding when `--oidc-issuer` is set but `--require-verified-approver` is off
+  (mecmcp#400). A deprecation signal only; token-store format unchanged.
+
 ## [2.1.0] - 2026-10-26
 
 ### Added

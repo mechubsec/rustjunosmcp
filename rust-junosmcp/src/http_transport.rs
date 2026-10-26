@@ -61,6 +61,9 @@ pub fn build_oauth_resource(
     if let Some(audience) = &oauth.oauth_audience {
         config = config.with_audience(audience);
     }
+    if let Some(secs) = oauth.oauth_max_token_lifetime_secs {
+        config = config.with_max_token_lifetime(std::time::Duration::from_secs(secs));
+    }
     let http_client = mecmcp_http::HttpClient::new(mecmcp_http::HttpClientConfig::default())
         .context("building the OAuth discovery/JWKS HTTP client")?;
     let source = Arc::new(mecmcp_oidc::HttpKeySource::new(http_client));
