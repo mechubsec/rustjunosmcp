@@ -4,6 +4,19 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Optional per-device `attributes` (`site`, `vendor`, `tags`) in `devices.json`,
+  and OAuth scope-map `device_selectors` that grant devices by those attributes
+  (mecmcp#400, mecmcp 0.29.4). Selectors resolve against the live inventory, so
+  SIGHUP reloads apply on the next request; devices without attributes match no
+  selector. Existing `devices.json` files and scope maps load unchanged: an
+  `attributes` block that is not valid selector metadata is ignored with one
+  warning per device at load (rename it to silence the warning), and that
+  device matches no selector.
+
 ## [2.2.0] - 2026-10-26
 
 ### Added

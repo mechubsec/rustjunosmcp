@@ -623,7 +623,7 @@ it as what it is: one operator exercising the API shape, not an approval.
 
 Compiled into every build (not a cargo feature) and inert until `--oidc-issuer`
 is set. Setup follows mecmcp's
-[ONBOARDING](https://github.com/mechubsec/mecmcp/blob/v0.29.3/docs/ONBOARDING.md);
+[ONBOARDING](https://github.com/mechubsec/mecmcp/blob/v0.29.4/docs/ONBOARDING.md);
 the one difference for this server is the tool name:
 With `--oidc-issuer` set but `--require-verified-approver` off, startup logs a
 warning counting live `human` tokens that have no `oidc_subject` binding.
@@ -805,6 +805,23 @@ $EDITOR devices.json   # set ip / username / auth
 # Run as MCP stdio server.
 ./target/release/rust-junosmcp -f devices.json
 ```
+
+Each device may carry an optional `attributes` object, used only by OAuth
+`device_selectors` (see [OAuth 2.1 resource-server mode](#oauth-21-resource-server-mode-opt-in-build)):
+
+```json
+"srx-lab-1": {
+  "ip": "10.0.0.1", "username": "admin", "auth": {"type": "password", "password": "..."},
+  "attributes": {"site": "lab-1", "vendor": "junos", "tags": ["pci", "edge"]}
+}
+```
+
+`site` and `vendor` are single values, `tags` a list. Values are 1-64 characters
+of `[A-Za-z0-9._-]`. Devices without `attributes` match no selector. Existing
+`devices.json` files load unchanged: an `attributes` block that is not valid
+selector metadata (an unknown key, a bad value, not an object) is ignored with
+one warning per device at load, and that device matches no selector. Rename
+the key to silence the warning.
 
 ## Claude Desktop config
 
@@ -1389,10 +1406,27 @@ Add `--oauth-max-token-lifetime-secs <N>` to refuse any access token whose
 `exp - iat` exceeds N seconds, which bounds how long an offboarded user's token
 keeps working (off by default).
 
+To grant by inventory attribute instead of by name, add `device_selectors`
+(`site=`, `vendor=`, `tag=`, `*` glob; entries are ANDed) to a scope-map entry.
+They narrow that entry's `devices` and are resolved against the live inventory
+on each authentication, so a SIGHUP or `reload_devices` takes effect on the next
+request:
+
+```json
+{"version": 1, "scopes": {
+  "junos:lab": {"tools": ["get_junos_config"], "devices": ["*"],
+                "device_selectors": ["site=lab-*"]}}}
+```
+
+Attributes come from the `attributes` object in `devices.json`; a device
+without one matches no selector (fail closed). See mecmcp's
+[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.29.4/docs/OAUTH.md) for
+the full selector grammar.
+
 Upgrading to mecmcp 0.29 reserves the `oauth:` prefix: rename any static token
 with that name first, or the whole token file fails to load. Scope-map format,
 IdP setup, audience rules and rollback notes are in mecmcp's
-[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.29.3/docs/OAUTH.md).
+[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.29.4/docs/OAUTH.md).
 
 [mecmcp#498]: https://github.com/mechubsec/mecmcp/issues/498
 

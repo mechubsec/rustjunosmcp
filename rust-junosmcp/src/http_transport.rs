@@ -35,12 +35,30 @@ pub type OAuthResourceHandle = Option<std::convert::Infallible>;
 /// The key source is `mecmcp-http`'s client, which needs the process-wide
 /// rustls `CryptoProvider` that `main` installs at startup.
 ///
+/// `attributes` is the live device inventory that scope-map `device_selectors`
+/// resolve against.
+///
 /// # Errors
 /// Inconsistent flags, an unreadable or invalid scope map, or a non-canonical
 /// issuer or resource URI.
 #[cfg(feature = "oauth-resource")]
 pub fn build_oauth_resource(
     oauth: &mecmcp_runtime::cli::OAuthResourceArgs,
+    attributes: Arc<dyn mecmcp_auth::DeviceAttributeSource>,
+) -> Result<OAuthResourceHandle> {
+    build_oauth_resource_with_keys(oauth, attributes, None)
+}
+
+/// [`build_oauth_resource`] with an injectable JWKS source (`None` = the
+/// production HTTP one). Exists so tests can verify signed tokens offline.
+///
+/// # Errors
+/// As [`build_oauth_resource`].
+#[cfg(feature = "oauth-resource")]
+pub fn build_oauth_resource_with_keys(
+    oauth: &mecmcp_runtime::cli::OAuthResourceArgs,
+    attributes: Arc<dyn mecmcp_auth::DeviceAttributeSource>,
+    key_source: Option<Arc<dyn mecmcp_oidc::KeySource>>,
 ) -> Result<OAuthResourceHandle> {
     use mecmcp_transport::{OAuthResource, OAuthResourceConfig, OAuthScopeMap};
 
@@ -64,10 +82,18 @@ pub fn build_oauth_resource(
     if let Some(secs) = oauth.oauth_max_token_lifetime_secs {
         config = config.with_max_token_lifetime(std::time::Duration::from_secs(secs));
     }
-    let http_client = mecmcp_http::HttpClient::new(mecmcp_http::HttpClientConfig::default())
-        .context("building the OAuth discovery/JWKS HTTP client")?;
-    let source = Arc::new(mecmcp_oidc::HttpKeySource::new(http_client));
-    Ok(Some(Arc::new(OAuthResource::new(config, source))))
+    let source: Arc<dyn mecmcp_oidc::KeySource> = match key_source {
+        Some(source) => source,
+        None => {
+            let http_client =
+                mecmcp_http::HttpClient::new(mecmcp_http::HttpClientConfig::default())
+                    .context("building the OAuth discovery/JWKS HTTP client")?;
+            Arc::new(mecmcp_oidc::HttpKeySource::new(http_client))
+        }
+    };
+    Ok(Some(Arc::new(
+        OAuthResource::new(config, source).with_device_attributes(attributes),
+    )))
 }
 
 const DEVICE_SELECTOR_KEYS: &[&str] = &[

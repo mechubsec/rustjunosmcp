@@ -564,6 +564,61 @@ pub struct DeviceEntry {
     /// is never inferred from device behaviour, only declared by the operator.
     #[serde(default)]
     pub plane_commit_logins: Vec<String>,
+    /// Inventory attributes (`site`, `vendor`, `tags`) that OAuth scope-map
+    /// `device_selectors` match against (mecmcp#400). Absent, or a block that
+    /// is not valid selector metadata (operator notes from before this field
+    /// existed), means the device matches no selector; the latter logs one
+    /// warning at load and never refuses the load (compatibility).
+    #[serde(default, skip_serializing_if = "DeviceAttributes::not_persisted")]
+    pub attributes: Option<DeviceAttributes>,
+}
+
+/// The `attributes` block of a [`DeviceEntry`], parsed leniently.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DeviceAttributes {
+    /// Valid selector metadata.
+    Valid(mecmcp_auth::DeviceAttrs),
+    /// Not selector metadata; ignored. Holds a reason category, never a value.
+    Ignored(&'static str),
+}
+
+impl DeviceAttributes {
+    /// Valid attributes, if any.
+    pub fn valid(&self) -> Option<&mecmcp_auth::DeviceAttrs> {
+        match self {
+            Self::Valid(attrs) => Some(attrs),
+            Self::Ignored(_) => None,
+        }
+    }
+
+    fn not_persisted(attributes: &Option<Self>) -> bool {
+        !matches!(attributes, Some(Self::Valid(_)))
+    }
+}
+
+impl<'de> Deserialize<'de> for DeviceAttributes {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if !value.is_object() {
+            return Ok(Self::Ignored("not_an_object"));
+        }
+        Ok(match serde_json::from_value(value) {
+            Ok(attrs) => Self::Valid(attrs),
+            Err(error) if error.to_string().contains("unknown field") => {
+                Self::Ignored("unknown_field")
+            }
+            Err(_) => Self::Ignored("invalid_value"),
+        })
+    }
+}
+
+impl Serialize for DeviceAttributes {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Valid(attrs) => attrs.serialize(serializer),
+            Self::Ignored(_) => serializer.serialize_none(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -596,6 +651,44 @@ mod entry_tests {
         let e: DeviceEntry = serde_json::from_str(json).unwrap();
         assert_eq!(e.port, 830);
         assert_eq!(e.ssh_config, Some(PathBuf::from("/home/u/.ssh/config_jh")));
+    }
+
+    #[test]
+    fn parses_attributes_and_defaults_to_none() {
+        let with = r#"{"ip":"10.0.0.1","username":"a","auth":{"type":"password","password":"x"},
+            "attributes":{"site":"lab-1","vendor":"junos","tags":["pci"]}}"#;
+        let e: DeviceEntry = serde_json::from_str(with).unwrap();
+        let attrs = e.attributes.unwrap();
+        assert_eq!(
+            attrs.valid().unwrap().site.as_ref().unwrap().as_str(),
+            "lab-1"
+        );
+        let without =
+            r#"{"ip":"10.0.0.1","username":"a","auth":{"type":"password","password":"x"}}"#;
+        let e: DeviceEntry = serde_json::from_str(without).unwrap();
+        assert!(e.attributes.is_none());
+        assert!(!serde_json::to_string(&e).unwrap().contains("attributes"));
+    }
+
+    #[test]
+    fn non_selector_attributes_load_as_ignored() {
+        for (block, reason) in [
+            (r#"{"region":"emea"}"#, "unknown_field"),
+            (r#"{"site":"lab*1"}"#, "invalid_value"),
+            (r#""free text note""#, "not_an_object"),
+        ] {
+            let json = format!(
+                r#"{{"ip":"10.0.0.1","username":"a","auth":{{"type":"password","password":"x"}},
+                "attributes":{block}}}"#
+            );
+            let e: DeviceEntry = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                e.attributes,
+                Some(DeviceAttributes::Ignored(reason)),
+                "{block}"
+            );
+            assert!(e.attributes.unwrap().valid().is_none());
+        }
     }
 
     #[test]
@@ -662,6 +755,14 @@ impl Inventory {
             .collect::<Result<_, JmcpError>>()?;
 
         Self::validate(&devices)?;
+        for (name, entry) in &devices {
+            if let Some(DeviceAttributes::Ignored(reason)) = &entry.attributes {
+                tracing::warn!(
+                    device = %name, reason,
+                    "ignoring `attributes`: not selector metadata; device matches no OAuth device_selectors (rename the key to silence this)"
+                );
+            }
+        }
 
         Ok(Self {
             devices,

@@ -863,7 +863,7 @@ async fn main() -> Result<()> {
                  supply --tokens-file (OAuth tokens are checked after the static store)"
             );
         }
-        rust_junosmcp::http_transport::build_oauth_resource(&args.oauth)
+        rust_junosmcp::http_transport::build_oauth_resource(&args.oauth, dev_manager.clone())
             .context("configuring OAuth resource-server mode")?
     };
     #[cfg(not(feature = "oauth-resource"))]
