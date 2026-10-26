@@ -536,8 +536,12 @@ pub(super) fn audit_scope(
 pub(super) fn deny_hidden_targets(
     audit: &mut AuditScope,
     tool: &'static str,
+    change_set_id: &str,
     hidden: &[String],
 ) -> CallToolResult {
+    // The caller supplied the id, so recording it discloses nothing and keeps the
+    // count-only record traceable to the change set.
+    audit.meta("change_set_id", change_set_id);
     audit.meta("denied_targets_count", hidden.len());
     audit.deny("router_scope");
     // No "token ..." phrasing: the body redactor would blank the rest of the line.
@@ -1913,6 +1917,7 @@ impl JmcpHandler {
             return Ok(deny_hidden_targets(
                 &mut audit,
                 "approve_junos_change_set",
+                &args.change_set_id,
                 &hidden,
             ));
         }
@@ -3527,6 +3532,7 @@ mod redaction_coverage_tests {
             let result = deny_hidden_targets(
                 &mut audit,
                 "approve_junos_change_set",
+                "cs-abc123",
                 &["prod-1".to_owned()],
             );
             drop(audit);
@@ -3543,6 +3549,7 @@ mod redaction_coverage_tests {
             "audit leaked the hidden target past --audit-redact: {logged}"
         );
         assert!(logged.contains("denied_targets_count=1"), "{logged}");
+        assert!(logged.contains("change_set_id=cs-abc123"), "{logged}");
         assert!(logged.contains("router_scope"), "{logged}");
     }
 
