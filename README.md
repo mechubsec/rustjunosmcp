@@ -670,6 +670,24 @@ it expires). It requires `--oidc-issuer`.
 - A server with no `--oidc-issuer` rejects any request carrying the header
   with `400`.
 
+### Verified proposer
+
+`--require-verified-proposer` pairs with `--require-verified-approver` so the
+two-person rule compares two IdP-verified subjects rather than a subject an
+operator typed into `token add`. It requires `--oidc-issuer` and
+`--oidc-audience`. With it, `create_junos_change_set` must carry a fresh
+`Mecmcp-Proposer-Assertion` header whose subject equals the proposing token's
+bound `oidc_subject`; an OAuth-authenticated caller counts as verified without
+one. The proposing token needs neither `--actor-type human` nor the approver
+role. The change set records that its owner was verified, and approval, waiver
+and apply refuse one that was not, so a change set proposed before the flag
+was turned on cannot skip it.
+
+Send `Mecmcp-Proposer-Assertion` **only on `create_junos_change_set`**, and
+never `Mecmcp-Approver-Assertion` there: the headers are separate but share one
+single-use `jti` set, so an assertion spent on any other request cannot be
+reused. Off by default; nothing changes when the flag is unset.
+
 ### Enabling it
 
 Add `--lab-mode` to the service unit. On a package install, use a systemd
@@ -806,8 +824,9 @@ $EDITOR devices.json   # set ip / username / auth
 ./target/release/rust-junosmcp -f devices.json
 ```
 
-Each device may carry an optional `attributes` object, used only by OAuth
-`device_selectors` (see [OAuth 2.1 resource-server mode](#oauth-21-resource-server-mode-opt-in-build)):
+Each device may carry an optional `attributes` object, used only by
+`device_selectors` on static tokens (see [Device selectors on static tokens](#device-selectors-on-static-tokens))
+and OAuth scope maps (see [OAuth 2.1 resource-server mode](#oauth-21-resource-server-mode-opt-in-build)):
 
 ```json
 "srx-lab-1": {
@@ -1248,6 +1267,25 @@ stdio, and explicitly unauthenticated loopback mode retain the full inventory.
 > file's owner uid, its mode, the calling process's uid, and the `chmod` to
 > run. Every `token` subcommand writes `0600`, and the LXC installer sets it,
 > so this only bites files created or copied by hand.
+
+#### Device selectors on static tokens
+
+`token add --device-selector 'site=lab-*'` (repeatable; entries are ANDed)
+narrows the token's `--devices` to inventory devices whose `attributes` match,
+with the same grammar as the OAuth scope map. Selectors resolve against the
+live inventory on each authentication, so a SIGHUP or `reload_devices` applies
+on the next request; an unlabelled device never matches, and a token whose
+selectors match nothing addresses no devices. Approvals follow the same scope:
+a `site=lab-*` approver cannot approve a change set on a prod device.
+
+```bash
+rust-junosmcp token add --tokens-file tokens.json --name lab-ops \
+  --devices '*' --tools execute_junos_command --device-selector 'site=lab-*'
+```
+
+> **Upgrade every binary that rewrites `tokens.json` first.** A binary without
+> `device_selectors` support drops the `device_selectors` field on `token rotate` or
+> `token set-scope`, silently widening the token to all of its `devices`.
 
 ### Tool scopes and write tools
 

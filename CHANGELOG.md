@@ -4,6 +4,30 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Static-token `device_selectors` (mecmcp#400, mecmcp 0.30.0): `token add
+  --device-selector 'site=lab-*'` (repeatable) narrows a token's devices by
+  inventory `attributes`, with the OAuth scope-map grammar. Resolved against the
+  live inventory on each authentication; an unlabelled device never matches.
+- `approve_junos_change_set` checks the approver's device scope against every
+  device the change set targets (`approve_change_set_within`).
+- `--require-verified-proposer`: `create_junos_change_set` requires a fresh
+  `Mecmcp-Proposer-Assertion` bound to the proposing token's `oidc_subject` (or
+  an OAuth caller). Requires `--oidc-issuer`; off by default.
+
+### Changed
+
+- mecmcp 0.29.4 -> 0.30.0. Every audit line gains `identity_mechanism`.
+
+### Upgrade note
+
+- **Upgrade every binary that rewrites `tokens.json` before adding
+  `device_selectors`.** An older binary drops the field on `token rotate` or
+  `token set-scope`, widening the token to all of its `devices`.
+
 ## [2.3.0] - 2026-10-26
 
 ### Added
