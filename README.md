@@ -23,7 +23,7 @@ inventory format and core tool surface, but built on async Rust
 
 ## Stability
 
-rust-junosmcp is **1.0**: no longer beta. From 1.0.0 on, the surfaces below
+rust-junosmcp is **stable** (no longer beta since 1.0.0). The surfaces below
 change incompatibly only in a new major version, and anything deprecated is
 announced in the [CHANGELOG](CHANGELOG.md) at least one minor release first.
 
