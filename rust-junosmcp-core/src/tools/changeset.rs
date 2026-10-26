@@ -2011,6 +2011,7 @@ mod tests {
             id: id.to_owned(),
             owner: OWNER.to_owned(),
             owner_subject: None,
+            owner_verified: false,
             device: DEVICE.to_owned(),
             expected_candidate_fingerprint: format!("sha256:{FINGERPRINT_HEX}"),
             actions: vec![json!({"op": "set"})],
@@ -2631,6 +2632,7 @@ mod tests {
             id: "86324b20a3ecbfde".to_owned(),
             owner: "claude-test".to_owned(),
             owner_subject: None,
+            owner_verified: false,
             device: "vsrx-ci".to_owned(),
             expected_candidate_fingerprint: format!("sha256:{}", "b".repeat(64)),
             actions: vec![json!({"op": "set"})],
@@ -2718,6 +2720,7 @@ mod tests {
             approver: None,
             change_set_id: None,
             verified_approver: None,
+            verified_proposer: None,
         }
     }
 

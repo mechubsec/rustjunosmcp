@@ -55,6 +55,7 @@ fn test_attribution() -> mecmcp_audit::Attribution {
         approver: None,
         change_set_id: None,
         verified_approver: None,
+        verified_proposer: None,
     }
 }
 

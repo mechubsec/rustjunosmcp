@@ -37,6 +37,7 @@ pub fn run(action: TokenAction) -> Result<()> {
                 actor_type,
                 oidc_issuer,
                 oidc_subject,
+                device_selector: Vec::new(),
                 server_pid,
             };
             mecmcp_runtime::token_cmd::run(

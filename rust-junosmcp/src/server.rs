@@ -2783,6 +2783,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -2814,6 +2815,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -2845,6 +2847,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -2916,6 +2919,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -2942,6 +2946,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -2970,6 +2975,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -3001,6 +3007,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -3029,6 +3036,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -3058,6 +3066,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -3099,6 +3108,7 @@ mod scope_tests {
         CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "t".into(),
             client_name: None,

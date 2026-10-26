@@ -623,7 +623,7 @@ it as what it is: one operator exercising the API shape, not an approval.
 
 Compiled into every build (not a cargo feature) and inert until `--oidc-issuer`
 is set. Setup follows mecmcp's
-[ONBOARDING](https://github.com/mechubsec/mecmcp/blob/v0.29.4/docs/ONBOARDING.md);
+[ONBOARDING](https://github.com/mechubsec/mecmcp/blob/v0.30.0/docs/ONBOARDING.md);
 the one difference for this server is the tool name:
 With `--oidc-issuer` set but `--require-verified-approver` off, startup logs a
 warning counting live `human` tokens that have no `oidc_subject` binding.
@@ -1420,13 +1420,13 @@ request:
 
 Attributes come from the `attributes` object in `devices.json`; a device
 without one matches no selector (fail closed). See mecmcp's
-[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.29.4/docs/OAUTH.md) for
+[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.30.0/docs/OAUTH.md) for
 the full selector grammar.
 
 Upgrading to mecmcp 0.29 reserves the `oauth:` prefix: rename any static token
 with that name first, or the whole token file fails to load. Scope-map format,
 IdP setup, audience rules and rollback notes are in mecmcp's
-[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.29.4/docs/OAUTH.md).
+[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.30.0/docs/OAUTH.md).
 
 [mecmcp#498]: https://github.com/mechubsec/mecmcp/issues/498
 
