@@ -6,6 +6,21 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Tests
+
+- **Verified-approver step-up is now covered end to end** (mecmcp#400, W8).
+  `tests/http_verified_approver.rs` drives the real HTTP router with an
+  offline fixture IdP: a valid assertion approves; a missing assertion in
+  strict mode, an assertion for another subject, and an unreachable IdP are
+  refused while reads keep working; an unconfigured server is unchanged. A
+  source tripwire pins that every `ApproverIdentity` comes from
+  `from_attribution`.
+
+### Documentation
+
+- README: verified-approver setup with this server's tool name
+  (`approve_junos_change_set`) and its fail-closed behaviour.
+
 ### Added
 
 - **Forward-only audit evidence pipeline** (mecmcp#378). With

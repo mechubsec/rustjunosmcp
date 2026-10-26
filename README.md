@@ -619,6 +619,30 @@ The two-token workaround above still has a place for pure functional
 testing of the plan→approve→apply flow when no IdP is available, but treat
 it as what it is: one operator exercising the API shape, not an approval.
 
+### Verified approver: setup and failure behaviour
+
+Compiled into every build (not a cargo feature) and inert until `--oidc-issuer`
+is set. Setup follows mecmcp's
+[ONBOARDING](https://github.com/mechubsec/mecmcp/blob/v0.29.1/docs/ONBOARDING.md);
+the one difference for this server is the tool name:
+
+```fish
+rust-junosmcp token add --tokens-file /etc/jmcp/tokens.json --name alice \
+  --actor-type human --tools approve_junos_change_set --devices '*' \
+  --oidc-issuer https://idp.example.com/ --oidc-subject alice@example.com
+rust-junosmcp --oidc-issuer https://idp.example.com/ --oidc-audience <aud> \
+  --approval-digest-key-file /etc/jmcp/approval-digest.key --require-verified-approver
+```
+
+- With `--require-verified-approver`, an approval with no valid assertion is
+  refused, and so is a proposal from an owner token with no bound subject.
+- An assertion for a different subject than the token is bound to, an expired
+  or replayed one, or one that cannot be verified because the IdP's keys are
+  unreachable, is rejected with `401` at the transport. Reads, proposals and
+  tokens presenting no assertion are unaffected; only the approval fails.
+- A server with no `--oidc-issuer` rejects any request carrying a
+  `Mecmcp-Approver-Assertion` header with `400`.
+
 ### Enabling it
 
 Add `--lab-mode` to the service unit. On a package install, use a systemd
