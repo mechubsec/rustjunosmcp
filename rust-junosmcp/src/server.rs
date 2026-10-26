@@ -1886,6 +1886,7 @@ impl JmcpHandler {
             self.coordinator.clone(),
             self.dm.clone(),
             attribution,
+            &|device| ctx_val.devices.allows(device),
             ct,
         )
         .await;

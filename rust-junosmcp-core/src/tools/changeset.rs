@@ -823,22 +823,40 @@ pub async fn create_change_set_with_cancel(
 /// authenticated principal, checks the expected digest matches the stored plan,
 /// and marks the change set as approved. Enforces separation of duties: the
 /// approver must differ from the owner. Returns `{change_set_id, state, digest}`.
+///
+/// `in_scope` is the approver's device-scope check; see
+/// [`approve_change_set_with_cancel`].
 pub async fn approve_change_set(
     args: ApproveChangeSetArgs,
     coordinator: Arc<ChangesetCoordinator>,
     dm: Arc<DeviceManager>,
     attribution: Attribution,
+    in_scope: &(dyn Fn(&str) -> bool + Sync),
 ) -> Result<Value, JmcpError> {
-    approve_change_set_with_cancel(args, coordinator, dm, attribution, CancellationToken::new())
-        .await
+    approve_change_set_with_cancel(
+        args,
+        coordinator,
+        dm,
+        attribution,
+        in_scope,
+        CancellationToken::new(),
+    )
+    .await
 }
 
 /// Approve a pending change set by ID. Makes the transition `Pending` → `Approved`.
+///
+/// `in_scope` answers whether the approver may address a device (typically
+/// `|name| caller.devices.allows(name)`); every device the change set targets
+/// must pass it, so a `site=lab-*` approver cannot approve a set that also
+/// touches prod (mecmcp#400). Junos change sets name one device today; the
+/// check still runs on `targets()` so a multi-target record cannot slip past.
 pub async fn approve_change_set_with_cancel(
     args: ApproveChangeSetArgs,
     coordinator: Arc<ChangesetCoordinator>,
     dm: Arc<DeviceManager>,
     attribution: Attribution,
+    in_scope: &(dyn Fn(&str) -> bool + Sync),
     _ct: CancellationToken,
 ) -> Result<Value, JmcpError> {
     // Validate the device exists and is within scope.
@@ -853,11 +871,12 @@ pub async fn approve_change_set_with_cancel(
     let approver = ApproverIdentity::from_attribution(&attribution);
 
     let result = coordinator
-        .approve_change_set(
+        .approve_change_set_within(
             args.change_set_id.clone(),
             args.device,
             &approver,
             args.expected_digest,
+            in_scope,
         )
         .await
         .map_err(|e| JmcpError::Validation(e.to_string()))?;
@@ -3470,6 +3489,7 @@ mod tests {
             coordinator.clone(),
             dm.clone(),
             test_attribution("alice"),
+            &|_| true,
         )
         .await;
 
@@ -3481,6 +3501,72 @@ mod tests {
             err_str.contains("owner cannot approve their own plan"),
             "self-approval must be refused, got: {err_str}"
         );
+    }
+
+    /// mecmcp#400: the approver's device scope is enforced inside the coordinator
+    /// call, so a scope that excludes the change set's device refuses the approval
+    /// and leaves the change set approvable by someone who is in scope.
+    #[tokio::test]
+    async fn approve_change_set_refuses_an_out_of_scope_approver() {
+        let inv = inv_with(
+            r#"{"r1":{"ip":"127.0.0.1","username":"u","auth":{"type":"password","password":"x"}}}"#,
+        );
+        let dm = Arc::new(DeviceManager::new(inv.clone()));
+        let policy = test_policy(inv);
+        let coordinator = Arc::new(
+            ChangesetCoordinator::load(
+                None,
+                mecmcp_changeset::OperationLimits::default(),
+                std::time::Duration::from_secs(300),
+                false,
+            )
+            .unwrap(),
+        );
+        let created = create_change_set(
+            CreateChangeSetArgs {
+                device: "r1".into(),
+                expected_fingerprint: format!("sha256:{}", "0".repeat(64)),
+                actions: vec![JunosAction {
+                    payload: Some(ConfigPayloadSpec {
+                        text: "set system host-name test".into(),
+                        format: Some("set".into()),
+                        mode: None,
+                    }),
+                    rollback_source: None,
+                    ..Default::default()
+                }],
+            },
+            dm.clone(),
+            coordinator.clone(),
+            policy,
+            test_attribution("alice"),
+            None,
+        )
+        .await
+        .unwrap();
+        let args = || ApproveChangeSetArgs {
+            change_set_id: created["change_set_id"].as_str().unwrap().into(),
+            device: "r1".into(),
+            expected_digest: created["plan_digest"].as_str().unwrap().into(),
+        };
+
+        let refused = approve_change_set(
+            args(),
+            coordinator.clone(),
+            dm.clone(),
+            test_attribution("bob"),
+            &|device| device != "r1",
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(refused.contains("device scope"), "{refused}");
+
+        let approved =
+            approve_change_set(args(), coordinator, dm, test_attribution("bob"), &|_| true)
+                .await
+                .unwrap();
+        assert_eq!(approved["state"], "Approved");
     }
 
     /// House rule: a human approves. An agent principal — distinct from the
@@ -3546,6 +3632,7 @@ mod tests {
             coordinator.clone(),
             dm.clone(),
             bob_agent,
+            &|_| true,
         )
         .await;
 
@@ -3617,6 +3704,7 @@ mod tests {
             coordinator.clone(),
             dm.clone(),
             test_attribution("bob"),
+            &|_| true,
         )
         .await
         .unwrap();
@@ -3906,6 +3994,7 @@ mod tests {
             coordinator.clone(),
             dm.clone(),
             test_attribution("bob"),
+            &|_| true,
         )
         .await
         .unwrap();
