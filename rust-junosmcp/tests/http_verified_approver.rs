@@ -227,6 +227,7 @@ async fn rig_with_store(setup: Setup, replay_store: Option<&std::path::Path>) ->
         shutdown.clone(),
         verifier,
         None,
+        None,
     )
     .unwrap();
     let port = PORT.fetch_add(1, Ordering::Relaxed);

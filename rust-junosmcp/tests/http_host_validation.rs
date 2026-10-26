@@ -96,6 +96,7 @@ async fn start_test_server(
         shutdown.clone(),
         None, // no verified-approver assertion verifier in these tests
         None, // no OAuth resource-server mode
+        None, // no device-attribute source
     )
     .expect("router build");
 
@@ -322,6 +323,7 @@ async fn insecure_bind_acknowledgement_reaches_the_transport() {
         shutdown.clone(),
         None, // no verified-approver assertion verifier in this test
         None, // no OAuth resource-server mode
+        None, // no device-attribute source
     )
     .expect("router build");
 

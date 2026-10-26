@@ -1130,6 +1130,7 @@ async fn main() -> Result<()> {
                 shutdown_timeout,
                 approver_assertion_verifier,
                 oauth_resource,
+                Some(dev_manager.clone()),
             )
             .await?;
         }

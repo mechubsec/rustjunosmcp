@@ -119,6 +119,7 @@ async fn start(oauth_on: bool, port: u16) -> (String, String, CancellationToken)
         shutdown.clone(),
         None,
         oauth,
+        None,
     )
     .unwrap();
     let addr = format!("127.0.0.1:{port}").parse().unwrap();

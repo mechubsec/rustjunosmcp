@@ -253,6 +253,7 @@ pub fn build_http_router(
     shutdown: CancellationToken,
     approver_assertion: Option<Arc<ApproverAssertionVerifier>>,
     oauth_resource: OAuthResourceHandle,
+    device_attributes: Option<Arc<dyn mecmcp_auth::DeviceAttributeSource>>,
 ) -> Result<ServePlan> {
     // Junos transport identity: metric prefix, server label, bearer realm, target keys.
     let identity = TransportIdentity::new(
@@ -267,7 +268,12 @@ pub fn build_http_router(
         let auth_store = store_file.clone();
         let authenticator = BearerAuthenticator::new(BearerSyntax::Strict, move |candidate| {
             let snapshot = auth_store.store();
-            snapshot.authenticate(candidate).map(CallerCtx::from)
+            // Resolves a token's `device_selectors` against the live inventory,
+            // one snapshot per authentication (mecmcp#400). With no source a
+            // selector token addresses no devices; plain tokens are unchanged.
+            snapshot.authenticate(candidate).map(|entry| {
+                CallerCtx::from_entry_with_attributes(entry, device_attributes.as_deref())
+            })
         });
         let boundary = BearerBoundary::new(authenticator, BearerResponseProfile::detailed("jmcp"))
             .with_preflight(JunosPreflight);
@@ -347,6 +353,7 @@ pub async fn serve_http(
     shutdown_timeout: std::time::Duration,
     approver_assertion: Option<Arc<ApproverAssertionVerifier>>,
     oauth_resource: OAuthResourceHandle,
+    device_attributes: Option<Arc<dyn mecmcp_auth::DeviceAttributeSource>>,
 ) -> Result<()> {
     let plan = build_http_router(
         handler,
@@ -359,6 +366,7 @@ pub async fn serve_http(
         shutdown,
         approver_assertion,
         oauth_resource,
+        device_attributes,
     )?;
     // Readiness marker. Three test harnesses block on this exact string, and
     // `--tls-cert` callers on the "(TLS)" suffix, so it is a contract rather
