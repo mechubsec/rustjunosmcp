@@ -3189,6 +3189,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "mecmcp-audit",
+ "mecmcp-auth",
  "mecmcp-changeset",
  "mecmcp-device",
  "mecmcp-inventory",

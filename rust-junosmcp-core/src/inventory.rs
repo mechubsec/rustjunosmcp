@@ -564,6 +564,11 @@ pub struct DeviceEntry {
     /// is never inferred from device behaviour, only declared by the operator.
     #[serde(default)]
     pub plane_commit_logins: Vec<String>,
+    /// Inventory attributes (`site`, `vendor`, `tags`) that OAuth scope-map
+    /// `device_selectors` match against (mecmcp#400). Absent means the device
+    /// matches no selector. An invalid value refuses the whole inventory load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attributes: Option<mecmcp_auth::DeviceAttrs>,
 }
 
 #[cfg(test)]
@@ -596,6 +601,26 @@ mod entry_tests {
         let e: DeviceEntry = serde_json::from_str(json).unwrap();
         assert_eq!(e.port, 830);
         assert_eq!(e.ssh_config, Some(PathBuf::from("/home/u/.ssh/config_jh")));
+    }
+
+    #[test]
+    fn parses_attributes_and_defaults_to_none() {
+        let with = r#"{"ip":"10.0.0.1","username":"a","auth":{"type":"password","password":"x"},
+            "attributes":{"site":"lab-1","vendor":"junos","tags":["pci"]}}"#;
+        let e: DeviceEntry = serde_json::from_str(with).unwrap();
+        assert_eq!(e.attributes.unwrap().site.unwrap().as_str(), "lab-1");
+        let without =
+            r#"{"ip":"10.0.0.1","username":"a","auth":{"type":"password","password":"x"}}"#;
+        let e: DeviceEntry = serde_json::from_str(without).unwrap();
+        assert!(e.attributes.is_none());
+        assert!(!serde_json::to_string(&e).unwrap().contains("attributes"));
+    }
+
+    #[test]
+    fn rejects_invalid_attribute_value() {
+        let json = r#"{"ip":"10.0.0.1","username":"a","auth":{"type":"password","password":"x"},
+            "attributes":{"site":"lab*1"}}"#;
+        assert!(serde_json::from_str::<DeviceEntry>(json).is_err());
     }
 
     #[test]

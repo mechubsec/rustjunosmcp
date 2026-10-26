@@ -42,6 +42,7 @@ http-body    = { workspace = true }
 http-body-util = { workspace = true }
 rmcp         = { version = "3", features = ["server", "transport-streamable-http-server"] }
 rust-junosmcp-auth = { version = "2.2.0", path = "../rust-junosmcp-auth" }
+mecmcp-auth = { workspace = true }
 mecmcp-transport = { workspace = true }
 mecmcp-policy = { workspace = true }
 mecmcp-inventory = { workspace = true }

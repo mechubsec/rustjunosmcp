@@ -4,7 +4,11 @@
 //! discovery metadata, the 401 challenge, and static tokens still working.
 //! No JWT is presented, so the IdP is never contacted.
 
+use aws_lc_rs::encoding::AsDer;
+use aws_lc_rs::rsa::{KeyPair, KeySize};
+use jsonwebtoken::jwk::{Jwk, JwkSet};
 use mecmcp_changeset::ChangesetCoordinator;
+use mecmcp_oidc::{DiscoveryDocument, FetchError, KeySource};
 use mecmcp_runtime::cli::OAuthResourceArgs;
 use mecmcp_transport::LimitsConfig;
 use rust_junosmcp::server::JmcpHandler;
@@ -90,7 +94,13 @@ async fn start(oauth_on: bool, port: u16) -> (String, String, CancellationToken)
             oauth_scope_map: Some(map),
             ..OAuthResourceArgs::default()
         };
-        rust_junosmcp::http_transport::build_oauth_resource(&args).unwrap()
+        rust_junosmcp::http_transport::build_oauth_resource(
+            &args,
+            Arc::new(DeviceManager::new(Arc::new(
+                rust_junosmcp_core::Inventory::empty(),
+            ))),
+        )
+        .unwrap()
     } else {
         None
     };
@@ -216,12 +226,117 @@ fn oauth_max_token_lifetime_reaches_the_resource_config() {
             oauth_max_token_lifetime_secs: ceiling,
             ..OAuthResourceArgs::default()
         };
-        rust_junosmcp::http_transport::build_oauth_resource(&args)
-            .unwrap()
-            .unwrap()
-            .config()
-            .max_token_lifetime()
+        rust_junosmcp::http_transport::build_oauth_resource(
+            &args,
+            Arc::new(DeviceManager::new(Arc::new(
+                rust_junosmcp_core::Inventory::empty(),
+            ))),
+        )
+        .unwrap()
+        .unwrap()
+        .config()
+        .max_token_lifetime()
     };
     assert_eq!(build(Some(900)), Some(std::time::Duration::from_secs(900)));
     assert_eq!(build(None), None);
+}
+
+/// Serves one signing key from memory; no socket to an IdP is opened.
+struct FixtureSource(JwkSet);
+
+#[async_trait::async_trait]
+impl KeySource for FixtureSource {
+    async fn fetch_discovery(&self, issuer: &str) -> Result<DiscoveryDocument, FetchError> {
+        Ok(DiscoveryDocument {
+            issuer: issuer.to_owned(),
+            jwks_uri: format!("{issuer}/jwks"),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            end_session_endpoint: None,
+            code_challenge_methods_supported: Vec::new(),
+            id_token_signing_alg_values_supported: Vec::new(),
+        })
+    }
+    async fn fetch_jwks(&self, _jwks_uri: &str) -> Result<JwkSet, FetchError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// End to end (mecmcp#400 phase 2): devices.json `attributes` -> `DeviceManager` ->
+/// `build_oauth_resource` -> a signed token authenticated with a `device_selectors` scope
+/// grants only the matching inventory devices. The JWKS is an in-memory fixture.
+#[tokio::test]
+async fn device_selectors_grant_only_matching_inventory_devices() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let dir = tempfile::tempdir().unwrap();
+    let pw = r#""username":"a","auth":{"type":"password","password":"x"}"#;
+    let devices = dir.path().join("devices.json");
+    std::fs::write(
+        &devices,
+        format!(
+            r#"{{"lab-a":{{"ip":"10.0.0.1",{pw},"attributes":{{"site":"lab-1"}}}},
+                "emea-a":{{"ip":"10.0.0.2",{pw},"attributes":{{"site":"emea-lon"}}}},
+                "bare":{{"ip":"10.0.0.3",{pw}}}}}"#
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &devices,
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
+    let map = dir.path().join("scopes.json");
+    std::fs::write(
+        &map,
+        r#"{"version":1,"scopes":{"junos:lab":{"tools":["get_router_list"],"devices":["*"],
+            "device_selectors":["site=lab-*"]}}}"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&map, std::os::unix::fs::PermissionsExt::from_mode(0o640)).unwrap();
+    let manager = Arc::new(DeviceManager::new(Arc::new(
+        rust_junosmcp_core::Inventory::load(&devices).unwrap(),
+    )));
+
+    let pair = KeyPair::generate(KeySize::Rsa2048).unwrap();
+    let der: aws_lc_rs::encoding::Pkcs8V1Der<'static> = pair.as_der().unwrap();
+    let pem_text = pem::encode(&pem::Pem::new("PRIVATE KEY", der.as_ref().to_vec()));
+    let encoding_key = jsonwebtoken::EncodingKey::from_rsa_pem(pem_text.as_bytes()).unwrap();
+    let mut jwk = Jwk::from_encoding_key(&encoding_key, jsonwebtoken::Algorithm::RS256).unwrap();
+    jwk.common.key_id = Some("k1".to_owned());
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    )
+    .unwrap();
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+    header.kid = Some("k1".to_owned());
+    let token = jsonwebtoken::encode(
+        &header,
+        &serde_json::json!({
+            "iss": ISSUER, "sub": "alice", "aud": RESOURCE, "exp": now + 3600,
+            "iat": now - 10, "jti": "j1", "client_id": "odysseus", "scope": "junos:lab",
+        }),
+        &encoding_key,
+    )
+    .unwrap();
+
+    let args = OAuthResourceArgs {
+        oauth_issuer: Some(ISSUER.into()),
+        oauth_resource: Some(RESOURCE.into()),
+        oauth_scope_map: Some(map),
+        ..OAuthResourceArgs::default()
+    };
+    let resource = rust_junosmcp::http_transport::build_oauth_resource_with_keys(
+        &args,
+        manager,
+        Some(Arc::new(FixtureSource(JwkSet { keys: vec![jwk] }))),
+    )
+    .unwrap()
+    .unwrap();
+    let caller = resource.authenticate(&token).await.unwrap();
+    assert!(caller.devices.allows("lab-a"));
+    assert!(!caller.devices.allows("emea-a"));
+    assert!(!caller.devices.allows("bare"));
 }

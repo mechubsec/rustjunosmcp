@@ -783,6 +783,22 @@ impl DeviceManager {
     }
 }
 
+/// Reads the live inventory on every call, so a SIGHUP or `reload_devices`
+/// swap changes what OAuth `device_selectors` grant on the next request.
+impl mecmcp_auth::DeviceAttributeSource for DeviceManager {
+    fn device_attributes(&self) -> Vec<(String, mecmcp_auth::DeviceAttrs)> {
+        let inventory = self.inventory();
+        inventory
+            .names()
+            .into_iter()
+            .filter_map(|name| {
+                let attributes = inventory.get(&name).ok()?.attributes.clone()?;
+                Some((name, attributes))
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -795,6 +811,43 @@ mod tests {
     }
 
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    const PW: &str = r#""username":"a","auth":{"type":"password","password":"x"}"#;
+
+    #[test]
+    fn attribute_source_reports_only_devices_with_attributes_and_follows_swaps() {
+        use mecmcp_auth::DeviceAttributeSource as _;
+        let manager = DeviceManager::new(build_inventory(&format!(
+            r#"{{"lab-a":{{"ip":"10.0.0.1",{PW},"attributes":{{"site":"lab-1","tags":["pci"]}}}},
+                "bare":{{"ip":"10.0.0.2",{PW}}}}}"#
+        )));
+        let seen = manager.device_attributes();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, "lab-a");
+
+        // A reload (SIGHUP / reload_devices) swaps the inventory; the source must follow.
+        manager.store_inventory(
+            build_inventory(&format!(
+                r#"{{"emea-a":{{"ip":"10.0.0.3",{PW},"attributes":{{"site":"emea-1"}}}}}}"#
+            )),
+            PathBuf::new(),
+            [0u8; 32],
+        );
+        let seen = manager.device_attributes();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, "emea-a");
+    }
+
+    #[test]
+    fn invalid_attribute_value_refuses_the_inventory_load() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(
+            format!(r#"{{"r1":{{"ip":"10.0.0.1",{PW},"attributes":{{"site":"a*b"}}}}}}"#)
+                .as_bytes(),
+        )
+        .unwrap();
+        assert!(Inventory::load(f.path()).is_err());
+    }
 
     // ── should_pool: what may go back in the pool (issue #316) ──────────
 
