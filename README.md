@@ -625,6 +625,8 @@ Compiled into every build (not a cargo feature) and inert until `--oidc-issuer`
 is set. Setup follows mecmcp's
 [ONBOARDING](https://github.com/mechubsec/mecmcp/blob/v0.29.3/docs/ONBOARDING.md);
 the one difference for this server is the tool name:
+With `--oidc-issuer` set but `--require-verified-approver` off, startup logs a
+warning counting live `human` tokens that have no `oidc_subject` binding.
 
 ```fish
 # 1. Bind the approver's token to their IdP identity. Packaged installs keep the
@@ -1382,6 +1384,10 @@ rust-junosmcp --transport streamable-http --tokens-file /etc/jmcp/tokens.json \
   --oauth-resource https://junos.lab.example/mcp \
   --oauth-scope-map /etc/jmcp/oauth-scopes.json
 ```
+
+Add `--oauth-max-token-lifetime-secs <N>` to refuse any access token whose
+`exp - iat` exceeds N seconds, which bounds how long an offboarded user's token
+keeps working (off by default).
 
 Upgrading to mecmcp 0.29 reserves the `oauth:` prefix: rename any static token
 with that name first, or the whole token file fails to load. Scope-map format,

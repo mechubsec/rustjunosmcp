@@ -193,3 +193,35 @@ async fn oauth_off_serves_no_metadata_route() {
     assert!(!challenge.contains("resource_metadata"), "{challenge}");
     shutdown.cancel();
 }
+
+/// `--oauth-max-token-lifetime-secs` must reach the resource config (mecmcp#400).
+/// Limitation: this pins the wiring only; no signed JWT is minted here, so the
+/// refusal itself (`token_lifetime_exceeded`) is covered by mecmcp's own tests.
+#[test]
+fn oauth_max_token_lifetime_reaches_the_resource_config() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let dir = tempfile::tempdir().unwrap();
+    let map = dir.path().join("scopes.json");
+    std::fs::write(
+        &map,
+        r#"{"version":1,"scopes":{"junos:read":{"tools":["get_router_list"],"devices":["*"]}}}"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&map, std::os::unix::fs::PermissionsExt::from_mode(0o640)).unwrap();
+    let build = |ceiling| {
+        let args = OAuthResourceArgs {
+            oauth_issuer: Some(ISSUER.into()),
+            oauth_resource: Some(RESOURCE.into()),
+            oauth_scope_map: Some(map.clone()),
+            oauth_max_token_lifetime_secs: ceiling,
+            ..OAuthResourceArgs::default()
+        };
+        rust_junosmcp::http_transport::build_oauth_resource(&args)
+            .unwrap()
+            .unwrap()
+            .config()
+            .max_token_lifetime()
+    };
+    assert_eq!(build(Some(900)), Some(std::time::Duration::from_secs(900)));
+    assert_eq!(build(None), None);
+}
