@@ -686,7 +686,9 @@ was turned on cannot skip it.
 Send `Mecmcp-Proposer-Assertion` **only on `create_junos_change_set`**, and
 never `Mecmcp-Approver-Assertion` there: the headers are separate but share one
 single-use `jti` set, so an assertion spent on any other request cannot be
-reused. Off by default; nothing changes when the flag is unset.
+reused. Off by default. Note that any verified proposer, including every OAuth caller,
+makes the server persist change-set state version 9, which v2.3.0 cannot read:
+snapshot the state file before upgrading, since a rollback needs it restored.
 
 ### Enabling it
 
@@ -1283,9 +1285,11 @@ rust-junosmcp token add --tokens-file tokens.json --name lab-ops \
   --devices '*' --tools execute_junos_command --device-selector 'site=lab-*'
 ```
 
-> **Upgrade every binary that rewrites `tokens.json` first.** A binary without
-> `device_selectors` support drops the `device_selectors` field on `token rotate` or
-> `token set-scope`, silently widening the token to all of its `devices`.
+> **Upgrade every binary that reads or rewrites `tokens.json` first** — every
+> server sharing the store, and the token CLIs. A binary without
+> `device_selectors` support that merely reads the store ignores the field and
+> grants the token its broad `devices` scope immediately; an older CLI also
+> drops it on `token rotate` or `token set-scope`.
 
 ### Tool scopes and write tools
 

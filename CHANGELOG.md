@@ -20,13 +20,24 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ### Changed
 
-- mecmcp 0.29.4 -> 0.30.0. Every audit line gains `identity_mechanism`.
+- mecmcp 0.29.4 -> 0.30.0. Every per-call audit record (`AuditScope`) gains
+  `identity_mechanism` (`token`, `oauth`, `oidc-step-up`, `none`). Operational
+  `target: "audit"` events (startup warnings and the like) do not carry it, so a
+  strict SIEM parser must accept both shapes.
 
-### Upgrade note
+### Upgrade notes
 
-- **Upgrade every binary that rewrites `tokens.json` before adding
-  `device_selectors`.** An older binary drops the field on `token rotate` or
-  `token set-scope`, widening the token to all of its `devices`.
+- **Upgrade every binary that reads or rewrites `tokens.json` before adding
+  `device_selectors`**: all servers sharing the store, and the token CLIs. An
+  older server (v2.3.0 / mecmcp 0.29.4 or earlier) that merely *reads* a store
+  containing `device_selectors` ignores the field and grants the token its broad
+  `devices` scope immediately; an older CLI also drops it on `token rotate` or
+  `token set-scope`.
+- **Snapshot the change-set state file before upgrading.** Any IdP-verified
+  proposer, including every OAuth caller even with `--require-verified-proposer`
+  off, makes mecmcp 0.30 persist change-set state version 9. v2.3.0 reads only
+  version 8 and below and fails with `unsupported changeset state version 9`, so
+  a binary-only rollback is not enough: restore the snapshot too.
 
 ## [2.3.0] - 2026-10-26
 
