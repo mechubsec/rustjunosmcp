@@ -648,8 +648,14 @@ sudo -u jmcp rust-junosmcp --device-mapping /etc/jmcp/devices.json \
   --tokens-file /var/lib/jmcp/tokens.json \
   --oidc-issuer https://idp.example.com/ --oidc-audience YOUR_AUDIENCE \
   --approval-digest-key-file /etc/jmcp/approval-digest.key \
+  --approver-replay-store /var/lib/jmcp/approver-replay.log \
   --require-verified-approver
 ```
+
+`--approver-replay-store` persists used assertion `jti`s across restarts
+(created 0600 by the service user, so `/var/lib/jmcp` is the right place;
+without it an assertion used just before a restart can be replayed once until
+it expires). It requires `--oidc-issuer`.
 
 - With `--require-verified-approver`, an approval with no valid assertion is
   refused, and so is a proposal from an owner token with no bound subject.
