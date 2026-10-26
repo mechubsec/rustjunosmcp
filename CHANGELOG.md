@@ -20,7 +20,7 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ### Changed
 
-- mecmcp 0.29.4 -> 0.30.0. Every per-call audit record (`AuditScope`) gains
+- mecmcp 0.29.4 -> 0.30.1 (`token list` shows `device_selectors`). Every per-call audit record (`AuditScope`) gains
   `identity_mechanism` (`token`, `oauth`, `oidc-step-up`, `none`). Operational
   `target: "audit"` events (startup warnings and the like) do not carry it, so a
   strict SIEM parser must accept both shapes.
