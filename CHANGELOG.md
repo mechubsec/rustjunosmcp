@@ -14,8 +14,8 @@ All notable user-facing changes are recorded here. Format loosely follows
   `--oauth-scope-map`, `--oauth-audience`, `--oauth-role-claim` and
   `--oauth-require-at-jwt-typ`, the RFC 9728 metadata route and
   `resource_metadata` on 401 challenges. Requires `--tokens-file`; the scope
-  map is mode-checked at startup like other credential files (no
-  group/world write, no symlink). Builds without the feature have no
+  map must be no looser than `0640` and not a symlink (checked at startup and
+  again by the loader; `chmod 0640` an existing file). Builds without the feature have no
   `--oauth-*` flags and no metadata route.
 
 ### Changed
@@ -27,7 +27,7 @@ All notable user-facing changes are recorded here. Format loosely follows
   `oauth-resource` feature off.
   Operational `target: "audit"` events (flush, startup, redaction warnings)
   do not carry them.
-- **mecmcp 0.29.0** (breaking upstream). Apart from the audit fields above,
+- **mecmcp 0.29.1** (breaking upstream). Apart from the audit fields above,
   static-token callers see no change. Once an OAuth caller (possible only in
   an `oauth-resource` build) has created a change set, older binaries cannot
   read the change-set state file; snapshot before upgrading. Static tokens

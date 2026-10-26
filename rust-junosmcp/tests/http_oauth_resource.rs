@@ -81,6 +81,8 @@ async fn start(oauth_on: bool, port: u16) -> (String, String, CancellationToken)
         r#"{"version":1,"scopes":{"junos:read":{"tools":["get_router_list"],"devices":["*"]}}}"#,
     )
     .unwrap();
+    // 0.29.1 refuses a scope map looser than 0640.
+    std::fs::set_permissions(&map, std::os::unix::fs::PermissionsExt::from_mode(0o640)).unwrap();
     let oauth = if oauth_on {
         let args = OAuthResourceArgs {
             oauth_issuer: Some(ISSUER.into()),

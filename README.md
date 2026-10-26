@@ -1337,7 +1337,7 @@ rust-junosmcp --transport streamable-http --tokens-file /etc/jmcp/tokens.json \
 Upgrading to mecmcp 0.29 reserves the `oauth:` prefix: rename any static token
 with that name first, or the whole token file fails to load. Scope-map format,
 IdP setup, audience rules and rollback notes are in mecmcp's
-[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.29.0/docs/OAUTH.md).
+[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.29.1/docs/OAUTH.md).
 
 [mecmcp#498]: https://github.com/mechubsec/mecmcp/issues/498
 
