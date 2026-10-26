@@ -827,31 +827,34 @@ pub async fn create_change_set_with_cancel(
     Ok(created_result)
 }
 
-/// The first device the change set targets that `in_scope` refuses, if any.
+/// The devices the change set targets that `in_scope` refuses (empty when all pass).
 ///
 /// The server's approve handler runs this before [`approve_change_set_with_cancel`] so a
 /// multi-target record whose primary device is in scope but another target is not is
 /// refused as a scope denial (`unauthorized`, audited as denied) rather than as an
 /// `invalid_argument` from the coordinator (mecmcp#400). An unknown change set yields
-/// `None`: the approve call itself reports it.
+/// empty: the approve call itself reports it.
 pub async fn out_of_scope_target(
     coordinator: &ChangesetCoordinator,
     change_set_id: &str,
     device: &str,
     in_scope: &(dyn Fn(&str) -> bool + Sync),
-) -> Option<String> {
-    let record = coordinator.change_set(change_set_id, device).await.ok()?;
-    first_out_of_scope(&record, in_scope)
+) -> Vec<String> {
+    match coordinator.change_set(change_set_id, device).await {
+        Ok(record) => out_of_scope(&record, in_scope),
+        Err(_) => Vec::new(),
+    }
 }
 
-fn first_out_of_scope(
+fn out_of_scope(
     record: &mecmcp_changeset::ChangeSetRecord,
     in_scope: &(dyn Fn(&str) -> bool + Sync),
-) -> Option<String> {
+) -> Vec<String> {
     record
         .targets()
         .into_iter()
-        .find(|target| !in_scope(target))
+        .filter(|target| !in_scope(target))
+        .collect()
 }
 
 /// Approve a change set (second principal).
@@ -3543,16 +3546,13 @@ mod tests {
     /// A multi-target record whose primary device is in scope but another target is
     /// not must be reported, so the handler can deny it as a scope failure.
     #[test]
-    fn first_out_of_scope_reports_a_non_primary_target() {
+    fn out_of_scope_reports_a_non_primary_target() {
         let mut record = record_with_approval(None, false);
         record.device = "lab-1".into();
         record.targets = vec!["lab-1".into(), "prod-1".into()];
         let lab_only = |device: &str| device.starts_with("lab-");
-        assert_eq!(
-            first_out_of_scope(&record, &lab_only),
-            Some("prod-1".into())
-        );
-        assert_eq!(first_out_of_scope(&record, &|_| true), None);
+        assert_eq!(out_of_scope(&record, &lab_only), vec!["prod-1".to_owned()]);
+        assert!(out_of_scope(&record, &|_| true).is_empty());
     }
 
     /// mecmcp#400: the approver's device scope is enforced inside the coordinator

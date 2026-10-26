@@ -526,6 +526,25 @@ pub(super) fn audit_scope(
     }
 }
 
+/// Deny an approval whose change set targets devices outside the caller's scope.
+///
+/// The out-of-scope targets are server-derived: the caller supplied only the primary
+/// device, so naming them in the response would disclose inventory they may not see. The
+/// caller-visible text is therefore generic, and the rejected targets go to the audit
+/// record (`denied_targets`) so the denial stays attributable (mecmcp#400).
+pub(super) fn deny_hidden_targets(
+    audit: &mut AuditScope,
+    tool: &'static str,
+    hidden: &[String],
+) -> CallToolResult {
+    audit.meta("denied_targets", hidden.join(","));
+    audit.deny("router_scope");
+    // No "token ..." phrasing: the body redactor would blank the rest of the line.
+    scope_denied_result(&format!(
+        "caller is not authorized for every device this change set targets (tool '{tool}')"
+    ))
+}
+
 /// Record the commit-confirmed decision for a caller-supplied
 /// `confirm_timeout_mins` in the audit event (MEC-45).
 ///
@@ -1882,20 +1901,19 @@ impl JmcpHandler {
         // A multi-target change set with one target outside the approver's scope is a
         // scope denial, not invalid input (mecmcp#400).
         let in_scope = |device: &str| ctx_val.devices.allows(device);
-        if let Some(router) = changeset::out_of_scope_target(
+        let hidden = changeset::out_of_scope_target(
             &self.coordinator,
             &args.change_set_id,
             &args.device,
             &in_scope,
         )
-        .await
-        {
-            audit.deny("router_scope");
-            return Self::scope_to_call_result(ScopeError::RouterNotInScope {
-                token: ctx_val.token_name.clone(),
-                router,
-                tool: "approve_junos_change_set",
-            });
+        .await;
+        if !hidden.is_empty() {
+            return Ok(deny_hidden_targets(
+                &mut audit,
+                "approve_junos_change_set",
+                &hidden,
+            ));
         }
 
         let attribution = mecmcp_audit::Attribution::from_caller(ctx_val);
@@ -3472,6 +3490,60 @@ mod redaction_coverage_tests {
     /// The success path: a tool handler returning device-derived text as
     /// `Value::String` (the common case — see `get_config::handle`,
     /// `config_diff::handle`, `execute_command::handle`, ...).
+    #[derive(Clone, Default)]
+    struct LogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for LogBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
+        type Writer = LogBuffer;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// A hidden secondary target must not reach the caller, and must reach the audit record.
+    #[test]
+    fn hidden_target_denial_is_generic_to_the_caller_and_named_in_the_audit() {
+        let logs = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .with_ansi(false)
+            .finish();
+        let text = tracing::subscriber::with_default(subscriber, || {
+            let mut audit = audit_scope(
+                None,
+                "approve_junos_change_set",
+                "approve",
+                vec!["lab-1".into()],
+            );
+            let result = deny_hidden_targets(
+                &mut audit,
+                "approve_junos_change_set",
+                &["prod-1".to_owned()],
+            );
+            drop(audit);
+            result_text(&result)
+        });
+        assert!(
+            !text.contains("prod-1"),
+            "caller text disclosed the target: {text}"
+        );
+        assert!(text.contains("not authorized for every device"), "{text}");
+        let logged = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logged.contains("prod-1"),
+            "audit lacks the rejected target: {logged}"
+        );
+        assert!(logged.contains("router_scope"), "{logged}");
+    }
+
     #[test]
     fn to_call_result_redacts_every_fixture_secret_from_a_string_payload() {
         let payload = synthetic_device_payload();
