@@ -286,6 +286,13 @@ pub struct Cli {
     #[command(flatten)]
     pub verified_approver: VerifiedApproverArgs,
 
+    /// OAuth 2.1 resource-server mode (`--oauth-*`, mecmcp#498). Compiled in
+    /// only with the `oauth-resource` feature; inert unless the three core
+    /// flags are given. `main.rs` validates it at startup.
+    #[cfg(feature = "oauth-resource")]
+    #[command(flatten)]
+    pub oauth: mecmcp_runtime::cli::OAuthResourceArgs,
+
     /// `--tool-mode full|compact` (env `MCP_TOOL_MODE`): compact lists only
     /// `execute` and `get_router_list`. Listing only; scopes still authorize.
     #[command(flatten)]

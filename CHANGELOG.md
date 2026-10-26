@@ -6,6 +6,44 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **Forward-only audit evidence pipeline** (mecmcp#378). With
+  `--audit-forward-endpoint` (plus `--ssdf-audit-server-id`,
+  `--audit-forward-outbox` and `--audit-forward-ledger`) and no
+  `--ssdf-audit-endpoint`, the server now ships the hash-chained evidence log
+  to the forward collector instead of refusing to start, and fails closed on
+  the forward spool. Startup mode checks now cover the signing key and forward
+  token in this mode. The forward endpoint uses `--audit-forward-ca-file`
+  (falling back to the SSDF CA when SSDF is configured). A forward endpoint
+  without a server id is refused. SSDF configurations behave as before.
+- **Optional OAuth 2.1 resource-server mode** (mecmcp#498), behind the new
+  `oauth-resource` cargo feature (off by default; release images and the LXC
+  package do not include it). Adds `--oauth-issuer`, `--oauth-resource`,
+  `--oauth-scope-map`, `--oauth-audience`, `--oauth-role-claim` and
+  `--oauth-require-at-jwt-typ`, the RFC 9728 metadata route and
+  `resource_metadata` on 401 challenges. Requires `--tokens-file`; the scope
+  map must be no looser than `0640` and not a symlink (checked at startup and
+  again by the loader; `chmod 0640` an existing file). Builds without the feature have no
+  `--oauth-*` flags and no metadata route.
+
+### Changed
+
+- **Audit line format: three new fields.** With mecmcp 0.29.0 every per-call
+  audit record gains `oauth_issuer=`, `oauth_subject=` and `oauth_client_id=`.
+  They are empty for static-token and stdio callers (every caller in a
+  default build). Strict SIEM parsers must accept them, even with the
+  `oauth-resource` feature off.
+  Operational `target: "audit"` events (flush, startup, redaction warnings)
+  do not carry them.
+- **mecmcp 0.29.1** (breaking upstream). Apart from the audit fields above,
+  static-token callers see no change, provided the token file contains no
+  name starting with the reserved `oauth:` prefix. Once an OAuth caller (possible only in
+  an `oauth-resource` build) has created a change set, older binaries cannot
+  read the change-set state file; snapshot before upgrading. Static tokens
+  named `oauth:*` are now reserved, and a token file containing one fails to
+  load as a whole, so rename any such token first.
+
 ## [1.0.0] - 2026-10-25
 
 **1.0: rust-junosmcp is no longer beta.** The README's new

@@ -1318,6 +1318,29 @@ server with a foreign `Host`. "Off" was therefore most dangerous exactly where i
 looked safest. If a client sends an authority the server does not know, name it
 with `--allowed-host`; the flag is repeatable.
 
+### OAuth 2.1 resource-server mode (opt-in build)
+
+An external authorization server's JWT access tokens can be accepted next to
+the static tokens ([mecmcp#498]). The feature is compiled out of the shipped
+binary: build with `cargo build --release -p rust-junosmcp --features
+oauth-resource`, and a binary built without it has neither the `--oauth-*`
+flags nor the discovery route. Static tokens are tried first, and `--tokens-file`
+is required.
+
+```fish
+rust-junosmcp --transport streamable-http --tokens-file /etc/jmcp/tokens.json \
+  --oauth-issuer https://idp.lab.example/realms/lab \
+  --oauth-resource https://junos.lab.example/mcp \
+  --oauth-scope-map /etc/jmcp/oauth-scopes.json
+```
+
+Upgrading to mecmcp 0.29 reserves the `oauth:` prefix: rename any static token
+with that name first, or the whole token file fails to load. Scope-map format,
+IdP setup, audience rules and rollback notes are in mecmcp's
+[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.29.1/docs/OAUTH.md).
+
+[mecmcp#498]: https://github.com/mechubsec/mecmcp/issues/498
+
 ### Hot reload
 
 After revoking or rotating a token, the server reloads the token store without

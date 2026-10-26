@@ -18,6 +18,55 @@ use serde_json::Value;
 use std::{net::SocketAddr, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
+/// OAuth resource-server verifier handed to the bearer boundary.
+///
+/// Without the `oauth-resource` feature the type is uninhabited behind
+/// `Option`, so every caller passes `None` and the parameter costs nothing.
+#[cfg(feature = "oauth-resource")]
+pub type OAuthResourceHandle =
+    Option<Arc<mecmcp_transport::OAuthResource<rust_junosmcp_auth::NoGrant>>>;
+/// See the feature-enabled definition.
+#[cfg(not(feature = "oauth-resource"))]
+pub type OAuthResourceHandle = Option<std::convert::Infallible>;
+
+/// Build the OAuth resource-server verifier from validated CLI flags, or
+/// `None` when no `--oauth-*` flag was given.
+///
+/// The key source is `mecmcp-http`'s client, which needs the process-wide
+/// rustls `CryptoProvider` that `main` installs at startup.
+///
+/// # Errors
+/// Inconsistent flags, an unreadable or invalid scope map, or a non-canonical
+/// issuer or resource URI.
+#[cfg(feature = "oauth-resource")]
+pub fn build_oauth_resource(
+    oauth: &mecmcp_runtime::cli::OAuthResourceArgs,
+) -> Result<OAuthResourceHandle> {
+    use mecmcp_transport::{OAuthResource, OAuthResourceConfig, OAuthScopeMap};
+
+    oauth.validate().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let (Some(issuer), Some(resource), Some(map_path)) = (
+        &oauth.oauth_issuer,
+        &oauth.oauth_resource,
+        &oauth.oauth_scope_map,
+    ) else {
+        return Ok(None);
+    };
+    let scope_map = OAuthScopeMap::load(map_path)
+        .with_context(|| format!("loading --oauth-scope-map {}", map_path.display()))?;
+    let mut config = OAuthResourceConfig::new(issuer, resource, scope_map)
+        .context("configuring OAuth resource-server mode")?
+        .with_role_claim(&oauth.oauth_role_claim)
+        .with_require_at_jwt_typ(oauth.oauth_require_at_jwt_typ);
+    if let Some(audience) = &oauth.oauth_audience {
+        config = config.with_audience(audience);
+    }
+    let http_client = mecmcp_http::HttpClient::new(mecmcp_http::HttpClientConfig::default())
+        .context("building the OAuth discovery/JWKS HTTP client")?;
+    let source = Arc::new(mecmcp_oidc::HttpKeySource::new(http_client));
+    Ok(Some(Arc::new(OAuthResource::new(config, source))))
+}
+
 const DEVICE_SELECTOR_KEYS: &[&str] = &[
     "device",
     "device_name",
@@ -174,6 +223,7 @@ pub fn build_http_router(
     allow_insecure_bind: bool,
     shutdown: CancellationToken,
     approver_assertion: Option<Arc<ApproverAssertionVerifier>>,
+    oauth_resource: OAuthResourceHandle,
 ) -> Result<ServePlan> {
     // Junos transport identity: metric prefix, server label, bearer realm, target keys.
     let identity = TransportIdentity::new(
@@ -199,6 +249,13 @@ pub fn build_http_router(
             Some(verifier) => boundary.with_approver_assertion(verifier),
             None => boundary,
         };
+        // OAuth access tokens are tried after the static store misses; the
+        // metadata route and `resource_metadata` challenge come with it.
+        #[cfg(feature = "oauth-resource")]
+        let boundary = match oauth_resource {
+            Some(resource) => boundary.with_oauth_resource(resource),
+            None => boundary,
+        };
         HttpTransportConfig::authenticated(
             identity.clone(),
             limits.clone(),
@@ -207,7 +264,12 @@ pub fn build_http_router(
             boundary,
         )
     } else {
-        // Unauthenticated mode
+        // Unauthenticated mode. main refuses --oauth-* here; a library caller
+        // that passes one anyway gets an error rather than an open server
+        // that looks protected.
+        if oauth_resource.is_some() {
+            anyhow::bail!("OAuth resource-server mode requires a token store");
+        }
         HttpTransportConfig::unauthenticated(
             identity.clone(),
             limits.clone(),
@@ -255,6 +317,7 @@ pub async fn serve_http(
     shutdown: CancellationToken,
     shutdown_timeout: std::time::Duration,
     approver_assertion: Option<Arc<ApproverAssertionVerifier>>,
+    oauth_resource: OAuthResourceHandle,
 ) -> Result<()> {
     let plan = build_http_router(
         handler,
@@ -266,6 +329,7 @@ pub async fn serve_http(
         allow_insecure_bind,
         shutdown,
         approver_assertion,
+        oauth_resource,
     )?;
     // Readiness marker. Three test harnesses block on this exact string, and
     // `--tls-cert` callers on the "(TLS)" suffix, so it is a contract rather

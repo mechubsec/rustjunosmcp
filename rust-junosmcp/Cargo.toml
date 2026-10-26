@@ -26,6 +26,10 @@ default = ["tls", "srx"]
 # key off disk, and axum-server.
 tls = ["dep:rustls-pki-types", "dep:axum-server"]
 srx = ["dep:rust-junosmcp-srx-core"]
+# Opt-in OAuth 2.1 resource-server mode (mecmcp#498): `--oauth-*` flags, RFC 9728
+# metadata, JWT access tokens after the static token store misses. Off by default,
+# so the shipped binary has neither the flags nor the route.
+oauth-resource = ["mecmcp-transport/oauth-resource"]
 
 [lib]
 name = "rust_junosmcp"
@@ -132,3 +136,8 @@ rustls-pki-types = { workspace = true }
 tower = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+
+[[test]]
+name = "http_oauth_resource"
+path = "tests/http_oauth_resource.rs"
+required-features = ["oauth-resource"]
