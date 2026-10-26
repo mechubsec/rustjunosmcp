@@ -627,22 +627,26 @@ is set. Setup follows mecmcp's
 the one difference for this server is the tool name:
 
 ```fish
-# 1. Bind the approver's token to their IdP identity.
-rust-junosmcp token add --tokens-file /etc/jmcp/tokens.json --name alice \
+# 1. Bind the approver's token to their IdP identity. Packaged installs keep the
+#    store at /var/lib/jmcp/tokens.json. If yours is still at /etc/jmcp/tokens.json
+#    (pre-0.22), migrate it first as install.sh prints; never create a second one.
+sudo -u jmcp rust-junosmcp token add --tokens-file /var/lib/jmcp/tokens.json --name alice \
   --actor-type human --tools approve_junos_change_set --devices '*' \
   --oidc-issuer https://idp.example.com/ --oidc-subject alice@example.com
 
 # 2. Create the approval digest key strict mode requires: at least 32 random
 #    bytes, mode 0600, owned by the service user (`jmcp` on a package install).
-sudo install -m 0600 -o jmcp -g jmcp /dev/null /etc/jmcp/approval-digest.key
-head -c 48 /dev/urandom | base64 | sudo tee /etc/jmcp/approval-digest.key >/dev/null
+#    Written as jmcp, never as root (/etc/jmcp is service-owned on packaged installs).
+#    `set -C` keeps an existing key, since replacing it orphans pending approvals;
+#    if one exists, confirm it is 0600 jmcp with `stat -c '%a %U' <path>`.
+sudo -u jmcp sh -c 'umask 077; set -C; head -c 48 /dev/urandom | base64 > /etc/jmcp/approval-digest.key'
 
 # 3. Run on the HTTP transport with the token store (assertions apply to
 #    bearer-token callers only) and the verifier configured.
-rust-junosmcp --device-mapping /etc/jmcp/devices.json \
+sudo -u jmcp rust-junosmcp --device-mapping /etc/jmcp/devices.json \
   --transport streamable-http -H 127.0.0.1 -p 8765 \
-  --tokens-file /etc/jmcp/tokens.json \
-  --oidc-issuer https://idp.example.com/ --oidc-audience <aud> \
+  --tokens-file /var/lib/jmcp/tokens.json \
+  --oidc-issuer https://idp.example.com/ --oidc-audience YOUR_AUDIENCE \
   --approval-digest-key-file /etc/jmcp/approval-digest.key \
   --require-verified-approver
 ```
