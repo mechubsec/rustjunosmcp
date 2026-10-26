@@ -627,21 +627,36 @@ is set. Setup follows mecmcp's
 the one difference for this server is the tool name:
 
 ```fish
+# 1. Bind the approver's token to their IdP identity.
 rust-junosmcp token add --tokens-file /etc/jmcp/tokens.json --name alice \
   --actor-type human --tools approve_junos_change_set --devices '*' \
   --oidc-issuer https://idp.example.com/ --oidc-subject alice@example.com
-rust-junosmcp --oidc-issuer https://idp.example.com/ --oidc-audience <aud> \
-  --approval-digest-key-file /etc/jmcp/approval-digest.key --require-verified-approver
+
+# 2. Create the approval digest key strict mode requires: at least 32 random
+#    bytes, mode 0600, owned by the service user (`jmcp` on a package install).
+sudo install -m 0600 -o jmcp -g jmcp /dev/null /etc/jmcp/approval-digest.key
+head -c 48 /dev/urandom | base64 | sudo tee /etc/jmcp/approval-digest.key >/dev/null
+
+# 3. Run on the HTTP transport with the token store (assertions apply to
+#    bearer-token callers only) and the verifier configured.
+rust-junosmcp --device-mapping /etc/jmcp/devices.json \
+  --transport streamable-http -H 127.0.0.1 -p 8765 \
+  --tokens-file /etc/jmcp/tokens.json \
+  --oidc-issuer https://idp.example.com/ --oidc-audience <aud> \
+  --approval-digest-key-file /etc/jmcp/approval-digest.key \
+  --require-verified-approver
 ```
 
 - With `--require-verified-approver`, an approval with no valid assertion is
   refused, and so is a proposal from an owner token with no bound subject.
-- An assertion for a different subject than the token is bound to, an expired
-  or replayed one, or one that cannot be verified because the IdP's keys are
-  unreachable, is rejected with `401` at the transport. Reads, proposals and
-  tokens presenting no assertion are unaffected; only the approval fails.
-- A server with no `--oidc-issuer` rejects any request carrying a
-  `Mecmcp-Approver-Assertion` header with `400`.
+- **Send `Mecmcp-Approver-Assertion` only on the approve call.** The transport
+  verifies it on *any* request that carries it, whatever the tool: an invalid
+  one (different subject than the token is bound to, expired, replayed, or the
+  IdP's keys unreachable) gets `401`, and a valid one on an earlier read or
+  proposal spends its single-use `jti`, so the later approval is rejected as a
+  replay. Only requests without the header are unaffected by the verifier.
+- A server with no `--oidc-issuer` rejects any request carrying the header
+  with `400`.
 
 ### Enabling it
 
