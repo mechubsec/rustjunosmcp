@@ -82,6 +82,7 @@ mod tests {
             approver: None,
             change_set_id: None,
             verified_approver: None,
+            verified_proposer: None,
         }
     }
 

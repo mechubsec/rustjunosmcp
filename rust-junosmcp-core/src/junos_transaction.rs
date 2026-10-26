@@ -2044,6 +2044,7 @@ mod tests {
             approver: None,
             change_set_id: None,
             verified_approver: None,
+            verified_proposer: None,
         };
         let formatted = format_attribution(&attribution);
         assert!(formatted.contains("CHG0012345"));
@@ -2072,6 +2073,7 @@ mod tests {
             approver: approver.map(str::to_owned),
             change_set_id: change_set_id.map(str::to_owned),
             verified_approver: None,
+            verified_proposer: None,
         }
     }
 
@@ -2181,6 +2183,7 @@ mod tests {
             approver: Some(long),
             change_set_id: Some("86324b20a3ecbfde732b981a8c69a664d44b176c29b5cdaf".into()),
             verified_approver: None,
+            verified_proposer: None,
         };
 
         let formatted = format_attribution(&attribution);

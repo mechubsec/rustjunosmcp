@@ -623,7 +623,7 @@ it as what it is: one operator exercising the API shape, not an approval.
 
 Compiled into every build (not a cargo feature) and inert until `--oidc-issuer`
 is set. Setup follows mecmcp's
-[ONBOARDING](https://github.com/mechubsec/mecmcp/blob/v0.29.4/docs/ONBOARDING.md);
+[ONBOARDING](https://github.com/mechubsec/mecmcp/blob/v0.30.1/docs/ONBOARDING.md);
 the one difference for this server is the tool name:
 With `--oidc-issuer` set but `--require-verified-approver` off, startup logs a
 warning counting live `human` tokens that have no `oidc_subject` binding.
@@ -669,6 +669,26 @@ it expires). It requires `--oidc-issuer`.
   replay. Only requests without the header are unaffected by the verifier.
 - A server with no `--oidc-issuer` rejects any request carrying the header
   with `400`.
+
+### Verified proposer
+
+`--require-verified-proposer` pairs with `--require-verified-approver` so the
+two-person rule compares two IdP-verified subjects rather than a subject an
+operator typed into `token add`. It requires `--oidc-issuer` and
+`--oidc-audience`. With it, `create_junos_change_set` must carry a fresh
+`Mecmcp-Proposer-Assertion` header whose subject equals the proposing token's
+bound `oidc_subject`; an OAuth-authenticated caller counts as verified without
+one. The proposing token needs neither `--actor-type human` nor the approver
+role. The change set records that its owner was verified, and approval, waiver
+and apply refuse one that was not, so a change set proposed before the flag
+was turned on cannot skip it.
+
+Send `Mecmcp-Proposer-Assertion` **only on `create_junos_change_set`**, and
+never `Mecmcp-Approver-Assertion` there: the headers are separate but share one
+single-use `jti` set, so an assertion spent on any other request cannot be
+reused. Off by default. Note that any verified proposer, including every OAuth caller,
+makes the server persist change-set state version 9, which v2.3.0 cannot read:
+snapshot the state file before upgrading, since a rollback needs it restored.
 
 ### Enabling it
 
@@ -806,8 +826,9 @@ $EDITOR devices.json   # set ip / username / auth
 ./target/release/rust-junosmcp -f devices.json
 ```
 
-Each device may carry an optional `attributes` object, used only by OAuth
-`device_selectors` (see [OAuth 2.1 resource-server mode](#oauth-21-resource-server-mode-opt-in-build)):
+Each device may carry an optional `attributes` object, used only by
+`device_selectors` on static tokens (see [Device selectors on static tokens](#device-selectors-on-static-tokens))
+and OAuth scope maps (see [OAuth 2.1 resource-server mode](#oauth-21-resource-server-mode-opt-in-build)):
 
 ```json
 "srx-lab-1": {
@@ -1249,6 +1270,27 @@ stdio, and explicitly unauthenticated loopback mode retain the full inventory.
 > run. Every `token` subcommand writes `0600`, and the LXC installer sets it,
 > so this only bites files created or copied by hand.
 
+#### Device selectors on static tokens
+
+`token add --device-selector 'site=lab-*'` (repeatable; entries are ANDed)
+narrows the token's `--devices` to inventory devices whose `attributes` match,
+with the same grammar as the OAuth scope map. Selectors resolve against the
+live inventory on each authentication, so a SIGHUP or `reload_devices` applies
+on the next request; an unlabelled device never matches, and a token whose
+selectors match nothing addresses no devices. Approvals follow the same scope:
+a `site=lab-*` approver cannot approve a change set on a prod device.
+
+```bash
+rust-junosmcp token add --tokens-file tokens.json --name lab-ops \
+  --devices '*' --tools execute_junos_command --device-selector 'site=lab-*'
+```
+
+> **Upgrade every binary that reads or rewrites `tokens.json` first** — every
+> server sharing the store, and the token CLIs. A binary without
+> `device_selectors` support that merely reads the store ignores the field and
+> grants the token its broad `devices` scope immediately; an older CLI also
+> drops it on `token rotate` or `token set-scope`.
+
 ### Tool scopes and write tools
 
 A tool scope is either the literal `*` or an explicit list of tool names. The
@@ -1420,13 +1462,13 @@ request:
 
 Attributes come from the `attributes` object in `devices.json`; a device
 without one matches no selector (fail closed). See mecmcp's
-[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.29.4/docs/OAUTH.md) for
+[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.30.1/docs/OAUTH.md) for
 the full selector grammar.
 
 Upgrading to mecmcp 0.29 reserves the `oauth:` prefix: rename any static token
 with that name first, or the whole token file fails to load. Scope-map format,
 IdP setup, audience rules and rollback notes are in mecmcp's
-[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.29.4/docs/OAUTH.md).
+[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.30.1/docs/OAUTH.md).
 
 [mecmcp#498]: https://github.com/mechubsec/mecmcp/issues/498
 

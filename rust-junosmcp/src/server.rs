@@ -526,6 +526,30 @@ pub(super) fn audit_scope(
     }
 }
 
+/// Deny an approval whose change set targets devices outside the caller's scope.
+///
+/// The out-of-scope targets are server-derived: the caller supplied only the primary
+/// device, so naming them in the response would disclose inventory they may not see. The
+/// caller-visible text is therefore generic. The audit event carries only
+/// `denied_targets_count`: metadata keys bypass `--audit-redact devices=...`, so no
+/// device name may go there; the change-set id identifies the targets (mecmcp#400).
+pub(super) fn deny_hidden_targets(
+    audit: &mut AuditScope,
+    tool: &'static str,
+    change_set_id: &str,
+    hidden: &[String],
+) -> CallToolResult {
+    // The caller supplied the id, so recording it discloses nothing and keeps the
+    // count-only record traceable to the change set.
+    audit.meta("change_set_id", change_set_id);
+    audit.meta("denied_targets_count", hidden.len());
+    audit.deny("router_scope");
+    // No "token ..." phrasing: the body redactor would blank the rest of the line.
+    scope_denied_result(&format!(
+        "caller is not authorized for every device this change set targets (tool '{tool}')"
+    ))
+}
+
 /// Record the commit-confirmed decision for a caller-supplied
 /// `confirm_timeout_mins` in the audit event (MEC-45).
 ///
@@ -1879,6 +1903,25 @@ impl JmcpHandler {
             )));
         };
 
+        // A multi-target change set with one target outside the approver's scope is a
+        // scope denial, not invalid input (mecmcp#400).
+        let in_scope = |device: &str| ctx_val.devices.allows(device);
+        let hidden = changeset::out_of_scope_target(
+            &self.coordinator,
+            &args.change_set_id,
+            &args.device,
+            &in_scope,
+        )
+        .await;
+        if !hidden.is_empty() {
+            return Ok(deny_hidden_targets(
+                &mut audit,
+                "approve_junos_change_set",
+                &args.change_set_id,
+                &hidden,
+            ));
+        }
+
         let attribution = mecmcp_audit::Attribution::from_caller(ctx_val);
 
         let result = changeset::approve_change_set_with_cancel(
@@ -1886,6 +1929,7 @@ impl JmcpHandler {
             self.coordinator.clone(),
             self.dm.clone(),
             attribution,
+            &in_scope,
             ct,
         )
         .await;
@@ -2783,6 +2827,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -2814,6 +2859,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -2845,6 +2891,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -2916,6 +2963,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -2942,6 +2990,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -2970,6 +3019,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -3001,6 +3051,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -3029,6 +3080,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -3058,6 +3110,7 @@ mod scope_tests {
         let ctx = CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
             client_name: None,
@@ -3099,6 +3152,7 @@ mod scope_tests {
         CallerCtx {
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             oauth: None,
             token_name: "t".into(),
             client_name: None,
@@ -3442,6 +3496,63 @@ mod redaction_coverage_tests {
     /// The success path: a tool handler returning device-derived text as
     /// `Value::String` (the common case — see `get_config::handle`,
     /// `config_diff::handle`, `execute_command::handle`, ...).
+    #[derive(Clone, Default)]
+    struct LogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for LogBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
+        type Writer = LogBuffer;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// A hidden secondary target must not reach the caller, and must reach the audit record.
+    #[test]
+    fn hidden_target_denial_names_no_device_to_the_caller_or_the_audit() {
+        let logs = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .with_ansi(false)
+            .finish();
+        let text = tracing::subscriber::with_default(subscriber, || {
+            let mut audit = audit_scope(
+                None,
+                "approve_junos_change_set",
+                "approve",
+                vec!["lab-1".into()],
+            );
+            let result = deny_hidden_targets(
+                &mut audit,
+                "approve_junos_change_set",
+                "cs-abc123",
+                &["prod-1".to_owned()],
+            );
+            drop(audit);
+            result_text(&result)
+        });
+        assert!(
+            !text.contains("prod-1"),
+            "caller text disclosed the target: {text}"
+        );
+        assert!(text.contains("not authorized for every device"), "{text}");
+        let logged = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            !logged.contains("prod-1"),
+            "audit leaked the hidden target past --audit-redact: {logged}"
+        );
+        assert!(logged.contains("denied_targets_count=1"), "{logged}");
+        assert!(logged.contains("change_set_id=cs-abc123"), "{logged}");
+        assert!(logged.contains("router_scope"), "{logged}");
+    }
+
     #[test]
     fn to_call_result_redacts_every_fixture_secret_from_a_string_payload() {
         let payload = synthetic_device_payload();

@@ -4,6 +4,41 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Static-token `device_selectors` (mecmcp#400, mecmcp 0.30.0): `token add
+  --device-selector 'site=lab-*'` (repeatable) narrows a token's devices by
+  inventory `attributes`, with the OAuth scope-map grammar. Resolved against the
+  live inventory on each authentication; an unlabelled device never matches.
+- `approve_junos_change_set` checks the approver's device scope against every
+  device the change set targets (`approve_change_set_within`).
+- `--require-verified-proposer`: `create_junos_change_set` requires a fresh
+  `Mecmcp-Proposer-Assertion` bound to the proposing token's `oidc_subject` (or
+  an OAuth caller). Requires `--oidc-issuer`; off by default.
+
+### Changed
+
+- mecmcp 0.29.4 -> 0.30.1 (`token list` shows `device_selectors`). Every per-call audit record (`AuditScope`) gains
+  `identity_mechanism` (`token`, `oauth`, `oidc-step-up`, `none`). Operational
+  `target: "audit"` events (startup warnings and the like) do not carry it, so a
+  strict SIEM parser must accept both shapes.
+
+### Upgrade notes
+
+- **Upgrade every binary that reads or rewrites `tokens.json` before adding
+  `device_selectors`**: all servers sharing the store, and the token CLIs. An
+  older server (v2.3.0 / mecmcp 0.29.4 or earlier) that merely *reads* a store
+  containing `device_selectors` ignores the field and grants the token its broad
+  `devices` scope immediately; an older CLI also drops it on `token rotate` or
+  `token set-scope`.
+- **Snapshot the change-set state file before upgrading.** Any IdP-verified
+  proposer, including every OAuth caller even with `--require-verified-proposer`
+  off, makes mecmcp 0.30 persist change-set state version 9. v2.3.0 reads only
+  version 8 and below and fails with `unsupported changeset state version 9`, so
+  a binary-only rollback is not enough: restore the snapshot too.
+
 ## [2.3.0] - 2026-10-26
 
 ### Added

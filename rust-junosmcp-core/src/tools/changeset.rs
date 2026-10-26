@@ -12,6 +12,7 @@ use crate::policy::{Decision, Policy};
 use mecmcp_audit::Attribution;
 use mecmcp_changeset::{
     ApproverIdentity, ChangesetCoordinator, CommitOptions, DeviceTransaction as _, OwnerSubject,
+    ProposerIdentity,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -748,17 +749,26 @@ pub async fn create_change_set_with_cancel(
     let device_name = args.device.clone();
     let owner_principal = owner.clone();
 
+    // IdP-verified when the caller presented a `Mecmcp-Proposer-Assertion` (or is
+    // an OAuth principal); otherwise the token's bound subject, token-asserted.
+    // Built from `Attribution`, never by hand, so a call site cannot claim a
+    // verification the transport did not perform (mecmcp#400).
+    let proposer = ProposerIdentity::from_attribution(
+        &attribution,
+        owner_subject.map(|s| OwnerSubject {
+            issuer: s.issuer,
+            subject: s.subject,
+        }),
+    );
+
     let result = coordinator
-        .create_change_set(
+        .create_change_set_as(
             args.device,
             args.actions,
             owner,
             args.expected_fingerprint,
             policy_signature,
-            owner_subject.map(|s| OwnerSubject {
-                issuer: s.issuer,
-                subject: s.subject,
-            }),
+            &proposer,
         )
         .await
         .map_err(|e| JmcpError::Validation(e.to_string()))?;
@@ -817,28 +827,76 @@ pub async fn create_change_set_with_cancel(
     Ok(created_result)
 }
 
+/// The devices the change set targets that `in_scope` refuses (empty when all pass).
+///
+/// The server's approve handler runs this before [`approve_change_set_with_cancel`] so a
+/// multi-target record whose primary device is in scope but another target is not is
+/// refused as a scope denial (`unauthorized`, audited as denied) rather than as an
+/// `invalid_argument` from the coordinator (mecmcp#400). An unknown change set yields
+/// empty: the approve call itself reports it.
+pub async fn out_of_scope_target(
+    coordinator: &ChangesetCoordinator,
+    change_set_id: &str,
+    device: &str,
+    in_scope: &(dyn Fn(&str) -> bool + Sync),
+) -> Vec<String> {
+    match coordinator.change_set(change_set_id, device).await {
+        Ok(record) => out_of_scope(&record, in_scope),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn out_of_scope(
+    record: &mecmcp_changeset::ChangeSetRecord,
+    in_scope: &(dyn Fn(&str) -> bool + Sync),
+) -> Vec<String> {
+    record
+        .targets()
+        .into_iter()
+        .filter(|target| !in_scope(target))
+        .collect()
+}
+
 /// Approve a change set (second principal).
 ///
 /// Validates the device exists and is within scope, derives approver from the
 /// authenticated principal, checks the expected digest matches the stored plan,
 /// and marks the change set as approved. Enforces separation of duties: the
 /// approver must differ from the owner. Returns `{change_set_id, state, digest}`.
+///
+/// `in_scope` is the approver's device-scope check; see
+/// [`approve_change_set_with_cancel`].
 pub async fn approve_change_set(
     args: ApproveChangeSetArgs,
     coordinator: Arc<ChangesetCoordinator>,
     dm: Arc<DeviceManager>,
     attribution: Attribution,
+    in_scope: &(dyn Fn(&str) -> bool + Sync),
 ) -> Result<Value, JmcpError> {
-    approve_change_set_with_cancel(args, coordinator, dm, attribution, CancellationToken::new())
-        .await
+    approve_change_set_with_cancel(
+        args,
+        coordinator,
+        dm,
+        attribution,
+        in_scope,
+        CancellationToken::new(),
+    )
+    .await
 }
 
 /// Approve a pending change set by ID. Makes the transition `Pending` → `Approved`.
+///
+/// `in_scope` answers whether the approver may address a device (typically
+/// `|name| caller.devices.allows(name)`); every device the change set targets
+/// must pass it, so a `site=lab-*` approver cannot approve a set that also
+/// touches prod (mecmcp#400). Junos change sets name one device today; the
+/// check still runs on `targets()` so a multi-target record cannot slip past.
 pub async fn approve_change_set_with_cancel(
     args: ApproveChangeSetArgs,
     coordinator: Arc<ChangesetCoordinator>,
     dm: Arc<DeviceManager>,
     attribution: Attribution,
+    in_scope: &(dyn Fn(&str) -> bool + Sync),
     _ct: CancellationToken,
 ) -> Result<Value, JmcpError> {
     // Validate the device exists and is within scope.
@@ -853,11 +911,12 @@ pub async fn approve_change_set_with_cancel(
     let approver = ApproverIdentity::from_attribution(&attribution);
 
     let result = coordinator
-        .approve_change_set(
+        .approve_change_set_within(
             args.change_set_id.clone(),
             args.device,
             &approver,
             args.expected_digest,
+            in_scope,
         )
         .await
         .map_err(|e| JmcpError::Validation(e.to_string()))?;
@@ -2011,6 +2070,7 @@ mod tests {
             id: id.to_owned(),
             owner: OWNER.to_owned(),
             owner_subject: None,
+            owner_verified: false,
             device: DEVICE.to_owned(),
             expected_candidate_fingerprint: format!("sha256:{FINGERPRINT_HEX}"),
             actions: vec![json!({"op": "set"})],
@@ -2631,6 +2691,7 @@ mod tests {
             id: "86324b20a3ecbfde".to_owned(),
             owner: "claude-test".to_owned(),
             owner_subject: None,
+            owner_verified: false,
             device: "vsrx-ci".to_owned(),
             expected_candidate_fingerprint: format!("sha256:{}", "b".repeat(64)),
             actions: vec![json!({"op": "set"})],
@@ -2718,6 +2779,7 @@ mod tests {
             approver: None,
             change_set_id: None,
             verified_approver: None,
+            verified_proposer: None,
         }
     }
 
@@ -3467,6 +3529,7 @@ mod tests {
             coordinator.clone(),
             dm.clone(),
             test_attribution("alice"),
+            &|_| true,
         )
         .await;
 
@@ -3478,6 +3541,84 @@ mod tests {
             err_str.contains("owner cannot approve their own plan"),
             "self-approval must be refused, got: {err_str}"
         );
+    }
+
+    /// A multi-target record whose primary device is in scope but another target is
+    /// not must be reported, so the handler can deny it as a scope failure.
+    #[test]
+    fn out_of_scope_reports_a_non_primary_target() {
+        let mut record = record_with_approval(None, false);
+        record.device = "lab-1".into();
+        record.targets = vec!["lab-1".into(), "prod-1".into()];
+        let lab_only = |device: &str| device.starts_with("lab-");
+        assert_eq!(out_of_scope(&record, &lab_only), vec!["prod-1".to_owned()]);
+        assert!(out_of_scope(&record, &|_| true).is_empty());
+    }
+
+    /// mecmcp#400: the approver's device scope is enforced inside the coordinator
+    /// call, so a scope that excludes the change set's device refuses the approval
+    /// and leaves the change set approvable by someone who is in scope.
+    #[tokio::test]
+    async fn approve_change_set_refuses_an_out_of_scope_approver() {
+        let inv = inv_with(
+            r#"{"r1":{"ip":"127.0.0.1","username":"u","auth":{"type":"password","password":"x"}}}"#,
+        );
+        let dm = Arc::new(DeviceManager::new(inv.clone()));
+        let policy = test_policy(inv);
+        let coordinator = Arc::new(
+            ChangesetCoordinator::load(
+                None,
+                mecmcp_changeset::OperationLimits::default(),
+                std::time::Duration::from_secs(300),
+                false,
+            )
+            .unwrap(),
+        );
+        let created = create_change_set(
+            CreateChangeSetArgs {
+                device: "r1".into(),
+                expected_fingerprint: format!("sha256:{}", "0".repeat(64)),
+                actions: vec![JunosAction {
+                    payload: Some(ConfigPayloadSpec {
+                        text: "set system host-name test".into(),
+                        format: Some("set".into()),
+                        mode: None,
+                    }),
+                    rollback_source: None,
+                    ..Default::default()
+                }],
+            },
+            dm.clone(),
+            coordinator.clone(),
+            policy,
+            test_attribution("alice"),
+            None,
+        )
+        .await
+        .unwrap();
+        let args = || ApproveChangeSetArgs {
+            change_set_id: created["change_set_id"].as_str().unwrap().into(),
+            device: "r1".into(),
+            expected_digest: created["plan_digest"].as_str().unwrap().into(),
+        };
+
+        let refused = approve_change_set(
+            args(),
+            coordinator.clone(),
+            dm.clone(),
+            test_attribution("bob"),
+            &|device| device != "r1",
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(refused.contains("device scope"), "{refused}");
+
+        let approved =
+            approve_change_set(args(), coordinator, dm, test_attribution("bob"), &|_| true)
+                .await
+                .unwrap();
+        assert_eq!(approved["state"], "Approved");
     }
 
     /// House rule: a human approves. An agent principal — distinct from the
@@ -3543,6 +3684,7 @@ mod tests {
             coordinator.clone(),
             dm.clone(),
             bob_agent,
+            &|_| true,
         )
         .await;
 
@@ -3614,6 +3756,7 @@ mod tests {
             coordinator.clone(),
             dm.clone(),
             test_attribution("bob"),
+            &|_| true,
         )
         .await
         .unwrap();
@@ -3903,6 +4046,7 @@ mod tests {
             coordinator.clone(),
             dm.clone(),
             test_attribution("bob"),
+            &|_| true,
         )
         .await
         .unwrap();

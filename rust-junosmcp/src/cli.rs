@@ -489,6 +489,11 @@ pub enum TokenAction {
         /// to. Required if `--oidc-issuer` is set.
         #[arg(long)]
         oidc_subject: Option<String>,
+        /// Narrow `--devices` to inventory devices whose attributes match this
+        /// selector, e.g. `site=lab-*` (mecmcp#400). Repeatable; a device must
+        /// match every one. Without labelled devices the token addresses none.
+        #[arg(long = "device-selector")]
+        device_selector: Vec<String>,
         /// Send SIGHUP to this pid after writing.
         #[arg(long)]
         server_pid: Option<i32>,
