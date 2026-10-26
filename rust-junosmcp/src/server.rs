@@ -1879,6 +1879,25 @@ impl JmcpHandler {
             )));
         };
 
+        // A multi-target change set with one target outside the approver's scope is a
+        // scope denial, not invalid input (mecmcp#400).
+        let in_scope = |device: &str| ctx_val.devices.allows(device);
+        if let Some(router) = changeset::out_of_scope_target(
+            &self.coordinator,
+            &args.change_set_id,
+            &args.device,
+            &in_scope,
+        )
+        .await
+        {
+            audit.deny("router_scope");
+            return Self::scope_to_call_result(ScopeError::RouterNotInScope {
+                token: ctx_val.token_name.clone(),
+                router,
+                tool: "approve_junos_change_set",
+            });
+        }
+
         let attribution = mecmcp_audit::Attribution::from_caller(ctx_val);
 
         let result = changeset::approve_change_set_with_cancel(
@@ -1886,7 +1905,7 @@ impl JmcpHandler {
             self.coordinator.clone(),
             self.dm.clone(),
             attribution,
-            &|device| ctx_val.devices.allows(device),
+            &in_scope,
             ct,
         )
         .await;
