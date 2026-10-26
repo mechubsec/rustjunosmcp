@@ -206,6 +206,60 @@ fn evidence_credential_files(
     (signing_key, forward_token)
 }
 
+/// HTTP transports for the evidence pipeline: `(ssdf, forward, label)`.
+///
+/// The forward CA is read only when a forward sink exists, so an unused
+/// `--audit-forward-ca-file` cannot block an SSDF-only server. SSDF keeps its
+/// CA; its forward copy falls back to the SSDF CA when it has none of its own.
+fn evidence_transports(
+    evidence: &mecmcp_runtime::cli::EvidenceArgs,
+    config: &mecmcp_audit::EvidencePipelineConfig,
+) -> Result<(
+    std::sync::Arc<mecmcp_transport::evidence_transport::EvidenceHttpTransport>,
+    std::sync::Arc<mecmcp_transport::evidence_transport::EvidenceHttpTransport>,
+    &'static str,
+)> {
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let transport_for = |ca_file: Option<&Path>, what: &str| -> Result<_> {
+        Ok(std::sync::Arc::new(
+            mecmcp_transport::evidence_transport::EvidenceHttpTransport::new(
+                ca_file,
+                provider.clone(),
+            )
+            .with_context(|| format!("building the {what} evidence transport"))?,
+        ))
+    };
+    match config {
+        mecmcp_audit::EvidencePipelineConfig::ForwardOnly(forward) => {
+            tracing::info!(
+                server_id = %forward.server_id,
+                run_id = %forward.run_id,
+                "forward-only audit evidence pipeline enabled"
+            );
+            let forward = transport_for(evidence.forward_ca_file(), "forward")?;
+            Ok((forward.clone(), forward, "forward-only"))
+        }
+        mecmcp_audit::EvidencePipelineConfig::Ssdf(ssdf) => {
+            tracing::info!(
+                server_id = %ssdf.server_id,
+                run_id = %ssdf.run_id,
+                "SSDF evidence pipeline enabled"
+            );
+            let ssdf_transport = transport_for(evidence.ca_file(), "SSDF")?;
+            if ssdf.forward_sink.is_none() {
+                return Ok((ssdf_transport.clone(), ssdf_transport, "SSDF"));
+            }
+            let forward_ca = evidence.forward_ca_file().or(evidence.ca_file());
+            Ok((
+                ssdf_transport,
+                transport_for(forward_ca, "forward")?,
+                "SSDF",
+            ))
+        }
+        _ => anyhow::bail!("unsupported evidence pipeline configuration"),
+    }
+}
+
 /// SSDF password files the evidence pipeline will actually load.
 ///
 /// Absent `--ssdf-audit-endpoint`, `into_config` never opens these files, so
@@ -712,44 +766,8 @@ async fn main() -> Result<()> {
     // instead of at the first change, which is the worst moment to discover it.
     let evidence = match args.evidence.into_pipeline_config() {
         Ok(Some(config)) => {
-            let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
-            let transport_for = |ca_file: Option<&Path>, what: &str| -> Result<_> {
-                Ok(std::sync::Arc::new(
-                    mecmcp_transport::evidence_transport::EvidenceHttpTransport::new(
-                        ca_file,
-                        provider.clone(),
-                    )
-                    .with_context(|| format!("building the {what} evidence transport"))?,
-                ))
-            };
-            // SSDF keeps its CA; the forward copy used the SSDF transport
-            // before forward had its own CA flag, so it falls back to it.
-            let ssdf_ca = args.evidence.ca_file();
-            let (ssdf_transport, forward_transport, label) = match &config {
-                mecmcp_audit::EvidencePipelineConfig::ForwardOnly(forward) => {
-                    tracing::info!(
-                        server_id = %forward.server_id,
-                        run_id = %forward.run_id,
-                        "forward-only audit evidence pipeline enabled"
-                    );
-                    let forward = transport_for(args.evidence.forward_ca_file(), "forward")?;
-                    (forward.clone(), forward, "forward-only")
-                }
-                mecmcp_audit::EvidencePipelineConfig::Ssdf(ssdf) => {
-                    tracing::info!(
-                        server_id = %ssdf.server_id,
-                        run_id = %ssdf.run_id,
-                        "SSDF evidence pipeline enabled"
-                    );
-                    let forward_ca = args.evidence.forward_ca_file().or(ssdf_ca);
-                    (
-                        transport_for(ssdf_ca, "SSDF")?,
-                        transport_for(forward_ca, "forward")?,
-                        "SSDF",
-                    )
-                }
-                _ => anyhow::bail!("unsupported evidence pipeline configuration"),
-            };
+            let (ssdf_transport, forward_transport, label) =
+                evidence_transports(&args.evidence, &config)?;
             Some(
                 mecmcp_audit::EvidenceService::start_pipeline(
                     config,
@@ -1393,7 +1411,7 @@ mod startup_credential_tests {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod evidence_pipeline_tests {
-    use super::{evidence_credential_files, evidence_pipeline_enabled};
+    use super::{evidence_credential_files, evidence_pipeline_enabled, evidence_transports};
     use mecmcp_audit::EvidencePipelineConfig;
     use mecmcp_runtime::cli::EvidenceArgs;
     use std::path::PathBuf;
@@ -1473,5 +1491,46 @@ mod evidence_pipeline_tests {
             mecmcp_audit::EvidenceService::start_pipeline(config, transport.clone(), transport)
                 .expect("forward-only pipeline starts");
         service.shutdown().expect("clean shutdown");
+    }
+
+    /// An unused `--audit-forward-ca-file` must not block an SSDF-only server.
+    #[test]
+    fn ssdf_only_ignores_an_unused_forward_ca_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let dir = tempfile::tempdir().unwrap();
+        let password = dir.path().join("pw");
+        std::fs::write(&password, "pw\n").unwrap();
+        std::fs::set_permissions(&password, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let ssdf_ca = dir.path().join("ssdf-ca.pem");
+        std::fs::write(
+            &ssdf_ca,
+            rcgen::generate_simple_self_signed(vec!["ch.example".into()])
+                .unwrap()
+                .cert
+                .pem(),
+        )
+        .unwrap();
+        let mut args = EvidenceArgs {
+            ssdf_audit_ca_file: Some(ssdf_ca),
+            ssdf_audit_endpoint: Some("https://ch.example:8443".into()),
+            ssdf_audit_server_id: Some("junos-lab".into()),
+            ssdf_audit_password_file: Some(password.clone()),
+            ssdf_audit_verify_password_file: Some(password),
+            ssdf_audit_outbox: Some(dir.path().join("outbox")),
+            ssdf_audit_ledger: Some(dir.path().join("ledger")),
+            audit_forward_ca_file: Some(dir.path().join("does-not-exist.pem")),
+            ..EvidenceArgs::default()
+        };
+        let config = args.into_pipeline_config().unwrap().unwrap();
+        assert!(matches!(config, EvidencePipelineConfig::Ssdf(_)));
+        evidence_transports(&args, &config).expect("unused forward CA is not read");
+
+        // With a forward sink the bogus CA is read, and refused.
+        args.audit_forward_endpoint = Some("https://collector.example:8443/ingest".into());
+        args.audit_forward_outbox = Some(dir.path().join("fo"));
+        args.audit_forward_ledger = Some(dir.path().join("fl"));
+        let config = args.into_pipeline_config().unwrap().unwrap();
+        assert!(evidence_transports(&args, &config).is_err());
     }
 }
