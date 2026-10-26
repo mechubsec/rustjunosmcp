@@ -276,6 +276,7 @@ async fn device_selectors_grant_only_matching_inventory_devices() {
         format!(
             r#"{{"lab-a":{{"ip":"10.0.0.1",{pw},"attributes":{{"site":"lab-1"}}}},
                 "emea-a":{{"ip":"10.0.0.2",{pw},"attributes":{{"site":"emea-lon"}}}},
+                "legacy":{{"ip":"10.0.0.4",{pw},"attributes":{{"site":"lab*"}}}},
                 "bare":{{"ip":"10.0.0.3",{pw}}}}}"#
         ),
     )
@@ -339,4 +340,8 @@ async fn device_selectors_grant_only_matching_inventory_devices() {
     assert!(caller.devices.allows("lab-a"));
     assert!(!caller.devices.allows("emea-a"));
     assert!(!caller.devices.allows("bare"));
+    assert!(
+        !caller.devices.allows("legacy"),
+        "invalid attributes must match nothing"
+    );
 }

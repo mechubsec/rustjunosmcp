@@ -12,8 +12,10 @@ All notable user-facing changes are recorded here. Format loosely follows
   and OAuth scope-map `device_selectors` that grant devices by those attributes
   (mecmcp#400, mecmcp 0.29.4). Selectors resolve against the live inventory, so
   SIGHUP reloads apply on the next request; devices without attributes match no
-  selector. An invalid attribute value refuses the inventory load. Existing
-  `devices.json` files and scope maps load unchanged.
+  selector. Existing `devices.json` files and scope maps load unchanged: an
+  `attributes` block that is not valid selector metadata is ignored with one
+  warning per device at load (rename it to silence the warning), and that
+  device matches no selector.
 
 ## [2.2.0] - 2026-10-26
 

@@ -817,9 +817,11 @@ Each device may carry an optional `attributes` object, used only by OAuth
 ```
 
 `site` and `vendor` are single values, `tags` a list. Values are 1-64 characters
-of `[A-Za-z0-9._-]`; anything else (including `*`) refuses the whole
-inventory load. Devices without `attributes` match no selector. Existing
-`devices.json` files load unchanged.
+of `[A-Za-z0-9._-]`. Devices without `attributes` match no selector. Existing
+`devices.json` files load unchanged: an `attributes` block that is not valid
+selector metadata (an unknown key, a bad value, not an object) is ignored with
+one warning per device at load, and that device matches no selector. Rename
+the key to silence the warning.
 
 ## Claude Desktop config
 

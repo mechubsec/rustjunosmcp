@@ -792,7 +792,13 @@ impl mecmcp_auth::DeviceAttributeSource for DeviceManager {
             .names()
             .into_iter()
             .filter_map(|name| {
-                let attributes = inventory.get(&name).ok()?.attributes.clone()?;
+                let attributes = inventory
+                    .get(&name)
+                    .ok()?
+                    .attributes
+                    .as_ref()?
+                    .valid()?
+                    .clone();
                 Some((name, attributes))
             })
             .collect()
@@ -839,14 +845,16 @@ mod tests {
     }
 
     #[test]
-    fn invalid_attribute_value_refuses_the_inventory_load() {
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        f.write_all(
-            format!(r#"{{"r1":{{"ip":"10.0.0.1",{PW},"attributes":{{"site":"a*b"}}}}}}"#)
-                .as_bytes(),
-        )
-        .unwrap();
-        assert!(Inventory::load(f.path()).is_err());
+    fn invalid_and_legacy_attributes_load_and_match_no_selector() {
+        use mecmcp_auth::DeviceAttributeSource as _;
+        let manager = DeviceManager::new(build_inventory(&format!(
+            r#"{{"bad":{{"ip":"10.0.0.1",{PW},"attributes":{{"site":"a*b"}}}},
+                "legacy":{{"ip":"10.0.0.2",{PW},"attributes":{{"region":"emea"}}}},
+                "ok":{{"ip":"10.0.0.3",{PW},"attributes":{{"site":"lab-1"}}}}}}"#
+        )));
+        let seen = manager.device_attributes();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert_eq!(seen[0].0, "ok");
     }
 
     // ── should_pool: what may go back in the pool (issue #316) ──────────
