@@ -528,12 +528,13 @@ impl BlocklistDomain {
 }
 
 /// Where a blocklist rule lives, for denial messages (inventory keys only,
-/// never file paths). `rule_source` is `"device"` or `"defaults"`.
-pub fn rule_location(rule_source: &str, device: &str, domain: BlocklistDomain) -> String {
+/// never file paths). The match on `rule_source` is exhaustive so a new
+/// source variant cannot silently be reported as defaults.
+pub fn rule_location(rule_source: RuleSource, device: &str, domain: BlocklistDomain) -> String {
     let domain = domain.as_str();
     match rule_source {
-        "device" => format!("inventory entry '{device}'.blocklist.{domain}"),
-        _ => format!("_blocklist_defaults.{domain}"),
+        RuleSource::Device => format!("inventory entry '{device}'.blocklist.{domain}"),
+        RuleSource::Defaults => format!("_blocklist_defaults.{domain}"),
     }
 }
 
@@ -543,9 +544,6 @@ pub fn rule_location(rule_source: &str, device: &str, domain: BlocklistDomain) -
 /// `Decision` match lives in exactly one place — see the module docs on
 /// `mecmcp_policy::Decision` for why matching only `Deny` (and treating
 /// `DenyAllowlist` as an implicit allow) is a live vulnerability.
-///
-/// `domain` is the policy key a `Deny` came from; it is carried into the error
-/// so the denial message can name where the matching rule lives.
 ///
 /// `domain` is the policy key a `Deny` came from; it is carried into the error
 /// so the denial message can name where the matching rule lives.
@@ -573,7 +571,7 @@ pub fn enforce_decision(
                 tool,
                 router: router.to_string(),
                 pattern,
-                rule_source: source_str,
+                rule_source: source,
                 domain,
                 input_excerpt: excerpt(raw_input).into(),
                 line_number: None,

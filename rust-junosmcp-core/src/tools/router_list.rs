@@ -48,7 +48,7 @@ pub fn handle_blocklist(
                 .iter()
                 .filter_map(|(source, rules)| Some((source, pick(rules.as_ref()?))))
                 .flat_map(|(source, specs)| {
-                    let location = rule_location(source.as_str(), &name, domain);
+                    let location = rule_location(*source, &name, domain);
                     specs.iter().map(move |spec| {
                         json!({"action": spec.action, "pattern": spec.pattern, "source": location})
                     })
@@ -60,7 +60,7 @@ pub fn handle_blocklist(
                 .iter()
                 .filter_map(|(source, rules)| Some((source, pick(rules.as_ref()?))))
                 .flat_map(|(source, items)| {
-                    let location = rule_location(source.as_str(), &name, domain);
+                    let location = rule_location(*source, &name, domain);
                     items
                         .iter()
                         .map(move |entry| json!({"entry": entry, "source": location}))
@@ -132,6 +132,9 @@ mod tests {
         assert!(serde_json::from_str::<GetDeviceListArgs>(r#"{"x":1}"#).is_err());
     }
 
+    // `mode` is the global `Policy::command_mode()` passed by the caller, not
+    // the inventory's `_blocklist_defaults.mode`, so these tests pass it
+    // explicitly (the `BL_INV` default mode is deliberately ignored).
     #[test]
     fn blocklist_lists_defaults_then_device_rules_with_sources() {
         let inv = make_inv(BL_INV);

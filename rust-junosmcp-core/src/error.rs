@@ -418,8 +418,9 @@ pub enum JmcpError {
     /// avoid logging unbounded payloads.
     #[error(
         "denied by blocklist: {tool} on '{router}' matched rule '{pattern}' from {} \
-             (action=deny, source={rule_source}); input: {input_excerpt}",
-        crate::policy::rule_location(rule_source, router, *domain)
+             (action=deny, source={}); input: {input_excerpt}",
+        crate::policy::rule_location(*rule_source, router, *domain),
+        rule_source.as_str()
     )]
     Denied {
         /// Name of the MCP tool that was blocked.
@@ -428,8 +429,8 @@ pub enum JmcpError {
         router: String,
         /// Blocklist rule pattern that matched.
         pattern: String,
-        /// Source of the deny rule ("device" or "defaults").
-        rule_source: &'static str,
+        /// Source of the deny rule (device or defaults).
+        rule_source: crate::policy::RuleSource,
         /// Rule domain the match came from; with `router` and `rule_source` it
         /// names the rule's location (a small enum keeps `JmcpError` under the
         /// `result_large_err` limit).
@@ -1004,7 +1005,7 @@ mod tests {
             tool: "execute_junos_command",
             router: "r1".into(),
             pattern: "request system *".into(),
-            rule_source: "defaults",
+            rule_source: crate::policy::RuleSource::Defaults,
             domain: crate::policy::BlocklistDomain::Commands,
             input_excerpt: "request system reboot".into(),
             line_number: None,
@@ -1023,7 +1024,7 @@ mod tests {
             tool: "execute_junos_command",
             router: "r1".into(),
             pattern: "request system *".into(),
-            rule_source: "device",
+            rule_source: crate::policy::RuleSource::Device,
             domain: crate::policy::BlocklistDomain::Commands,
             input_excerpt: "request system reboot".into(),
             line_number: None,
@@ -1042,7 +1043,7 @@ mod tests {
             tool: "load_and_commit_config",
             router: "r1".into(),
             pattern: "set system root-authentication *".into(),
-            rule_source: "defaults",
+            rule_source: crate::policy::RuleSource::Defaults,
             domain: crate::policy::BlocklistDomain::Config,
             input_excerpt: "set system root-authentication x".into(),
             line_number: None,
@@ -1052,6 +1053,25 @@ mod tests {
             "denied by blocklist: load_and_commit_config on 'r1' matched rule \
              'set system root-authentication *' from _blocklist_defaults.config \
              (action=deny, source=defaults); input: set system root-authentication x"
+        );
+    }
+
+    #[test]
+    fn denied_message_names_pfe_commands_rule_location() {
+        let e = JmcpError::Denied {
+            tool: "execute_junos_pfe_command",
+            router: "r1".into(),
+            pattern: "show nh *".into(),
+            rule_source: crate::policy::RuleSource::Device,
+            domain: crate::policy::BlocklistDomain::PfeCommands,
+            input_excerpt: "show nh 1".into(),
+            line_number: None,
+        };
+        assert_eq!(
+            e.to_string(),
+            "denied by blocklist: execute_junos_pfe_command on 'r1' matched rule 'show nh *' \
+             from inventory entry 'r1'.blocklist.pfe_commands (action=deny, source=device); \
+             input: show nh 1"
         );
     }
 
@@ -1467,7 +1487,7 @@ mod tests {
                 tool: "execute_junos_command",
                 router: "r1".into(),
                 pattern: "request system *".into(),
-                rule_source: "defaults",
+                rule_source: crate::policy::RuleSource::Defaults,
                 domain: crate::policy::BlocklistDomain::Commands,
                 input_excerpt: "request system reboot".into(),
                 line_number: None,

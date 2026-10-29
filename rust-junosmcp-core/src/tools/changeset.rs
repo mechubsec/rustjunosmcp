@@ -715,13 +715,12 @@ pub async fn create_change_set_with_cancel(
                     line_number,
                 } => {
                     let pattern = rule.pattern.clone();
-                    let source_str = source.as_str();
                     let denied_excerpt = excerpt(&payload.text);
                     return Err(JmcpError::Denied {
                         tool: "create_junos_change_set",
                         router: args.device.clone(),
                         pattern,
-                        rule_source: source_str,
+                        rule_source: source,
                         domain: BlocklistDomain::Config,
                         input_excerpt: denied_excerpt.into(),
                         line_number,
@@ -1110,13 +1109,12 @@ pub async fn apply_change_set_with_cancel(
                     line_number,
                 } => {
                     let pattern = rule.pattern.clone();
-                    let source_str = source.as_str();
                     let denied_excerpt = excerpt(&payload.text);
                     return Err(JmcpError::Denied {
                         tool: "apply_junos_change_set",
                         router: args.device.clone(),
                         pattern,
-                        rule_source: source_str,
+                        rule_source: source,
                         domain: BlocklistDomain::Config,
                         input_excerpt: denied_excerpt.into(),
                         line_number,

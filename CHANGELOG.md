@@ -12,8 +12,9 @@ All notable user-facing changes are recorded here. Format loosely follows
   `false`; output unchanged when absent). When `true` it returns
   `{name, blocklist}` per visible device: the effective `mode`, the
   `commands`/`config`/`pfe_commands` rules and the `allow`, `allowed_pipes`,
-  `pfe_allow` and `pfe_allowed_pipes` entries, each with the inventory location it came from. Defaults are listed
-  before device rules (a listing, not an evaluation order) (#578).
+  `pfe_allow` and `pfe_allowed_pipes` entries, each with the inventory
+  location it came from. Defaults are listed before device rules (a listing,
+  not an evaluation order) (#578).
 
 ### Changed
 
