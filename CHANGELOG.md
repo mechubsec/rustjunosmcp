@@ -50,6 +50,11 @@ All notable user-facing changes are recorded here. Format loosely follows
   longer reaches the audit log. Error kinds and client results are
   unchanged. `collect_jtac_support_bundle` workflow failures and the
   signature-package pre-run checks now settle the audit too.
+- Output redaction no longer blanks ordinary `session` text: counters
+  (`Valid sessions: 12`, `SESSION_OPEN 1234 0`), `log session-init` /
+  `session-close` keywords and `show security flow session ...` command echoes
+  now come through, in text and JSON bodies. Real session secrets stay masked.
+  The DHCP `Session Id` column header stays masked (#579).
 
 ### Changed
 

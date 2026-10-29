@@ -135,11 +135,7 @@ pub(super) fn redact_body(s: &str) -> String {
     junos_log_text_fallback(s)
 }
 
-/// Run the cross-vendor [`mecmcp_redact::redact_text`] pass first, then the
-/// Junos-specific [`mecmcp_redact::junos::redact_log_text`] pass on top of
-/// its output, so unstructured Junos CLI/config text gets the broader
-/// generic secret coverage plus whole-word Junos-key coverage the generic
-/// pass lacks, while preserving non-secret Junos `session` keywords.
+/// Unstructured Junos CLI/config text redaction; see [`rust_junosmcp_core::text_redact`].
 pub(super) fn junos_log_text_fallback(s: &str) -> String {
     rust_junosmcp_core::text_redact::redact_junos_text(s)
 }
@@ -3821,6 +3817,51 @@ mod redact_last_mile_tests {
             value["system"]["host-name"], FAKE_HOSTNAME,
             "non-secret value lost or corrupted"
         );
+    }
+
+    /// #579: vetted non-secret `session` text inside a JSON tool body (an
+    /// `execute_junos_command_batch` result) survives; session secrets don't.
+    #[test]
+    fn redact_body_keeps_session_counters_and_keywords_in_json_issue_579() {
+        /// Vetted non-secret `session` text from #579 (and the config keywords).
+        const PRESERVED: &[&str] = &[
+            "SESSION_OPEN       1234        0",
+            "SESSION_CLOSE      1233        0",
+            "Valid sessions: 12",
+            "Active sessions: 3",
+            "Total sessions: 5",
+            "Total processed sessions:      42",
+            "show security flow session destination-prefix 10.9.0.2",
+            "Unicast-sessions: 12\nMulticast-sessions: 0\nSessions-in-use: 3\nMaximum-sessions: 524288\nValid sessions: 12\nFailed sessions: 0",
+            "log {\n    session-init;\n    session-close;\n}",
+            "then log session-init",
+        ];
+
+        /// Session-shaped and real secrets that must stay masked.
+        const MASKED: &[(&str, &str)] = &[
+            ("session-id abcdef0123456789", "abcdef0123456789"),
+            ("Session-Key: abcdef0123456789", "abcdef0123456789"), // gitleaks:allow -- fake fixture
+            ("Valid sessions: abcdef0123456789", "abcdef0123456789"),
+            (
+                "set security ike policy p pre-shared-key ascii-text \"hunter2hunter2\"",
+                "hunter2hunter2",
+            ),
+            ("then log session-init; hunter2hunter2", "hunter2hunter2"),
+        ];
+        for case in PRESERVED {
+            let body = serde_json::json!({"results": [{"command": "x", "output": case}]});
+            let redacted: Value =
+                serde_json::from_str(&redact_body(&serde_json::to_string(&body).unwrap())).unwrap();
+            assert_eq!(redacted, body, "over-masked in JSON: {case}");
+        }
+        for (case, secret) in MASKED {
+            let body = serde_json::json!({"results": [{"command": "x", "output": case}]});
+            let redacted = redact_body(&serde_json::to_string(&body).unwrap());
+            assert!(
+                !redacted.contains(secret),
+                "secret survived in JSON: {redacted}"
+            );
+        }
     }
 
     /// Same claim, for XML — the format `get_junos_config`/`junos_config_diff`
