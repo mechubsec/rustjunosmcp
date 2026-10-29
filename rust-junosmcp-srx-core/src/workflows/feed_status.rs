@@ -38,12 +38,14 @@
 //! # Rules
 //!
 //! - **Subscribed:** a feed counts when its effective URL (`url` + `/` +
-//!   `path`, or `url` alone) is http(s) and its path ends in
-//!   `/feeds/junos-dynamic-address/address` or `…/prefix` (a reverse-proxy
-//!   prefix is allowed). No such feed → `state=not_configured`.
-//! - **Credentials:** `user-name`, `password` and `tls-profile` are never read
-//!   into the response, and reported `url`s carry no userinfo, query or
-//!   fragment. Device text (`next_update`, `last_update_status`, `error`, and
+//!   `path`) or, failing that, the server `url` alone is http(s) and its
+//!   path ends in `/feeds/junos-dynamic-address/address` or `…/prefix` (a
+//!   reverse-proxy prefix is allowed). The full URL on the server with no
+//!   `path` is the form mecfeedmcp documents. No such feed →
+//!   `state=not_configured`.
+//! - **Credentials:** `user-name` and `password` are read only as scrub
+//!   needles and never returned; `tls-profile` is never read. Reported `url`s
+//!   have userinfo, query and fragment removed (the path is kept). Device text (`next_update`, `last_update_status`, `error`, and
 //!   the message of a config-side `SrxError::Rpc` or `SrxError::Parse`) is
 //!   scrubbed in three passes, each linear in the text for a given config:
 //!   1. An exact echo of a configured raw URL (server or effective) becomes
@@ -51,7 +53,8 @@
 //!   2. Every occurrence of a configured secret becomes `[REDACTED]`, whatever
 //!      the echo's shape; overlapping or adjacent occurrences merge into one
 //!      `[REDACTED]`. The secrets of every `url` and `path` leaf and every
-//!      effective URL are its username, password, query string and fragment
+//!      effective URL are its username, password, query string, each
+//!      `key=value` pair and value of that query, and fragment
 //!      split by text, plus, when the `url` parser accepts it, the username
 //!      and password as that parser reads them, raw and percent-decoded.
 //!      Every `user-name` and `password` value is a secret too. All come from
@@ -67,8 +70,9 @@
 //!   encoding than those above (for example re-escaped); a query value echoed
 //!   without its `key=`, which is redacted only when it equals a whole
 //!   configured query or fragment string; a credential of an unconfigured URL
-//!   that is not one parseable token; a single parameter of a multi-parameter
-//!   query echoed together with its key (`token=QQtok` from `a=1&token=QQtok`).
+//!   that is not one parseable token; a plaintext Basic password echoed by the
+//!   device (the config holds only its `$9$` ciphertext, so only the
+//!   URL-userinfo pass or last-mile redaction catches it).
 //!   A short secret also redacts unrelated
 //!   text that contains it.
 //! - **Failures:** a config rpc-error other than `not-configured` fails
@@ -103,7 +107,7 @@ const LABELS_ENDING_FEED_BLOCK: [&str; 2] = ["Server Name", "Instance Name"];
 
 const NOT_SUBSCRIBED: &str = "no security dynamic-address feed points at a mecfeedmcp feed path \
      (/feeds/junos-dynamic-address/address|prefix)";
-const NO_STATUS: &str = "no status reported (not fetched yet)";
+const NO_STATUS: &str = "no status block for this feed in the device summary";
 const NO_LAST_STATUS: &str = "no last update status reported";
 const REDACTED: &str = "[REDACTED]";
 
@@ -313,7 +317,14 @@ fn feeds_in(doc: &roxmltree::Document<'_>) -> Vec<ConfiguredFeed> {
                 ),
                 None => server_url.clone(),
             };
-            let Some((kind, url)) = mecfeed_url(&effective) else {
+            // Also accept the full feed URL on the server with no (or an
+            // unrelated) `path`.
+            let Some((kind, url, raw_effective_url)) = mecfeed_url(&effective)
+                .map(|(kind, url)| (kind, url, effective.clone()))
+                .or_else(|| {
+                    mecfeed_url(&server_url).map(|(kind, url)| (kind, url, server_url.clone()))
+                })
+            else {
                 continue;
             };
             let address_name = address_names
@@ -326,7 +337,7 @@ fn feeds_in(doc: &roxmltree::Document<'_>) -> Vec<ConfiguredFeed> {
                 address_name,
                 kind,
                 url,
-                raw_effective_url: effective,
+                raw_effective_url,
             });
         }
     }
@@ -507,7 +518,12 @@ impl Scrubber {
             if let Some(clean) = clean_if_secret(raw) {
                 exact.push((raw.clone(), clean));
             }
-            secrets.extend(secret_parts(raw).into_iter().map(str::to_owned));
+            for part in secret_parts(raw) {
+                secrets.push(part.to_owned());
+                if let Ok(decoded) = percent_encoding::percent_decode_str(part).decode_utf8() {
+                    secrets.push(decoded.into_owned());
+                }
+            }
             // The lenient parser that accepts a feed also finds userinfo the
             // text split misses (`https:u:p@h`, `https:/u:p@h`, `https:///u:p@h`).
             if let Ok(parsed) = url::Url::parse(raw) {
@@ -653,8 +669,15 @@ fn secret_parts(raw: &str) -> Vec<&str> {
         .and_then(|(_, rest)| rest.rsplit_once('@'))
         .map_or("", |(userinfo, _)| userinfo);
     let (username, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
+    // Each `key=value` pair and each value of a multi-parameter query is a
+    // secret on its own: a device may echo one parameter.
+    let pairs = query.split('&').flat_map(|pair| {
+        let value = pair.split_once('=').map_or("", |(_, value)| value);
+        [pair, value]
+    });
     [username, password, query, fragment]
         .into_iter()
+        .chain(pairs)
         .filter(|part| !part.is_empty())
         .collect()
 }
@@ -1077,6 +1100,53 @@ mod tests {
         // Text without credential-bearing URLs is left alone.
         let clean = "failed<http return error code 404 from https://feeds.example.net/x>";
         assert_eq!(scrubber.scrub(clean), clean);
+    }
+
+    /// One feed-server per kind with the full URL and no `path` (mecfeedmcp's
+    /// documented form), and the same URL with an unrelated `path`.
+    #[test]
+    fn full_server_url_is_subscribed_with_or_without_a_path() {
+        let config = |path: &str| {
+            format!(
+                "<configuration><security><dynamic-address><feed-server>\
+                 <name>S</name><url>https://QQu:QQp@feeds.example.net:8443/feeds/junos-dynamic-address/prefix?QQq=1</url>\
+                 <feed-name><name>f</name>{path}</feed-name>\
+                 </feed-server></dynamic-address></security></configuration>"
+            )
+        };
+        for path in ["", "<path>other/stuff</path>"] {
+            let resp = parse(&config(path), Ok("<output></output>")).expect("parse");
+            assert_eq!(resp.state, SrxState::Active, "path {path:?}");
+            let feeds = &resp.data.expect("data").nodes[0].feeds;
+            assert_eq!(feeds.len(), 1, "path {path:?}");
+            assert_eq!(feeds[0].kind, FeedKind::Prefix);
+            assert_eq!(
+                feeds[0].url,
+                "https://feeds.example.net:8443/feeds/junos-dynamic-address/prefix"
+            );
+        }
+    }
+
+    #[test]
+    fn every_parameter_of_a_multi_parameter_query_is_scrubbed() {
+        let scrubber = Scrubber::new(
+            "<url>https://feeds.example.net/feeds/junos-dynamic-address/address?token=QQtok&sig=QQsig</url>",
+            &[],
+        );
+        for echo in [
+            "token=QQtok",
+            "sig=QQsig",
+            "got QQtok",
+            "got QQsig",
+            "?token=QQtok&sig=QQsig",
+            "token%3DQQtok",
+        ] {
+            let got = scrubber.scrub(echo);
+            assert!(
+                !got.contains("QQtok") && !got.contains("QQsig"),
+                "{echo}: {got}"
+            );
+        }
     }
 
     #[test]

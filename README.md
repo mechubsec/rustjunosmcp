@@ -93,7 +93,7 @@ Full results, the mock-target overhead numbers, method and reproduction steps:
 > with `rustix`. A malformed token entry also no longer takes the whole store
 > offline at load.
 >
-> Current tool surface: 44 tools by default (28 Junos-only with
+> Current tool surface: 45 tools by default (28 Junos-only with
 > `--no-default-features`). See the
 > [v0.10.0 release notes](https://github.com/mechubsec/rustjunosmcp/releases/tag/v0.10.0)
 > for the authorization changes above.
@@ -544,7 +544,7 @@ on the next call.
 
 `get_srx_feed_status` reports, per node and per feed, the mecfeedmcp
 dynamic-address feeds an SRX pulls: `feed_server`, `feed_name`,
-`address_name`, `kind` (`address` or `prefix`), a credential-free `url`,
+`address_name`, `kind` (`address` or `prefix`), a `url` (userinfo, query and fragment removed; the path is kept),
 `entries`, `next_update`, `last_update_status` and `error`. It is read-only.
 
 Subscribe once through the normal change-set flow:
@@ -556,21 +556,32 @@ Subscribe once through the normal change-set flow:
 5. `confirm_junos_change_set`
 
 There is no new write tool. Replace `SERVE_HOST` with mecfeed-serve's DNS
-name, which must match its certificate's CN/SAN.
+name, which must match its certificate's CN/SAN. As mecfeedmcp documents it,
+there is one feed server per kind, each with the full feed URL
+`https://SERVE_HOST:8443/feeds/junos-dynamic-address/<kind>`:
 
 ```
 set security pki ca-profile MECFEED-CA ca-identity MECFEED-CA
 set services ssl initiation profile MECFEED-TLS trusted-ca MECFEED-CA
-set security dynamic-address feed-server MECFEED url https://SERVE_HOST:8443
-set security dynamic-address feed-server MECFEED tls-profile MECFEED-TLS
-set security dynamic-address feed-server MECFEED validate-certificate-attributes subject-or-subject-alternative-names
-set security dynamic-address feed-server MECFEED update-interval 300
-set security dynamic-address feed-server MECFEED hold-interval 86400
-set security dynamic-address feed-server MECFEED feed-name mecfeed-address path feeds/junos-dynamic-address/address
-set security dynamic-address feed-server MECFEED feed-name mecfeed-prefix path feeds/junos-dynamic-address/prefix
+set security dynamic-address feed-server MECFEED-ADDRESS url https://SERVE_HOST:8443/feeds/junos-dynamic-address/address
+set security dynamic-address feed-server MECFEED-ADDRESS tls-profile MECFEED-TLS
+set security dynamic-address feed-server MECFEED-ADDRESS validate-certificate-attributes subject-or-subject-alternative-names
+set security dynamic-address feed-server MECFEED-ADDRESS update-interval 300
+set security dynamic-address feed-server MECFEED-ADDRESS hold-interval 86400
+set security dynamic-address feed-server MECFEED-ADDRESS feed-name mecfeed-address
+set security dynamic-address feed-server MECFEED-PREFIX url https://SERVE_HOST:8443/feeds/junos-dynamic-address/prefix
+set security dynamic-address feed-server MECFEED-PREFIX tls-profile MECFEED-TLS
+set security dynamic-address feed-server MECFEED-PREFIX validate-certificate-attributes subject-or-subject-alternative-names
+set security dynamic-address feed-server MECFEED-PREFIX update-interval 300
+set security dynamic-address feed-server MECFEED-PREFIX hold-interval 86400
+set security dynamic-address feed-server MECFEED-PREFIX feed-name mecfeed-prefix
 set security dynamic-address address-name MECFEED-ADDRESS profile feed-name mecfeed-address
 set security dynamic-address address-name MECFEED-PREFIX profile feed-name mecfeed-prefix
 ```
+
+The Junos URL/path handling for plain-text feeds is not yet lab-verified;
+tracked in mechubsec/mecfeedmcp#5. `get_srx_feed_status` accepts the full URL
+on the feed server, with or without a `path` on the feed.
 
 Client authentication (mecfeed-serve requires one):
 
@@ -607,8 +618,9 @@ Verify with `get_srx_feed_status`:
 - Junos does not report the feed ETag. Compare `entries` and
   `last_update_status` with the feed server.
 - A field the device did not report is `null`, never guessed.
-- `url` is shown without credentials, query or fragment, and feed
-  `user-name`, `password` and `tls-profile` are never read.
+- `url` has userinfo, query and fragment removed (the path is kept). Feed
+  `user-name` and `password` are used only to scrub device text and are never
+  returned; `tls-profile` is never read.
 
 ## Security warning
 

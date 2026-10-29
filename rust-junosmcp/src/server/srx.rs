@@ -1312,13 +1312,13 @@ impl JmcpHandler {
                        (`security dynamic-address feed-server` entries whose feed path is \
                        `/feeds/junos-dynamic-address/address` or `/prefix`). Per node and per \
                        feed returns feed_server, feed_name, address_name, kind (address or \
-                       prefix), the credential-free url, entries, next_update, \
+                       prefix), the url (userinfo, query and fragment removed; path kept), entries, next_update, \
                        last_update_status and error. Missing or unparsed device fields are null, \
                        never guessed. state=not_configured when no such feed is subscribed. \
                        Junos does not report the feed ETag; compare `entries` and \
-                       `last_update_status` with the feed server. Feed user-name, password and \
-                       tls-profile are never read, and URLs carry no userinfo, query or \
-                       fragment. Output is redacted: config/device values matching known secret patterns are replaced before being returned; structure and non-secret values are preserved."
+                       `last_update_status` with the feed server. Feed user-name and password \
+                       are used only to scrub device text and are never returned; tls-profile \
+                       is never read. Output is redacted: config/device values matching known secret patterns are replaced before being returned; structure and non-secret values are preserved."
     )]
     async fn get_srx_feed_status(
         &self,
