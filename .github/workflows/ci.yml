@@ -182,7 +182,7 @@ jobs:
         # Pinned past mecmcp#492, which adds the `audit_hmac_flag` manifest
         # key this repo's conformance.toml declares (MEC-1793). No mecmcp
         # tag covers it yet; repin to a tag once one is cut.
-        uses: mechubsec/mecmcp/packaging/conformance@4815d7b4121be78745ceeae12c25ed86d6da9b2f
+        uses: mechubsec/mecmcp/packaging/conformance@aa0a7f95810f7cf069b2f4f6eb56f9553748e085
         with:
           staging: staging
           manifest: staging/conformance.toml
