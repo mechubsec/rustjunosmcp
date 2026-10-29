@@ -41,10 +41,27 @@
 //!   `path`, or `url` alone) is http(s) and its path ends in
 //!   `/feeds/junos-dynamic-address/address` or `…/prefix` (a reverse-proxy
 //!   prefix is allowed). No such feed → `state=not_configured`.
-//! - **Credentials:** the parser never reads `user-name`, `password` or
-//!   `tls-profile`. URLs are reported without userinfo, query or fragment,
-//!   and every echo of a credential-bearing URL in device text is replaced
-//!   with its sanitised form.
+//! - **Credentials:** `user-name`, `password` and `tls-profile` are never read
+//!   into the response, and reported `url`s carry no userinfo, query or
+//!   fragment. Device text (`next_update`, `last_update_status`, `error`, and
+//!   the message of a config-side `SrxError::Rpc` or `SrxError::Parse`) is
+//!   scrubbed in two linear passes:
+//!   1. An exact echo of a configured raw URL (server or effective) becomes
+//!      its sanitised form. Every other occurrence of a configured secret
+//!      becomes `[REDACTED]`, whatever the echo's shape. The secrets are the
+//!      username, password, query string and fragment of every `url` and
+//!      `path` leaf and every effective URL (split by text, not parsed), plus
+//!      every `user-name` and `password` value. They come from a textual
+//!      scan of the raw config reply, so a reply that does not parse is
+//!      covered too, as are foreign and deactivated feeds.
+//!   2. Best effort, for URLs not in the config: a token split on whitespace
+//!      and `<>()"'` that parses as a URL with userinfo, a query or a fragment
+//!      is sanitised.
+//!
+//!   Not guaranteed: a configured secret echoed in another encoding
+//!   (percent-decoded or re-escaped), or a credential of an unconfigured URL
+//!   that is not one parseable token. A short secret also redacts unrelated
+//!   text that contains it.
 //! - **Failures:** a config rpc-error other than `not-configured` fails
 //!   closed (`SrxError::Rpc`). A summary failure degrades only the affected
 //!   node: its feeds carry `error: "status unavailable: …"`.
@@ -78,6 +95,7 @@ const NOT_SUBSCRIBED: &str = "no security dynamic-address feed points at a mecfe
      (/feeds/junos-dynamic-address/address|prefix)";
 const NO_STATUS: &str = "no status reported (not fetched yet)";
 const NO_LAST_STATUS: &str = "no last update status reported";
+const REDACTED: &str = "[REDACTED]";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -132,9 +150,9 @@ pub struct FeedStatus {
     pub url: String,
     /// Summary IPv4 + IPv6 entry totals; null when not reported.
     pub entries: Option<u64>,
-    /// Summary `Next update`, device text verbatim.
+    /// Summary `Next update`, device text with credentials scrubbed.
     pub next_update: Option<String>,
-    /// Summary `Last update status`, device text with URLs sanitised.
+    /// Summary `Last update status`, device text with credentials scrubbed.
     pub last_update_status: Option<String>,
     /// Null when the last update succeeded; otherwise why the feed is not healthy.
     pub error: Option<String>,
@@ -172,15 +190,15 @@ struct ConfiguredFeed {
     kind: FeedKind,
     url: String,
     raw_effective_url: String,
-    raw_server_url: String,
 }
 
 /// One per-feed block of the summary text.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct SummaryBlock {
     feed_name: String,
-    ipv4: Option<u64>,
-    ipv6: Option<u64>,
+    /// `None`: label absent; `Some(None)`: present but does not parse.
+    ipv4: Option<Option<u64>>,
+    ipv6: Option<Option<u64>>,
     next_update: Option<String>,
     last_update_status: Option<String>,
 }
@@ -190,10 +208,13 @@ fn parse(
     config_xml: &str,
     summary: Result<&str, &str>,
 ) -> Result<SrxToolResponse<FeedStatusData>, SrxError> {
-    let feeds = configured_feeds(config_xml)?;
+    let feeds =
+        configured_feeds(config_xml).map_err(|e| Scrubber::new(config_xml, &[]).scrub_error(e))?;
     if feeds.is_empty() {
         return Ok(SrxToolResponse::not_configured(NOT_SUBSCRIBED));
     }
+    let effective_urls: Vec<&str> = feeds.iter().map(|f| f.raw_effective_url.as_str()).collect();
+    let scrubber = Scrubber::new(config_xml, &effective_urls);
     let split = summary
         .map_err(str::to_owned)
         .and_then(|xml| multi_re_split(xml).map_err(|e| e.to_string()));
@@ -214,7 +235,7 @@ fn parse(
             re_name,
             feeds: feeds
                 .iter()
-                .map(|f| feed_status(f, blocks.as_deref()))
+                .map(|f| feed_status(f, blocks.as_deref(), &scrubber))
                 .collect(),
         })
         .collect();
@@ -296,7 +317,6 @@ fn feeds_in(doc: &roxmltree::Document<'_>) -> Vec<ConfiguredFeed> {
                 kind,
                 url,
                 raw_effective_url: effective,
-                raw_server_url: server_url.clone(),
             });
         }
     }
@@ -373,9 +393,9 @@ fn parse_summary_text(text: &str) -> Vec<SummaryBlock> {
             let text = (!value.is_empty()).then(|| value.to_owned());
             // First occurrence wins.
             if is(LABEL_IPV4) {
-                block.ipv4 = block.ipv4.or(count);
+                block.ipv4 = block.ipv4.or(Some(count));
             } else if is(LABEL_IPV6) {
-                block.ipv6 = block.ipv6.or(count);
+                block.ipv6 = block.ipv6.or(Some(count));
             } else if is(LABEL_NEXT_UPDATE) {
                 block.next_update = block.next_update.take().or(text);
             } else if is(LABEL_LAST_STATUS) {
@@ -387,7 +407,11 @@ fn parse_summary_text(text: &str) -> Vec<SummaryBlock> {
 }
 
 /// Assemble one feed's status from its node's summary blocks.
-fn feed_status(feed: &ConfiguredFeed, blocks: Result<&[SummaryBlock], &String>) -> FeedStatus {
+fn feed_status(
+    feed: &ConfiguredFeed,
+    blocks: Result<&[SummaryBlock], &String>,
+    scrubber: &Scrubber,
+) -> FeedStatus {
     let (entries, next_update, last_update_status, error) = match blocks {
         Err(reason) => (
             None,
@@ -398,21 +422,14 @@ fn feed_status(feed: &ConfiguredFeed, blocks: Result<&[SummaryBlock], &String>) 
         Ok(blocks) => match blocks.iter().find(|b| b.feed_name == feed.feed_name) {
             None => (None, None, None, Some(NO_STATUS.to_owned())),
             Some(b) => (
-                match (b.ipv4, b.ipv6) {
-                    (None, None) => None,
-                    (v4, v6) => Some(v4.unwrap_or(0).saturating_add(v6.unwrap_or(0))),
-                },
+                entry_total(b.ipv4, b.ipv6),
                 b.next_update.clone(),
                 b.last_update_status.clone(),
                 status_error(b.last_update_status.as_deref()),
             ),
         },
     };
-    let raw_urls = [
-        feed.raw_effective_url.as_str(),
-        feed.raw_server_url.as_str(),
-    ];
-    let clean = |text: Option<String>| text.map(|t| scrub(&t, &raw_urls));
+    let clean = |text: Option<String>| text.map(|t| scrubber.scrub(&t));
     FeedStatus {
         feed_server: feed.feed_server.clone(),
         feed_name: feed.feed_name.clone(),
@@ -435,26 +452,176 @@ fn status_error(status: Option<&str>) -> Option<String> {
     }
 }
 
-/// Replace credential-bearing URLs in device text with their sanitised form.
-///
-/// Exact echoes of `raw_urls` go first (longest first), since they survive
-/// delimiter characters inside credentials. Then any other URL token.
-fn scrub(text: &str, raw_urls: &[&str]) -> String {
-    let mut out = text.to_owned();
-    for raw in raw_urls {
-        if let Some(clean) = clean_if_secret(raw) {
-            out = out.replace(raw, &clean);
+/// v4 + v6, an absent label counting as 0. `None` when neither label is
+/// present or a present one does not parse, so a partial sum never
+/// under-reports.
+fn entry_total(ipv4: Option<Option<u64>>, ipv6: Option<Option<u64>>) -> Option<u64> {
+    if ipv4.is_none() && ipv6.is_none() {
+        return None;
+    }
+    Some(
+        ipv4.unwrap_or(Some(0))?
+            .saturating_add(ipv6.unwrap_or(Some(0))?),
+    )
+}
+
+/// Removes configured credentials from device text (module doc, "Credentials").
+struct Scrubber {
+    /// `(needle, replacement)`, longest needle first; never an empty needle.
+    patterns: Vec<(String, String)>,
+}
+
+impl Scrubber {
+    /// Secrets from a textual scan of the raw config reply, plus the
+    /// reported feeds' effective URLs.
+    fn new(config_xml: &str, effective_urls: &[&str]) -> Self {
+        let mut raw_urls = leaf_texts(config_xml, "url");
+        raw_urls.extend(leaf_texts(config_xml, "path"));
+        raw_urls.extend(effective_urls.iter().map(|u| (*u).to_owned()));
+        let mut patterns: Vec<(String, String)> = Vec::new();
+        for raw in &raw_urls {
+            if let Some(clean) = clean_if_secret(raw) {
+                patterns.push((raw.clone(), clean));
+            }
+            for part in secret_parts(raw) {
+                patterns.push((part.to_owned(), REDACTED.to_owned()));
+            }
+        }
+        // Never read into the response, but device text could echo them.
+        for tag in ["user-name", "password"] {
+            patterns.extend(
+                leaf_texts(config_xml, tag)
+                    .into_iter()
+                    .map(|value| (value, REDACTED.to_owned())),
+            );
+        }
+        // An empty needle would match without advancing `redact`.
+        patterns.retain(|(needle, _)| !needle.is_empty());
+        patterns.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+        patterns.dedup_by(|a, b| a.0 == b.0);
+        Self { patterns }
+    }
+
+    /// Both passes: configured secrets, then the URL-token backstop.
+    fn scrub(&self, text: &str) -> String {
+        sanitize_url_tokens(&self.redact(text))
+    }
+
+    /// One pass: at each position the longest matching needle is replaced.
+    fn redact(&self, text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while !rest.is_empty() {
+            let hit = self.patterns.iter().find_map(|(needle, replacement)| {
+                Some((rest.strip_prefix(needle.as_str())?, replacement))
+            });
+            if let Some((after, replacement)) = hit {
+                out.push_str(replacement);
+                rest = after;
+                continue;
+            }
+            let mut chars = rest.chars();
+            if let Some(c) = chars.next() {
+                out.push(c);
+            }
+            rest = chars.as_str();
+        }
+        out
+    }
+
+    /// Scrub the device-supplied message of a config-side error.
+    fn scrub_error(&self, error: SrxError) -> SrxError {
+        match error {
+            SrxError::Rpc {
+                tag,
+                severity,
+                message,
+            } => SrxError::Rpc {
+                tag,
+                severity,
+                message: self.scrub(&message),
+            },
+            SrxError::Parse(message) => SrxError::Parse(self.scrub(&message)),
+            other => other,
         }
     }
-    let dirty: Vec<(String, String)> = out
-        .split(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '(' | ')' | '"' | '\''))
-        .filter(|token| token.contains("://"))
-        .filter_map(|token| Some((token.to_owned(), clean_if_secret(token)?)))
-        .collect();
-    for (token, clean) in dirty {
-        out = out.replace(&token, &clean);
+}
+
+/// Entity-decoded, trimmed text of every `<tag>…</tag>` element, found by
+/// text so a reply that does not parse still yields its values.
+fn leaf_texts(xml: &str, tag: &str) -> Vec<String> {
+    let open = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let mut texts = Vec::new();
+    let mut rest = xml;
+    while let Some((_, after_open)) = rest.split_once(open.as_str()) {
+        rest = after_open;
+        // `<url>` or `<url attr…>`; not `<url-x>` or `<url/>`.
+        if !after_open.starts_with(|c: char| c == '>' || c.is_whitespace()) {
+            continue;
+        }
+        let Some((attributes, body)) = after_open.split_once('>') else {
+            break;
+        };
+        if attributes.ends_with('/') {
+            continue;
+        }
+        let Some((text, tail)) = body.split_once(close.as_str()) else {
+            break;
+        };
+        texts.push(decode_entities(text.trim()));
+        rest = tail;
+    }
+    texts
+}
+
+/// Decode the five predefined XML entities (`&amp;` last).
+fn decode_entities(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+/// Username, password, query and fragment of `raw`, split by text so a URL
+/// the parser rejects still yields them. Empty parts are dropped.
+fn secret_parts(raw: &str) -> Vec<&str> {
+    let (before_fragment, fragment) = raw.split_once('#').unwrap_or((raw, ""));
+    let (before_query, query) = before_fragment
+        .split_once('?')
+        .unwrap_or((before_fragment, ""));
+    // Userinfo runs to the last `@` before the query, so a raw `/` in a
+    // password is still caught.
+    let userinfo = before_query
+        .split_once("://")
+        .and_then(|(_, rest)| rest.rsplit_once('@'))
+        .map_or("", |(userinfo, _)| userinfo);
+    let (username, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
+    [username, password, query, fragment]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+/// Backstop pass: each token that parses as a URL with userinfo, a query or
+/// a fragment is sanitised. One pass; delimiters are kept.
+fn sanitize_url_tokens(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for piece in text.split_inclusive(is_token_delimiter) {
+        let token = piece.strip_suffix(is_token_delimiter).unwrap_or(piece);
+        let clean = token
+            .contains("://")
+            .then(|| clean_if_secret(token))
+            .flatten();
+        out.push_str(clean.as_deref().unwrap_or(token));
+        out.push_str(piece.strip_prefix(token).unwrap_or(""));
     }
     out
+}
+
+fn is_token_delimiter(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '<' | '>' | '(' | ')' | '"' | '\'')
 }
 
 /// Sanitised `raw` when it parses as a URL with userinfo, a query or a fragment.
@@ -490,10 +657,10 @@ fn is_active(node: &roxmltree::Node<'_, '_>) -> bool {
     node.is_element() && node.attribute("inactive") != Some("inactive")
 }
 
-/// Return the trimmed text of the first direct child element matching `name`.
+/// Trimmed text of the first active direct child element named `name`.
 fn child_text(node: &roxmltree::Node<'_, '_>, name: &str) -> Option<String> {
     node.children()
-        .find(|n| n.is_element() && n.tag_name().name() == name)
+        .find(|n| is_active(n) && n.tag_name().name() == name)
         .and_then(|n| n.text())
         .map(|t| t.trim().to_string())
 }
@@ -804,15 +971,15 @@ mod tests {
             vec![
                 SummaryBlock {
                     feed_name: "x".into(),
-                    ipv4: None,
-                    ipv6: Some(3),
+                    ipv4: Some(None),
+                    ipv6: Some(Some(3)),
                     next_update: None,
                     last_update_status: None,
                 },
                 SummaryBlock {
                     feed_name: "y".into(),
-                    ipv4: Some(u64::MAX),
-                    ipv6: Some(1),
+                    ipv4: Some(Some(u64::MAX)),
+                    ipv6: Some(Some(1)),
                     next_update: None,
                     last_update_status: None,
                 },
@@ -837,15 +1004,15 @@ mod tests {
 
     #[test]
     fn scrub_catches_url_echo_in_another_form() {
-        let raw = [
-            "https://QQsvc:QQpw@feeds.example.net:8443/feeds/junos-dynamic-address/address",
-            "https://QQsvc:QQpw@feeds.example.net:8443",
-        ];
-        // Device text with a doubled slash and an extra query: neither raw URL
-        // matches the whole echo.
+        let scrubber = Scrubber::new(
+            "<url>https://QQsvc:QQpw@feeds.example.net:8443</url>",
+            &["https://QQsvc:QQpw@feeds.example.net:8443/feeds/junos-dynamic-address/address"],
+        );
+        // A doubled slash and an extra query (neither raw URL matches the whole
+        // echo), and an unconfigured URL left to the token backstop.
         let text = "data(https://QQsvc:QQpw@feeds.example.net:8443//feeds/x?QQq=1#QQf) \
                     and \"https://QQt@other.example.net/y?QQz\" ok";
-        let got = scrub(text, &raw);
+        let got = scrubber.scrub(text);
         assert!(!got.contains("QQ"), "{got}");
         assert!(
             got.contains("https://feeds.example.net:8443//feeds/x"),
@@ -854,7 +1021,7 @@ mod tests {
         assert!(got.contains("https://other.example.net/y"), "{got}");
         // Text without credential-bearing URLs is left alone.
         let clean = "failed<http return error code 404 from https://feeds.example.net/x>";
-        assert_eq!(scrub(clean, &raw), clean);
+        assert_eq!(scrubber.scrub(clean), clean);
     }
 
     #[test]
@@ -865,5 +1032,144 @@ mod tests {
              </feed-server></dynamic-address></security></configuration>";
         let resp = parse(config, Ok("<output/>")).expect("parse");
         assert_eq!(resp.state, SrxState::NotConfigured);
+    }
+
+    // ── Fix round 1 ───────────────────────────────────────────────────────────
+
+    /// One mecfeed feed whose server URL carries `QQa:QQb` and path `?token=QQtok`.
+    const PROBE_CONFIG: &str = "<configuration><security><dynamic-address><feed-server>\
+         <name>S</name><url>https://QQa:QQb@feeds.example.net:8443</url>\
+         <feed-name><name>f</name><path>feeds/junos-dynamic-address/address?token=QQtok</path>\
+         </feed-name></feed-server></dynamic-address></security></configuration>";
+
+    /// Serialized response for a summary whose `Last update status` is `status`.
+    fn status_echo(status: &str) -> String {
+        let escaped = status
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        let summary = format!("<output>Feed Name : f\n  Last update status : {escaped}\n</output>");
+        let resp = parse(PROBE_CONFIG, Ok(&summary)).expect("parse");
+        serde_json::to_string(&resp).expect("serializes")
+    }
+
+    fn assert_no_probe_secret(text: &str, context: &str) {
+        for secret in ["QQa", "QQb", "QQtok"] {
+            assert!(!text.contains(secret), "{context}: leaks {secret}: {text}");
+        }
+    }
+
+    #[test]
+    fn configured_secrets_redacted_in_any_echo_shape() {
+        for probe in [
+            "url=https://QQa:QQb@h/x",
+            "url:https://QQa:QQb@h/x",
+            "[https://QQa:QQb@h/x]",
+            "{https://QQa:QQb@h/x}",
+            "https://QQa:QQb@h:99999/x",
+            "https://QQa:QQb@",
+            "/feeds/junos-dynamic-address/address?token=QQtok",
+        ] {
+            assert_no_probe_secret(&status_echo(probe), probe);
+        }
+    }
+
+    #[test]
+    fn exact_echo_still_becomes_the_sanitised_url() {
+        let json = status_echo(
+            "failed<401 from https://QQa:QQb@feeds.example.net:8443/feeds/\
+             junos-dynamic-address/address?token=QQtok>",
+        );
+        assert!(
+            json.contains(
+                "failed<401 from https://feeds.example.net:8443/feeds/junos-dynamic-address/address>"
+            ),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn scrub_is_linear_on_large_device_text() {
+        let start = std::time::Instant::now();
+        // 880 KB of credential-bearing URL tokens: one full-string replace per
+        // token made this quadratic.
+        let json = status_echo(&"http://a@b ".repeat(80_000));
+        assert!(!json.contains("a@b"));
+        // Uncut: every token survives sanitised, in both status and error.
+        assert_eq!(json.matches("http://b").count(), 160_000);
+        assert!(start.elapsed().as_secs() < 5);
+    }
+
+    #[test]
+    fn config_rpc_error_message_is_scrubbed() {
+        let cluster = format!(
+            "<multi-routing-engine-results>\
+             <multi-routing-engine-item><re-name>node0</re-name><rpc-error>\
+             <error-tag>operation-failed</error-tag>\
+             <error-message>cannot read url:https://QQa:QQb@x?token=QQtok</error-message>\
+             </rpc-error></multi-routing-engine-item>\
+             <multi-routing-engine-item><re-name>node1</re-name>{PROBE_CONFIG}\
+             </multi-routing-engine-item></multi-routing-engine-results>"
+        );
+        match parse(&cluster, Ok("<output/>")) {
+            Err(SrxError::Rpc { message, .. }) => {
+                assert_no_probe_secret(&message, "rpc message");
+                assert!(message.starts_with("rpc-error: cannot read"), "{message}");
+            }
+            other => panic!("expected SrxError::Rpc, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn config_parse_error_message_is_scrubbed() {
+        // The stray close tag puts the password into roxmltree's message.
+        let malformed = "<configuration><url>https://QQa:QQb@feeds.example.net</url></QQb>";
+        match parse(malformed, Ok("<output/>")) {
+            Err(SrxError::Parse(message)) => assert_no_probe_secret(&message, "parse message"),
+            other => panic!("expected SrxError::Parse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn entries_null_when_a_present_count_does_not_parse() {
+        let summary = "<output>Feed Name : f\n  Total IPv4 entries : 5\n\
+                       \x20 Total IPv6 entries : n/a\n  Last update status : succeeded\n</output>";
+        let resp = parse(PROBE_CONFIG, Ok(summary)).expect("parse");
+        let nodes = resp.data.expect("active").nodes;
+        assert_eq!(feed(&nodes[0], "f").entries, None, "no partial sum");
+        // An absent label still counts as zero.
+        let summary = "<output>Feed Name : f\n  Total IPv4 entries : 5\n</output>";
+        let resp = parse(PROBE_CONFIG, Ok(summary)).expect("parse");
+        assert_eq!(
+            resp.data.expect("active").nodes[0].feeds[0].entries,
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn deactivated_url_or_path_leaf_is_ignored() {
+        let config = "<configuration><security><dynamic-address>\
+             <feed-server><name>A</name>\
+             <url inactive=\"inactive\">https://feeds.example.net/feeds/junos-dynamic-address/address</url>\
+             <feed-name><name>a</name></feed-name></feed-server>\
+             <feed-server><name>B</name>\
+             <url>https://feeds.example.net/feeds/junos-dynamic-address/prefix</url>\
+             <feed-name><name>b</name>\
+             <path inactive=\"inactive\">feeds/junos-dynamic-address/address</path>\
+             </feed-name></feed-server>\
+             </dynamic-address></security></configuration>";
+        let resp = parse(config, Ok("<output/>")).expect("parse");
+        let feeds = &resp.data.expect("active").nodes[0].feeds;
+        assert_eq!(feeds.len(), 1, "server A has no active url");
+        assert_eq!(feeds[0].feed_name, "b");
+        assert_eq!(
+            feeds[0].kind,
+            FeedKind::Prefix,
+            "inactive path is not joined"
+        );
+        assert_eq!(
+            feeds[0].url,
+            "https://feeds.example.net/feeds/junos-dynamic-address/prefix"
+        );
     }
 }
