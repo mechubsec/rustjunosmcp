@@ -67,9 +67,9 @@
 //!
 //!   If a matcher cannot be built or a search fails, the whole text becomes
 //!   `[REDACTED]`. Not guaranteed: a configured secret echoed in any other
-//!   encoding than those above (for example re-escaped); a query value echoed
-//!   without its `key=`, which is redacted only when it equals a whole
-//!   configured query or fragment string; a credential of an unconfigured URL
+//!   encoding than those above (for example re-escaped); a fragment piece
+//!   echoed alone, which is redacted only when it equals the whole configured
+//!   fragment; a credential of an unconfigured URL
 //!   that is not one parseable token; a plaintext Basic password echoed by the
 //!   device (the config holds only its `$9$` ciphertext, so only the
 //!   URL-userinfo pass or last-mile redaction catches it).
@@ -690,7 +690,7 @@ fn sanitize_url_tokens(text: &str) -> String {
         let token = piece.strip_suffix(is_token_delimiter).unwrap_or(piece);
         let clean = token
             .contains("://")
-            .then(|| clean_if_secret(token))
+            .then(|| clean_if_secret(token).or_else(|| strip_unparsed_userinfo(token)))
             .flatten();
         out.push_str(clean.as_deref().unwrap_or(token));
         out.push_str(piece.strip_prefix(token).unwrap_or(""));
@@ -700,6 +700,19 @@ fn sanitize_url_tokens(text: &str) -> String {
 
 fn is_token_delimiter(c: char) -> bool {
     c.is_whitespace() || matches!(c, '<' | '>' | '(' | ')' | '"' | '\'')
+}
+
+/// A token that does not parse as a URL (pass 2 can leave `[REDACTED]` in its
+/// host or port) still has its userinfo replaced, by text. Single pass.
+fn strip_unparsed_userinfo(token: &str) -> Option<String> {
+    let (scheme, rest) = token.split_once("://")?;
+    if url::Url::parse(token).is_ok() {
+        return None;
+    }
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(authority_end);
+    let (_, host) = authority.rsplit_once('@')?;
+    Some(format!("{scheme}://{REDACTED}@{host}{tail}"))
 }
 
 /// Sanitised `raw` when it parses as a URL with userinfo, a query or a fragment.
@@ -1102,29 +1115,82 @@ mod tests {
         assert_eq!(scrubber.scrub(clean), clean);
     }
 
-    /// One feed-server per kind with the full URL and no `path` (mecfeedmcp's
-    /// documented form), and the same URL with an unrelated `path`.
+    fn full_url_config(url: &str, path: &str) -> String {
+        format!(
+            "<configuration><security><dynamic-address><feed-server>\
+             <name>S</name><url>{url}</url>\
+             <feed-name><name>f</name>{path}</feed-name>\
+             </feed-server></dynamic-address></security></configuration>"
+        )
+    }
+
+    fn only_feed_url(config: &str) -> String {
+        let resp = parse(config, Ok("<output></output>")).expect("parse");
+        assert_eq!(resp.state, SrxState::Active, "{config}");
+        let feeds = resp.data.expect("data").nodes.remove(0).feeds;
+        assert_eq!(feeds.len(), 1, "{config}");
+        assert_eq!(feeds[0].kind, FeedKind::Prefix);
+        feeds[0].url.clone()
+    }
+
+    /// mecfeedmcp's documented form: the full URL on the server with no
+    /// `path`, or with a `path` that breaks the effective match (so only the
+    /// server-url fallback can subscribe it).
     #[test]
     fn full_server_url_is_subscribed_with_or_without_a_path() {
-        let config = |path: &str| {
-            format!(
-                "<configuration><security><dynamic-address><feed-server>\
-                 <name>S</name><url>https://QQu:QQp@feeds.example.net:8443/feeds/junos-dynamic-address/prefix?QQq=1</url>\
-                 <feed-name><name>f</name>{path}</feed-name>\
-                 </feed-server></dynamic-address></security></configuration>"
-            )
-        };
+        let url = "https://QQu:QQp@feeds.example.net:8443/feeds/junos-dynamic-address/prefix";
         for path in ["", "<path>other/stuff</path>"] {
-            let resp = parse(&config(path), Ok("<output></output>")).expect("parse");
-            assert_eq!(resp.state, SrxState::Active, "path {path:?}");
-            let feeds = &resp.data.expect("data").nodes[0].feeds;
-            assert_eq!(feeds.len(), 1, "path {path:?}");
-            assert_eq!(feeds[0].kind, FeedKind::Prefix);
             assert_eq!(
-                feeds[0].url,
-                "https://feeds.example.net:8443/feeds/junos-dynamic-address/prefix"
+                only_feed_url(&full_url_config(url, path)),
+                "https://feeds.example.net:8443/feeds/junos-dynamic-address/prefix",
+                "path {path:?}"
             );
         }
+    }
+
+    #[test]
+    fn full_server_url_query_is_stripped() {
+        let url = "https://QQu:QQp@feeds.example.net:8443/feeds/junos-dynamic-address/prefix?QQq=1";
+        assert_eq!(
+            only_feed_url(&full_url_config(url, "")),
+            "https://feeds.example.net:8443/feeds/junos-dynamic-address/prefix"
+        );
+    }
+
+    /// Pass 2 can put `[REDACTED]` into an unconfigured URL's host or port;
+    /// the unparseable token must still lose its userinfo.
+    #[test]
+    fn short_needle_does_not_leave_userinfo_of_an_unconfigured_url() {
+        for (query, echo) in [
+            ("a=1", "https://ZZu:ZZpw@10.1.1.1/x"),
+            ("v=8", "https://ZZu:ZZpw@host:8443/x?k=1"),
+        ] {
+            let scrubber = Scrubber::new(
+                &format!(
+                    "<url>https://feeds.example.net/feeds/junos-dynamic-address/address?{query}</url>"
+                ),
+                &[],
+            );
+            let got = scrubber.scrub(&format!("failed {echo} done"));
+            assert!(!got.contains("ZZ"), "{echo}: {got}");
+            assert!(got.starts_with("failed https://"), "{got}");
+        }
+    }
+
+    #[test]
+    fn unparsed_token_without_userinfo_is_left_alone() {
+        // `@` after the authority is not userinfo.
+        for token in [
+            "https://[bad/a@b",
+            "https://[REDACTED]0.x/y",
+            "https://[bad",
+        ] {
+            assert_eq!(strip_unparsed_userinfo(token), None, "{token}");
+        }
+        assert_eq!(
+            strip_unparsed_userinfo("https://ZZu@[bad/p@q").as_deref(),
+            Some("https://[REDACTED]@[bad/p@q")
+        );
     }
 
     #[test]

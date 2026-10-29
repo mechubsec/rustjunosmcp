@@ -895,7 +895,7 @@ Silence means it is off.
 git clone https://github.com/mechubsec/rustjunosmcp.git
 cd RustJunosMCP
 
-# Build the default 44-tool Junos/SRX server with TLS.
+# Build the default 45-tool Junos/SRX server with TLS.
 cargo build --release
 
 # Optional: build the 28-tool Junos-only server without TLS.
@@ -932,7 +932,7 @@ the key to silence the warning.
 
 ## Claude Desktop config
 
-One registration exposes every tool enabled in the built binary (44 with the
+One registration exposes every tool enabled in the built binary (45 with the
 default `srx` feature, or 28 in a Junos-only build):
 
 ```json
