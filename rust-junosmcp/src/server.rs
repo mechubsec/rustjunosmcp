@@ -113,15 +113,12 @@ pub(super) fn mint_request_id() -> String {
 /// (trimmed, starts with `<`), so plain text falls straight through to
 /// [`junos_log_text_fallback`] unescaped.
 ///
-/// MEC-2519/MEC-2558: this server only ever speaks Junos, so the fallback
-/// layers [`mecmcp_redact::junos::redact_log_text`]'s closed, whole-word
-/// Junos key vocabulary *on top of* [`mecmcp_redact::redact_text`]'s
-/// cross-vendor substring denylist (via [`junos_log_text_fallback`]),
-/// rather than replacing it. A closed set of non-secret Junos `session`
-/// keywords (`session-init`, `session-close`, `limit-session`) is preserved
-/// around the generic pass; all other secret shapes (PEM blocks,
+/// Plain text goes through [`mecmcp_redact::junos::redact_text`] (via
+/// [`junos_log_text_fallback`]): the generic scan, then the Junos log
+/// vocabulary, preserving vetted non-secret `session` counters, keywords and
+/// flow-session command echoes (#579). Everything else (PEM blocks,
 /// URL-userinfo passwords, bearer tokens, `session-id`/`session-token`, ...)
-/// stay masked. See [`rust_junosmcp_core::text_redact`].
+/// stays masked. See [`rust_junosmcp_core::text_redact`].
 pub(super) fn redact_body(s: &str) -> String {
     if let Ok(mut value) = serde_json::from_str::<Value>(s) {
         redact_json_preserving_server_fields(&mut value);
@@ -3917,7 +3914,7 @@ mod redact_last_mile_tests {
     }
 
     /// Genuinely unstructured input (CLI/`set`-style output, a plain error
-    /// message) falls back to [`mecmcp_redact::junos::redact_log_text`]
+    /// message) falls back to [`mecmcp_redact::junos::redact_text`]
     /// rather than being left unredacted because it did not parse as JSON
     /// or XML.
     #[test]
