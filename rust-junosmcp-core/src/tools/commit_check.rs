@@ -8,7 +8,7 @@
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
 use crate::helpers::{build_config_payload, excerpt, resolve_load_action, validate_input_length};
-use crate::policy::{Decision, Policy};
+use crate::policy::{BlocklistDomain, Decision, Policy};
 use crate::tools::CommitCheckArgs;
 use crate::tools::candidate_transaction::{
     self, CandidateMode, CandidateRequest, CandidateResult, CheckOutcome,
@@ -70,7 +70,8 @@ pub async fn handle_with_cancel(
                 router: args.device.clone(),
                 pattern,
                 rule_source: source_str,
-                input_excerpt: denied_excerpt,
+                domain: BlocklistDomain::Config,
+                input_excerpt: denied_excerpt.into(),
                 line_number,
             });
         }

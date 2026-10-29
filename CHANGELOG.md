@@ -4,6 +4,15 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Blocklist denial messages now say where the matching rule lives, e.g.
+  `matched rule 'X' from inventory entry 'r1'.blocklist.commands (action=deny,
+  source=device)` or `from _blocklist_defaults.config`. `source=` is unchanged
+  (#578).
+
 ## [2.4.0] - 2026-10-26
 
 ### Added

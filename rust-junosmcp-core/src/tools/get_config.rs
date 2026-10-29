@@ -7,7 +7,7 @@ use crate::helpers::{
     config_display_suffix, strip_config_xml_wrapper, validate_config_path, validate_input_length,
     validate_output_caps,
 };
-use crate::policy::{Policy, enforce_decision};
+use crate::policy::{BlocklistDomain, Policy, enforce_decision};
 use crate::tools::GetConfigArgs;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -119,6 +119,7 @@ pub async fn handle(
         "get_junos_config",
         &args.device,
         &command,
+        BlocklistDomain::Commands,
     )?;
 
     let timeout = Duration::from_secs(args.timeout);

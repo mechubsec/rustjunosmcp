@@ -47,7 +47,7 @@ impl BatchRunner for DeviceManagerRunner {
     }
 }
 
-use crate::policy::{Policy, enforce_decision};
+use crate::policy::{BlocklistDomain, Policy, enforce_decision};
 use crate::tools::ExecuteBatchArgs;
 use serde::Serialize;
 use serde_json::Value;
@@ -163,6 +163,7 @@ pub async fn handle_with_runner(
                 "execute_junos_command_batch",
                 r,
                 c,
+                BlocklistDomain::Commands,
             )?;
         }
     }
