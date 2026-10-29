@@ -146,6 +146,18 @@ fn template_aliases(schema: &mut schemars::Schema) {
 #[serde(deny_unknown_fields)]
 pub struct EmptyArgs {}
 
+/// Arguments for `get_device_list`.
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+#[serde(deny_unknown_fields)]
+pub struct GetDeviceListArgs {
+    /// When true, return `{name, blocklist}` objects instead of bare names,
+    /// where `blocklist` is the device's effective policy: `mode`, the
+    /// `commands`/`config`/`pfe_commands` rules and the `allow`, `allowed_pipes`,
+    /// `pfe_allow` and `pfe_allowed_pipes` entries, each with the inventory location it came from. Default false.
+    #[serde(default)]
+    pub include_blocklist: bool,
+}
+
 /// Arguments for `execute_junos_command`: runs a single operational CLI command on one device.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1212,6 +1224,7 @@ mod unknown_field_tripwire {
     fn every_tool_argument_type_denies_unknown_fields() {
         assert_denies_unknown_fields!(
             EmptyArgs,
+            GetDeviceListArgs,
             ExecuteCommandArgs,
             GetConfigArgs,
             ConfigDiffArgs,

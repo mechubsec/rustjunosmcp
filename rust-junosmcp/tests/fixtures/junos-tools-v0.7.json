@@ -12,13 +12,13 @@
               "description": "Authenticate with a plaintext password. Supported for NETCONF; not\nsupported for SCP-based file transfers.",
               "type": "object",
               "properties": {
-                "password": {
-                  "description": "Plaintext password for SSH authentication.",
-                  "type": "string"
-                },
                 "type": {
                   "type": "string",
                   "const": "password"
+                },
+                "password": {
+                  "description": "Plaintext password for SSH authentication.",
+                  "type": "string"
                 }
               },
               "required": [
@@ -30,13 +30,13 @@
               "description": "Authenticate with an SSH private key. Path is validated at inventory\nload time; the file must exist.",
               "type": "object",
               "properties": {
-                "private_key_path": {
-                  "description": "Path to the SSH private key file.",
-                  "type": "string"
-                },
                 "type": {
                   "type": "string",
                   "const": "ssh_key"
+                },
+                "private_key_path": {
+                  "description": "Path to the SSH private key file.",
+                  "type": "string"
                 }
               },
               "required": [
@@ -1076,10 +1076,17 @@
   },
   "get_device_list": {
     "name": "get_device_list",
-    "description": "Get the Junos devices visible to this caller. Returns [] when the caller's device scope has no current inventory matches.",
+    "description": "Get the Junos devices visible to this caller. Returns [] when the caller's device scope has no current inventory matches. Set include_blocklist=true to return {name, blocklist} objects with each device's effective policy mode and its commands/config/pfe_commands rules and allow/allowed_pipes/pfe_allow/pfe_allowed_pipes entries, each with its inventory location; defaults are listed before device rules, which is a listing and not an evaluation order.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
+      "properties": {
+        "include_blocklist": {
+          "description": "When true, return `{name, blocklist}` objects instead of bare names,\nwhere `blocklist` is the device's effective policy: `mode`, the\n`commands`/`config`/`pfe_commands` rules and the `allow`, `allowed_pipes`,\n`pfe_allow` and `pfe_allowed_pipes` entries, each with the inventory location it came from. Default false.",
+          "type": "boolean",
+          "default": false
+        }
+      },
       "type": "object"
     }
   },

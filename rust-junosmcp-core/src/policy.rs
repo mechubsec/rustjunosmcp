@@ -492,17 +492,69 @@ impl Policy {
     }
 }
 
+/// Policy key a rule or allowlist entry lives under: the domain a denial came
+/// from, or a listing-only key (`allow*`) shown by `get_device_list`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlocklistDomain {
+    /// `commands` rules.
+    Commands,
+    /// `config` rules.
+    Config,
+    /// `pfe_commands` rules.
+    PfeCommands,
+    /// `allow` entries (listing only; never a denial source).
+    Allow,
+    /// `allowed_pipes` entries (listing only; never a denial source).
+    AllowedPipes,
+    /// `pfe_allow` entries (listing only; never a denial source).
+    PfeAllow,
+    /// `pfe_allowed_pipes` entries (listing only; never a denial source).
+    PfeAllowedPipes,
+}
+
+impl BlocklistDomain {
+    /// Inventory key name of the domain.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Commands => "commands",
+            Self::Config => "config",
+            Self::PfeCommands => "pfe_commands",
+            Self::Allow => "allow",
+            Self::AllowedPipes => "allowed_pipes",
+            Self::PfeAllow => "pfe_allow",
+            Self::PfeAllowedPipes => "pfe_allowed_pipes",
+        }
+    }
+}
+
+/// Where a blocklist rule lives, for denial messages (inventory keys only,
+/// never file paths). `rule_source` is `"device"` or `"defaults"`.
+pub fn rule_location(rule_source: &str, device: &str, domain: BlocklistDomain) -> String {
+    let domain = domain.as_str();
+    match rule_source {
+        "device" => format!("inventory entry '{device}'.blocklist.{domain}"),
+        _ => format!("_blocklist_defaults.{domain}"),
+    }
+}
+
 /// Turn a commands/pfe_commands-domain [`Decision`] into `Ok(())` or an
 /// audit-ready [`JmcpError`], warn-logging the refusal either way. Shared by
 /// every `execute_junos_command`-shaped call site so the three-variant
 /// `Decision` match lives in exactly one place — see the module docs on
 /// `mecmcp_policy::Decision` for why matching only `Deny` (and treating
 /// `DenyAllowlist` as an implicit allow) is a live vulnerability.
+///
+/// `domain` is the policy key a `Deny` came from; it is carried into the error
+/// so the denial message can name where the matching rule lives.
+///
+/// `domain` is the policy key a `Deny` came from; it is carried into the error
+/// so the denial message can name where the matching rule lives.
 pub fn enforce_decision(
     decision: Decision<'_, Action>,
     tool: &'static str,
     router: &str,
     raw_input: &str,
+    domain: BlocklistDomain,
 ) -> Result<(), JmcpError> {
     match decision {
         Decision::Allow => Ok(()),
@@ -522,7 +574,8 @@ pub fn enforce_decision(
                 router: router.to_string(),
                 pattern,
                 rule_source: source_str,
-                input_excerpt: excerpt(raw_input),
+                domain,
+                input_excerpt: excerpt(raw_input).into(),
                 line_number: None,
             })
         }
@@ -792,8 +845,14 @@ mod tests {
             other => panic!("expected DenyAllowlist(NotAllowlisted), got {other:?}"),
         }
         let decision = p.check_pfe_command("r1", "show route");
-        let err = enforce_decision(decision, "execute_junos_pfe_command", "r1", "show route")
-            .unwrap_err();
+        let err = enforce_decision(
+            decision,
+            "execute_junos_pfe_command",
+            "r1",
+            "show route",
+            BlocklistDomain::PfeCommands,
+        )
+        .unwrap_err();
         match err {
             JmcpError::DeniedAllowlist { reason, .. } => assert_eq!(reason, "not_allowlisted"),
             other => panic!("expected DeniedAllowlist, got {other:?}"),
@@ -1079,7 +1138,16 @@ mod tests {
 
     #[test]
     fn enforce_decision_allow_is_ok() {
-        assert!(enforce_decision(Decision::Allow, "t", "r1", "show version").is_ok());
+        assert!(
+            enforce_decision(
+                Decision::Allow,
+                "t",
+                "r1",
+                "show version",
+                BlocklistDomain::Commands
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1091,8 +1159,14 @@ mod tests {
             }"#,
         );
         let decision = p.check_command("r1", "  sh   ver  ");
-        let err =
-            enforce_decision(decision, "execute_junos_command", "r1", "  sh   ver  ").unwrap_err();
+        let err = enforce_decision(
+            decision,
+            "execute_junos_command",
+            "r1",
+            "  sh   ver  ",
+            BlocklistDomain::Commands,
+        )
+        .unwrap_err();
         match err {
             JmcpError::DeniedAllowlist {
                 tool,

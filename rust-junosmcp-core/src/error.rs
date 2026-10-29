@@ -417,8 +417,9 @@ pub enum JmcpError {
     /// All fields are retained for audit logging; `input_excerpt` is capped to
     /// avoid logging unbounded payloads.
     #[error(
-        "denied by blocklist: {tool} on '{router}' matched rule '{pattern}' \
-             (action=deny, source={rule_source}); input: {input_excerpt}"
+        "denied by blocklist: {tool} on '{router}' matched rule '{pattern}' from {} \
+             (action=deny, source={rule_source}); input: {input_excerpt}",
+        crate::policy::rule_location(rule_source, router, *domain)
     )]
     Denied {
         /// Name of the MCP tool that was blocked.
@@ -429,8 +430,12 @@ pub enum JmcpError {
         pattern: String,
         /// Source of the deny rule ("device" or "defaults").
         rule_source: &'static str,
+        /// Rule domain the match came from; with `router` and `rule_source` it
+        /// names the rule's location (a small enum keeps `JmcpError` under the
+        /// `result_large_err` limit).
+        domain: crate::policy::BlocklistDomain,
         /// Excerpt of the blocked input (capped to avoid unbounded audit payloads).
-        input_excerpt: String,
+        input_excerpt: Box<str>,
         /// Line number within the input where the pattern matched, if available.
         line_number: Option<usize>,
     },
@@ -1000,6 +1005,7 @@ mod tests {
             router: "r1".into(),
             pattern: "request system *".into(),
             rule_source: "defaults",
+            domain: crate::policy::BlocklistDomain::Commands,
             input_excerpt: "request system reboot".into(),
             line_number: None,
         };
@@ -1009,6 +1015,44 @@ mod tests {
         assert!(s.contains("request system *"));
         assert!(s.contains("defaults"));
         assert!(s.contains("request system reboot"));
+    }
+
+    #[test]
+    fn denied_message_names_device_rule_location() {
+        let e = JmcpError::Denied {
+            tool: "execute_junos_command",
+            router: "r1".into(),
+            pattern: "request system *".into(),
+            rule_source: "device",
+            domain: crate::policy::BlocklistDomain::Commands,
+            input_excerpt: "request system reboot".into(),
+            line_number: None,
+        };
+        assert_eq!(
+            e.to_string(),
+            "denied by blocklist: execute_junos_command on 'r1' matched rule 'request system *' \
+             from inventory entry 'r1'.blocklist.commands (action=deny, source=device); \
+             input: request system reboot"
+        );
+    }
+
+    #[test]
+    fn denied_message_names_defaults_rule_location() {
+        let e = JmcpError::Denied {
+            tool: "load_and_commit_config",
+            router: "r1".into(),
+            pattern: "set system root-authentication *".into(),
+            rule_source: "defaults",
+            domain: crate::policy::BlocklistDomain::Config,
+            input_excerpt: "set system root-authentication x".into(),
+            line_number: None,
+        };
+        assert_eq!(
+            e.to_string(),
+            "denied by blocklist: load_and_commit_config on 'r1' matched rule \
+             'set system root-authentication *' from _blocklist_defaults.config \
+             (action=deny, source=defaults); input: set system root-authentication x"
+        );
     }
 
     #[test]
@@ -1424,6 +1468,7 @@ mod tests {
                 router: "r1".into(),
                 pattern: "request system *".into(),
                 rule_source: "defaults",
+                domain: crate::policy::BlocklistDomain::Commands,
                 input_excerpt: "request system reboot".into(),
                 line_number: None,
             }

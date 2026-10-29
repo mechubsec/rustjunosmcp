@@ -3,7 +3,7 @@
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
 use crate::helpers::{validate_input_length, validate_output_caps};
-use crate::policy::{Policy, enforce_decision};
+use crate::policy::{BlocklistDomain, Policy, enforce_decision};
 use crate::tools::ExecuteCommandArgs;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -31,6 +31,7 @@ pub async fn handle(
         "execute_junos_command",
         &args.device,
         &args.command,
+        BlocklistDomain::Commands,
     )?;
 
     let timeout = Duration::from_secs(args.timeout);

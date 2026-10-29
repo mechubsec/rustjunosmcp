@@ -8,7 +8,7 @@ use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
 use crate::helpers::excerpt;
 use crate::junos_transaction::{JunosAction, JunosTransaction};
-use crate::policy::{Decision, Policy};
+use crate::policy::{BlocklistDomain, Decision, Policy};
 use mecmcp_audit::Attribution;
 use mecmcp_changeset::{
     ApproverIdentity, ChangesetCoordinator, CommitOptions, DeviceTransaction as _, OwnerSubject,
@@ -722,7 +722,8 @@ pub async fn create_change_set_with_cancel(
                         router: args.device.clone(),
                         pattern,
                         rule_source: source_str,
-                        input_excerpt: denied_excerpt,
+                        domain: BlocklistDomain::Config,
+                        input_excerpt: denied_excerpt.into(),
                         line_number,
                     });
                 }
@@ -1116,7 +1117,8 @@ pub async fn apply_change_set_with_cancel(
                         router: args.device.clone(),
                         pattern,
                         rule_source: source_str,
-                        input_excerpt: denied_excerpt,
+                        domain: BlocklistDomain::Config,
+                        input_excerpt: denied_excerpt.into(),
                         line_number,
                     });
                 }

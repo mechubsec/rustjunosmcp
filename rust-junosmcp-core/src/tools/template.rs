@@ -197,7 +197,7 @@ pub async fn handle_with_cancel(
                     "router": d,
                     "rendered_template": rendered,
                     "config_format": format,
-                    "error": format!("blocklist denied: pattern `{pattern}` from {source_str}"),
+                    "error": denied_row_error(&pattern, source_str, d),
                 }));
                 continue;
             }
@@ -340,9 +340,28 @@ async fn commit_one(
     }
 }
 
+/// Per-device row error for a config-blocklist denial, naming where the rule lives.
+fn denied_row_error(pattern: &str, rule_source: &str, device: &str) -> String {
+    let location =
+        crate::policy::rule_location(rule_source, device, crate::policy::BlocklistDomain::Config);
+    format!("blocklist denied: pattern `{pattern}` from {rule_source} ({location})")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn denied_row_error_names_rule_location() {
+        assert_eq!(
+            denied_row_error("delete *", "device", "r1"),
+            "blocklist denied: pattern `delete *` from device (inventory entry 'r1'.blocklist.config)"
+        );
+        assert_eq!(
+            denied_row_error("delete *", "defaults", "r1"),
+            "blocklist denied: pattern `delete *` from defaults (_blocklist_defaults.config)"
+        );
+    }
 
     #[test]
     fn vars_parses_json_object() {

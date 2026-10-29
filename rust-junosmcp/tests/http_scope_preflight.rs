@@ -976,3 +976,54 @@ fn malformed_arguments_non_object_is_denied() {
     assert_eq!(response.code, 403);
     assert_eq!(response.body["error"], "insufficient_scope");
 }
+
+#[test]
+fn get_device_list_include_blocklist_omits_out_of_scope_devices() {
+    ensure_built();
+    let inv = write_inv(
+        r#"{
+        "_blocklist_defaults": {"mode":"blocklist","commands":[{"action":"deny","pattern":"request system *"}]},
+        "r1":{"ip":"192.0.2.1","username":"u","auth":{"type":"password","password":"x"}},
+        "r2":{"ip":"192.0.2.2","username":"u","auth":{"type":"password","password":"x"},
+              "blocklist":{"commands":[{"action":"deny","pattern":"secret-r2-rule"}]}}
+    }"#,
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let tokens = dir.path().join("tokens.json");
+    let secret = TokenStoreFile::add(
+        &tokens,
+        "one-device",
+        ScopeSet::Allowlist(vec!["r1".into()]),
+        tool_allowlist(&["get_device_list"]),
+        &KnownNames {
+            devices: None,
+            tools: rust_junosmcp_auth::KNOWN_TOOLS,
+        },
+    )
+    .unwrap();
+    let server = spawn(inv.path(), &tokens);
+    let session = initialize(server.port, secret.expose_secret());
+    let response = http_post(
+        server.port,
+        Some(secret.expose_secret()),
+        Some(&session),
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+            "name":"get_device_list","arguments":{"include_blocklist":true}}}),
+    );
+    assert_tool_success(&response);
+    let text = response.body["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    let listing: Value = serde_json::from_str(text).unwrap();
+    let names: Vec<&str> = listing
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["r1"], "{text}");
+    assert!(
+        !text.contains("secret-r2-rule") && !text.contains("'r2'"),
+        "{text}"
+    );
+}

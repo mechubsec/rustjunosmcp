@@ -8,7 +8,7 @@ use crate::helpers::{
     refuse_override_outside_changeset, resolve_confirm_timeout, resolve_load_action,
     rollback_deadline_unix, validate_input_length,
 };
-use crate::policy::{Decision, Policy};
+use crate::policy::{BlocklistDomain, Decision, Policy};
 use crate::tools::LoadCommitArgs;
 use crate::tools::candidate_transaction::{self, CandidateMode, CandidateRequest, CandidateResult};
 use serde_json::{Value, json};
@@ -88,7 +88,8 @@ pub async fn handle_with_cancel(
                 router: args.device.clone(),
                 pattern,
                 rule_source: source_str,
-                input_excerpt: denied_excerpt,
+                domain: BlocklistDomain::Config,
+                input_excerpt: denied_excerpt.into(),
                 line_number,
             });
         }
