@@ -563,6 +563,19 @@ pub fn rule_location(rule_source: RuleSource, device: &str, domain: BlocklistDom
     }
 }
 
+/// The allow-list key a `DeniedAllowlist` refusal checked, from the policy
+/// domain and the machine-readable denial reason.
+pub fn allowlist_checked_domain(domain: BlocklistDomain, reason: &str) -> BlocklistDomain {
+    match (domain, reason == "pipe_not_allowlisted") {
+        (BlocklistDomain::Commands, true) => BlocklistDomain::AllowedPipes,
+        (BlocklistDomain::Commands, false) => BlocklistDomain::Allow,
+        (BlocklistDomain::PfeCommands, true) => BlocklistDomain::PfeAllowedPipes,
+        (BlocklistDomain::PfeCommands, false) => BlocklistDomain::PfeAllow,
+        // Allowlists only gate the commands and pfe_commands domains.
+        (other, _) => other,
+    }
+}
+
 /// Turn a commands/pfe_commands-domain [`Decision`] into `Ok(())` or an
 /// audit-ready [`JmcpError`], warn-logging the refusal either way. Shared by
 /// every `execute_junos_command`-shaped call site so the three-variant
@@ -617,6 +630,7 @@ pub fn enforce_decision(
                 tool,
                 router: router.to_string(),
                 reason: reason_str,
+                domain,
                 input_excerpt: excerpt(&normalized),
             })
         }
@@ -1223,11 +1237,13 @@ mod tests {
                 tool,
                 router,
                 reason,
+                domain,
                 input_excerpt,
             } => {
                 assert_eq!(tool, "execute_junos_command");
                 assert_eq!(router, "r1");
                 assert_eq!(reason, "not_allowlisted");
+                assert_eq!(domain, BlocklistDomain::Commands);
                 assert_eq!(input_excerpt, "sh ver");
             }
             other => panic!("expected DeniedAllowlist, got {other:?}"),

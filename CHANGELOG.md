@@ -18,6 +18,12 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ### Changed
 
+- Allowlist denials (`denied by allowlist: ...`) now append `; checked
+  _blocklist_defaults.<key> and inventory entry '<device>'.blocklist.<key>`,
+  where `<key>` is `allow`/`allowed_pipes` (commands) or
+  `pfe_allow`/`pfe_allowed_pipes` (pfe_commands). Both locations are always
+  named, even when the device defines no such list. The existing prefix and the
+  audit record are unchanged (#589).
 - Inventory compile errors for blocklist and allowlist entries now name the
   location as `inventory entry '<device>'.blocklist.<key>` (was
   `device '<device>'.blocklist.<key>` / `device '<device>'.allow`), matching

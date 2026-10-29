@@ -454,7 +454,20 @@ pub enum JmcpError {
     /// was refused, not just that it was. `input_excerpt` is built from the
     /// *normalized* command (`Decision::DenyAllowlist::normalized`), never
     /// the raw input, so the audit trail never records unsanitized input.
-    #[error("denied by allowlist: {tool} on '{router}': {reason}; input: {input_excerpt}")]
+    #[error(
+        "denied by allowlist: {tool} on '{router}': {reason}; input: {input_excerpt}; \
+         checked {} and {}",
+        crate::policy::rule_location(
+            crate::policy::RuleSource::Defaults,
+            router,
+            crate::policy::allowlist_checked_domain(*domain, reason),
+        ),
+        crate::policy::rule_location(
+            crate::policy::RuleSource::Device,
+            router,
+            crate::policy::allowlist_checked_domain(*domain, reason),
+        )
+    )]
     DeniedAllowlist {
         /// Name of the MCP tool that was blocked.
         tool: &'static str,
@@ -463,6 +476,9 @@ pub enum JmcpError {
         /// Machine-readable reason code (`not_allowlisted`,
         /// `pipe_not_allowlisted`, or `forbidden_metachar`).
         reason: &'static str,
+        /// Policy domain that refused the input; selects the allow lists the
+        /// message names. Not part of the audit record.
+        domain: crate::policy::BlocklistDomain,
         /// Excerpt of the normalized (not raw) blocked input.
         input_excerpt: String,
     },
@@ -1016,6 +1032,36 @@ mod tests {
         assert!(s.contains("request system *"));
         assert!(s.contains("defaults"));
         assert!(s.contains("request system reboot"));
+    }
+
+    #[test]
+    fn denied_allowlist_message_names_checked_lists() {
+        use crate::policy::BlocklistDomain::{Commands, PfeCommands};
+        let cases = [
+            (Commands, "not_allowlisted", "allow"),
+            (Commands, "forbidden_metachar", "allow"),
+            (Commands, "pipe_not_allowlisted", "allowed_pipes"),
+            (PfeCommands, "not_allowlisted", "pfe_allow"),
+            (PfeCommands, "forbidden_metachar", "pfe_allow"),
+            (PfeCommands, "pipe_not_allowlisted", "pfe_allowed_pipes"),
+        ];
+        for (domain, reason, key) in cases {
+            let e = JmcpError::DeniedAllowlist {
+                tool: "execute_junos_command",
+                router: "r1".into(),
+                reason,
+                domain,
+                input_excerpt: "show x".into(),
+            };
+            assert_eq!(
+                e.to_string(),
+                format!(
+                    "denied by allowlist: execute_junos_command on 'r1': {reason}; \
+                     input: show x; checked _blocklist_defaults.{key} and \
+                     inventory entry 'r1'.blocklist.{key}"
+                )
+            );
+        }
     }
 
     #[test]
