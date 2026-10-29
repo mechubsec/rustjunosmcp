@@ -8,6 +8,17 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ### Added
 
+- `get_srx_feed_status` (#528): read-only SRX tool reporting the mecfeedmcp
+  dynamic-address feeds a device pulls. Per node and feed it returns
+  `feed_server`, `feed_name`, `address_name`, `kind`, a credential-free `url`,
+  `entries`, `next_update`, `last_update_status` and `error`; fields the device
+  does not report are `null`. `state=not_configured` when no feed points at a
+  mecfeedmcp path. Junos does not report the feed ETag, so compare `entries`
+  and `last_update_status` with the feed server. Feed `user-name`, `password`
+  and `tls-profile` are never read and URLs carry no userinfo, query or
+  fragment. No new write tool: subscribe through the change-set flow (README,
+  "mecfeedmcp feeds on SRX"). Tool count 44 to 45 (SRX 15 to 16).
+
 - `get_device_list` takes an optional `include_blocklist` argument (default
   `false`; output unchanged when absent). When `true` it returns
   `{name, blocklist}` per visible device: the effective `mode`, the

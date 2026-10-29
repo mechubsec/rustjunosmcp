@@ -53,7 +53,7 @@ Drop-in on `devices.json` and the core tools — plus a lot the Python/PyEZ serv
 - **Device lifecycle** — staged `upgrade_junos` (image → install → reboot → verify), SCP `transfer_file`/`fetch_file`, PFE commands.
 - **Scale & UX** — parallel session-pooled batch (~1.7× faster), `| last N`/`| count` + `max_lines`/`max_bytes` output caps, `router`/`router_name` aliases, Jinja2 templates.
 - **Transport & auth** — streamable-HTTP with per-token router/tool scopes, TLS, and a `Host` allowlist; upstream is stdio-only.
-- **SRX tools** (enabled by the default `srx` feature) — IDP & Application-ID **signature-package updates** (check/download/install/rollback), chassis-cluster health, license & security-services status, JTAC bundle with secret redaction, and read-only security-policy / address-book / application / NAT-rule inspection.
+- **SRX tools** (enabled by the default `srx` feature) — IDP & Application-ID **signature-package updates** (check/download/install/rollback), chassis-cluster health, license & security-services status, JTAC bundle with secret redaction, read-only security-policy / address-book / application / NAT-rule inspection, and mecfeedmcp dynamic-address feed status.
 
 ## Performance
 
@@ -260,6 +260,10 @@ Full results, the mock-target overhead numbers, method and reproduction steps:
   any of the four paths above, cancelling the pending auto-rollback.
 - Opting out is recorded in the audit event as `commit_confirmed=false`.
 - Tool count: 43 → 44 (27 → 28 Junos-only).
+- **`get_srx_feed_status`** — new read-only SRX tool: status of the
+  mecfeedmcp dynamic-address feeds an SRX pulls. No new write tool; see
+  [mecfeedmcp feeds on SRX](#mecfeedmcp-feeds-on-srx). Tool count: 44 → 45
+  (15 → 16 SRX tools; Junos-only build unchanged at 28).
 
 ## Blocklist guardrails (v0.2)
 
@@ -535,6 +539,76 @@ completion separately.
 **Caveat:** when a long-running RPC is followed by a device reboot, the
 NETCONF session will of course die. The session pool reconnects cleanly
 on the next call.
+
+## mecfeedmcp feeds on SRX
+
+`get_srx_feed_status` reports, per node and per feed, the mecfeedmcp
+dynamic-address feeds an SRX pulls: `feed_server`, `feed_name`,
+`address_name`, `kind` (`address` or `prefix`), a credential-free `url`,
+`entries`, `next_update`, `last_update_status` and `error`. It is read-only.
+
+Subscribe once through the normal change-set flow:
+
+1. `get_junos_candidate_fingerprint`
+2. `create_junos_change_set` with `actions: [{"payload": {"format": "set", "text": "<lines below>"}}]`
+3. `approve_junos_change_set` (another principal, unless `--lab-mode`)
+4. `apply_junos_change_set` (commit confirmed by default)
+5. `confirm_junos_change_set`
+
+There is no new write tool. Replace `SERVE_HOST` with mecfeed-serve's DNS
+name, which must match its certificate's CN/SAN.
+
+```
+set security pki ca-profile MECFEED-CA ca-identity MECFEED-CA
+set services ssl initiation profile MECFEED-TLS trusted-ca MECFEED-CA
+set security dynamic-address feed-server MECFEED url https://SERVE_HOST:8443
+set security dynamic-address feed-server MECFEED tls-profile MECFEED-TLS
+set security dynamic-address feed-server MECFEED validate-certificate-attributes subject-or-subject-alternative-names
+set security dynamic-address feed-server MECFEED update-interval 300
+set security dynamic-address feed-server MECFEED hold-interval 86400
+set security dynamic-address feed-server MECFEED feed-name mecfeed-address path feeds/junos-dynamic-address/address
+set security dynamic-address feed-server MECFEED feed-name mecfeed-prefix path feeds/junos-dynamic-address/prefix
+set security dynamic-address address-name MECFEED-ADDRESS profile feed-name mecfeed-address
+set security dynamic-address address-name MECFEED-PREFIX profile feed-name mecfeed-prefix
+```
+
+Client authentication (mecfeed-serve requires one):
+
+- **mTLS** (preferred, because nothing secret goes through the change set).
+  Load the SRX client certificate out of band
+  (`request security pki local-certificate load certificate-id SRX-MECFEED ...`).
+  Then stage
+  `set services ssl initiation profile MECFEED-TLS client-certificate SRX-MECFEED`.
+  Pin its fingerprint in serve's `clients.json`.
+- **Basic** (Junos 25.2R1+). Do not stage the `password` line: change sets
+  keep the payload text verbatim in server state and in
+  `get_junos_change_set_status` output, so the password would reach the
+  approver and the model. Set the user and password once on the device CLI.
+
+Out of band, load the CA that signed serve's certificate:
+`request security pki ca-certificate load ca-profile MECFEED-CA filename <file>`
+and `... verify`. CRL/OCSP for that CA is an operator decision; add
+`revocation-check disable` only knowingly.
+
+Policy is the operator's: reference `MECFEED-ADDRESS` / `MECFEED-PREFIX` as
+destination (or source) in a `deny` policy placed above broader permits.
+Optionally add `set security dynamic-address session-scan` so new entries cut
+existing sessions.
+
+Do **not** add `feed-server ... routing-table <ri>.inet`. On vSRX 24.4R1.9 a
+saved pin can fail boot validation and drop the box into Recovery Mode. Make
+serve reachable from the default instance instead. On Security
+Director-managed devices, put the feed and the policy match in configuration
+groups; the tool reads inherited config, so it still sees them.
+
+Verify with `get_srx_feed_status`:
+
+- `state=not_configured` means not subscribed.
+- Junos does not report the feed ETag. Compare `entries` and
+  `last_update_status` with the feed server.
+- A field the device did not report is `null`, never guessed.
+- `url` is shown without credentials, query or fragment, and feed
+  `user-name`, `password` and `tls-profile` are never read.
 
 ## Security warning
 

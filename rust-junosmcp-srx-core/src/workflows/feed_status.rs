@@ -67,7 +67,9 @@
 //!   encoding than those above (for example re-escaped); a query value echoed
 //!   without its `key=`, which is redacted only when it equals a whole
 //!   configured query or fragment string; a credential of an unconfigured URL
-//!   that is not one parseable token. A short secret also redacts unrelated
+//!   that is not one parseable token; a single parameter of a multi-parameter
+//!   query echoed together with its key (`token=QQtok` from `a=1&token=QQtok`).
+//!   A short secret also redacts unrelated
 //!   text that contains it.
 //! - **Failures:** a config rpc-error other than `not-configured` fails
 //!   closed (`SrxError::Rpc`). A summary failure degrades only the affected
@@ -492,6 +494,10 @@ impl Scrubber {
     /// Secrets from a textual scan of the raw config reply, plus the
     /// reported feeds' effective URLs.
     fn new(config_xml: &str, effective_urls: &[&str]) -> Self {
+        // Older transports deliver a bare `<` inside leaf text; escape it so
+        // the leaf is not cut there.
+        let config_xml = sanitize_rustez_xml(config_xml);
+        let config_xml = config_xml.as_ref();
         let mut raw_urls = leaf_texts(config_xml, "url");
         raw_urls.extend(leaf_texts(config_xml, "path"));
         raw_urls.extend(effective_urls.iter().map(|u| (*u).to_owned()));
@@ -1315,6 +1321,14 @@ mod tests {
             .last_update_status
             .clone();
         assert_eq!(got.as_deref(), Some("[REDACTED]!"));
+    }
+
+    #[test]
+    fn scrubber_keeps_a_secret_containing_a_bare_angle_bracket_whole() {
+        // rustnetconf decodes `&lt;` in leaf text, so the config can carry a bare `<`.
+        let xml = "<url>https://ZZuser:ZZhead<-ZZtail@h/feeds/junos-dynamic-address/address</url>";
+        let got = Scrubber::new(xml, &[]).scrub("echo ZZhead<-ZZtail end");
+        assert!(!got.contains("ZZ"), "{got}");
     }
 
     #[test]

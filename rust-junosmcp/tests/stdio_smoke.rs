@@ -65,6 +65,7 @@ const SRX_TOOLS: &[&str] = &[
     "collect_jtac_support_bundle",
     "srx_flow_sessions",
     "srx_policy_match",
+    "get_srx_feed_status",
 ];
 
 #[test]
@@ -193,9 +194,9 @@ fn lists_expected_tools() {
     // `cancel_junos_change_set` adds one more (#293), then execute adds one.
     // MEC-54's four SRX policy-read tools add four more, and
     // `srx_flow_sessions` + `srx_policy_match` add two more (MEC-55), and
-    // `confirm_commit` adds one more (MEC-45).
+    // `confirm_commit` adds one more (MEC-45), and `get_srx_feed_status` one (#528).
     #[cfg(feature = "srx")]
-    assert_eq!(names.len(), 44);
+    assert_eq!(names.len(), 45);
     #[cfg(not(feature = "srx"))]
     assert_eq!(names.len(), 29);
 }

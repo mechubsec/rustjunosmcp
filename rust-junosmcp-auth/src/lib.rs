@@ -58,6 +58,7 @@ pub const SRX_TOOLS: &[&str] = &[
     "check_srx_feature_license",
     "collect_jtac_support_bundle",
     "get_chassis_cluster_status",
+    "get_srx_feed_status",
     "get_srx_security_services_status",
     "manage_appid_signature_package",
     "manage_idp_security_package",
@@ -112,6 +113,7 @@ pub const KNOWN_TOOLS: &[&str] = &[
     "get_junos_change_set_status",
     "get_junos_config",
     "get_router_list",
+    "get_srx_feed_status",
     "get_srx_security_services_status",
     "junos_config_diff",
     "list_junos_change_sets",
@@ -196,7 +198,7 @@ mod tests {
             JUNOS_TOOLS.len() + SRX_TOOLS.len() + FACADE_TOOLS.len() + PSEUDO_TOOLS.len(),
             "tool registries must not contain duplicate tool names"
         );
-        assert_eq!(KNOWN_TOOLS.len(), 45);
+        assert_eq!(KNOWN_TOOLS.len(), 46);
     }
 
     #[test]
@@ -258,5 +260,12 @@ mod write_tool_registry_tests {
         ] {
             assert!(!WRITE_TOOLS.contains(&tool), "{tool} only reads");
         }
+    }
+
+    /// `get_srx_feed_status` only reads, so a wildcard tool scope confers it.
+    #[test]
+    fn feed_status_is_a_wildcard_readable_srx_tool() {
+        assert!(SRX_TOOLS.contains(&"get_srx_feed_status"));
+        assert!(ScopeSet::Wildcard.allows_tool("get_srx_feed_status", WRITE_TOOLS));
     }
 }
