@@ -56,12 +56,12 @@ pub fn handle_blocklist(
                 })
                 .collect::<Vec<_>>()
         };
-        let entries = |pick: fn(&BlocklistRules) -> &Vec<String>| {
+        let entries = |domain: BlocklistDomain, pick: fn(&BlocklistRules) -> &Vec<String>| {
             layers
                 .iter()
                 .filter_map(|(source, rules)| Some((source, pick(rules.as_ref()?))))
                 .flat_map(|(source, items)| {
-                    let location = rule_location(source.as_str(), &name, BlocklistDomain::Commands);
+                    let location = rule_location(source.as_str(), &name, domain);
                     items
                         .iter()
                         .map(move |entry| json!({"entry": entry, "source": location}))
@@ -73,8 +73,8 @@ pub fn handle_blocklist(
             "commands": rules(BlocklistDomain::Commands, |r| &r.commands),
             "config": rules(BlocklistDomain::Config, |r| &r.config),
             "pfe_commands": rules(BlocklistDomain::PfeCommands, |r| &r.pfe_commands),
-            "allow": entries(|r| &r.allow),
-            "allowed_pipes": entries(|r| &r.allowed_pipes),
+            "allow": entries(BlocklistDomain::Allow, |r| &r.allow),
+            "allowed_pipes": entries(BlocklistDomain::AllowedPipes, |r| &r.allowed_pipes),
         }}));
     }
     Ok(Value::Array(out))
@@ -154,11 +154,11 @@ mod tests {
         );
         assert_eq!(
             bl["allow"],
-            json!([{"entry":"show version","source":"_blocklist_defaults.commands"}])
+            json!([{"entry":"show version","source":"_blocklist_defaults.allow"}])
         );
         assert_eq!(
             bl["allowed_pipes"],
-            json!([{"entry":"grep","source":"inventory entry 'a'.blocklist.commands"}])
+            json!([{"entry":"grep","source":"inventory entry 'a'.blocklist.allowed_pipes"}])
         );
     }
 

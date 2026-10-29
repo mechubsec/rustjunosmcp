@@ -501,6 +501,10 @@ pub enum BlocklistDomain {
     Config,
     /// `pfe_commands` rules.
     PfeCommands,
+    /// `allow` entries (listing only; never a denial source).
+    Allow,
+    /// `allowed_pipes` entries (listing only; never a denial source).
+    AllowedPipes,
 }
 
 impl BlocklistDomain {
@@ -510,6 +514,8 @@ impl BlocklistDomain {
             Self::Commands => "commands",
             Self::Config => "config",
             Self::PfeCommands => "pfe_commands",
+            Self::Allow => "allow",
+            Self::AllowedPipes => "allowed_pipes",
         }
     }
 }
