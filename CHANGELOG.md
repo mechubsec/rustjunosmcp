@@ -16,7 +16,7 @@ All notable user-facing changes are recorded here. Format loosely follows
   location it came from. Defaults are listed before device rules (a listing,
   not an evaluation order) (#578). `include_blocklist: true` also requires the
   `get_device_list.include_blocklist` tool scope: a wildcard (`*`) token has
-  it, an explicit tool list must name it. Over HTTP a miss is the usual
+  it, an explicit tool list must name it. Over HTTP a miss, direct or via `execute`, is the usual
   preflight 403 `insufficient_scope`; the handler also returns an `isError`
   result `caller is not authorized for tool 'get_device_list.include_blocklist'`.
   stdio and the plain call are unaffected (#590).

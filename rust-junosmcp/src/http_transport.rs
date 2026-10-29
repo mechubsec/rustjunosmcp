@@ -160,20 +160,27 @@ fn tool_call_exceeds_scope(value: &Value, caller: &mecmcp_transport::CallerScope
     {
         return true;
     }
-    // `include_blocklist: true` needs its own pseudo scope (#590).
-    if tool == "get_device_list"
-        && params.pointer("/arguments/include_blocklist") == Some(&Value::Bool(true))
-        && !caller.tools.allows_tool(
-            rust_junosmcp_auth::INCLUDE_BLOCKLIST_SCOPE,
-            rust_junosmcp_auth::WRITE_TOOLS,
-        )
-    {
+    if include_blocklist_exceeds_scope(tool, params.get("arguments"), caller) {
         return true;
     }
     if tool == "execute" {
         return facade_call_exceeds_scope(params.get("arguments"), caller);
     }
     arguments_exceed_device_scope(params.get("arguments"), caller)
+}
+
+/// `get_device_list` with `include_blocklist: true` needs its own pseudo scope (#590).
+fn include_blocklist_exceeds_scope(
+    tool: &str,
+    arguments: Option<&Value>,
+    caller: &mecmcp_transport::CallerScopes<'_>,
+) -> bool {
+    tool == "get_device_list"
+        && arguments.and_then(|args| args.get("include_blocklist")) == Some(&Value::Bool(true))
+        && !caller.tools.allows_tool(
+            rust_junosmcp_auth::INCLUDE_BLOCKLIST_SCOPE,
+            rust_junosmcp_auth::WRITE_TOOLS,
+        )
 }
 
 fn facade_call_exceeds_scope(
@@ -201,6 +208,9 @@ fn facade_call_exceeds_scope(
         return true;
     }
     let arguments = outer.get("arguments");
+    if include_blocklist_exceeds_scope(operation, arguments, caller) {
+        return true;
+    }
     if !arguments.is_some_and(Value::is_object) {
         return false;
     }

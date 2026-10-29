@@ -1065,3 +1065,35 @@ fn include_blocklist_allowed_for_wildcard_tools() {
         json!({"include_blocklist":true}),
     ));
 }
+
+fn facade_device_list(tools: ScopeSet) -> PostResult {
+    device_list_facade_call(tools, json!({"include_blocklist":true}))
+}
+
+fn device_list_facade_call(tools: ScopeSet, arguments: Value) -> PostResult {
+    scoped_requests(
+        tools,
+        vec![execute_request(
+            json!({"operation":"get_device_list","arguments":arguments}),
+        )],
+    )
+    .remove(0)
+}
+
+#[test]
+fn facade_include_blocklist_without_pseudo_scope_is_preflighted() {
+    let tools = tool_allowlist(&["execute", "get_device_list"]);
+    assert_scope_denied(&facade_device_list(tools.clone()));
+    assert_tool_success(&device_list_facade_call(tools, json!({})));
+}
+
+#[test]
+fn facade_include_blocklist_allowed_with_pseudo_scope() {
+    // Wildcard never grants `execute`, so the facade needs an explicit list.
+    let tools = tool_allowlist(&[
+        "execute",
+        "get_device_list",
+        "get_device_list.include_blocklist",
+    ]);
+    assert_tool_success(&facade_device_list(tools));
+}
