@@ -18,6 +18,11 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ### Changed
 
+- Inventory compile errors for blocklist and allowlist entries now name the
+  location as `inventory entry '<device>'.blocklist.<key>` (was
+  `device '<device>'.blocklist.<key>` / `device '<device>'.allow`), matching
+  denial messages. Defaults labels are unchanged (`_blocklist_defaults.<key>`)
+  (#588).
 - `render_and_apply_j2_template` per-device blocklist errors now also name the
   rule location, appended after the existing text (#578).
 - Blocklist denial messages now say where the matching rule lives, e.g.
