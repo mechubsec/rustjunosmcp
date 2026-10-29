@@ -87,7 +87,7 @@ pub async fn handle_with_cancel(
                 tool: "load_and_commit_config",
                 router: args.device.clone(),
                 pattern,
-                rule_source: source_str,
+                rule_source: source,
                 domain: BlocklistDomain::Config,
                 input_excerpt: denied_excerpt.into(),
                 line_number,

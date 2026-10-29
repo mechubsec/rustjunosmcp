@@ -1314,6 +1314,13 @@ Granting write authority is always an explicit, named decision: a token that
 needs `load_and_commit_config` must list it, alongside every other tool it
 calls. An explicit allowlist behaves exactly as before.
 
+`get_device_list {"include_blocklist": true}` (deny/allow rules of in-scope
+devices) additionally needs the pseudo tool name
+`get_device_list.include_blocklist`. A wildcard token has it; an explicit list
+must name it. Without it the call is rejected over HTTP with the same 403
+`insufficient_scope` as any other out-of-scope tool; the plain
+`get_device_list` call is unaffected.
+
 `execute` is a strict facade over the 40 concrete operations. A token
 using it must explicitly name **both** `execute` and the selected concrete
 operation; wildcard scope does not grant `execute`. The facade passes the

@@ -42,10 +42,10 @@ enum ScopeError {
         "[code=authorization_context_missing] authenticated request is missing authorization context"
     )]
     MissingCallerContext,
-    #[error("[code=tool_scope_denied] token '{token}' is not authorized for tool '{tool}'")]
+    #[error("[code=tool_scope_denied] caller is not authorized for tool '{tool}'")]
     ToolNotInScope { token: String, tool: &'static str },
     #[error(
-        "[code=router_scope_denied] token '{token}' is not authorized for the requested router (tool '{tool}')"
+        "[code=router_scope_denied] caller is not authorized for the requested router (tool '{tool}')"
     )]
     RouterNotInScope { token: String, tool: &'static str },
 }

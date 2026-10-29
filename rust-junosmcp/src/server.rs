@@ -509,6 +509,14 @@ pub(super) fn redact_last_mile(
     }
 }
 
+/// Record `count` (devices returned) on a device-list audit scope. Both list
+/// tools return a bare JSON array, of names or of `include_blocklist` objects.
+fn record_list_count(audit: &mut AuditScope, listing: &serde_json::Value) {
+    if let Some(arr) = listing.as_array() {
+        audit.meta("count", arr.len() as u64);
+    }
+}
+
 /// Helper to construct an `AuditScope` from an `Option<&CallerCtx>`.
 ///
 /// The shared `mecmcp-audit` crate's API split the old single `new(Option<&CallerCtx>, ...)`
@@ -577,7 +585,8 @@ pub(super) fn audit_confirm_meta(audit: &mut AuditScope, caller_mins: Option<u32
 #[derive(Debug, thiserror::Error)]
 pub enum ScopeError {
     /// Token lacks permission for this tool.
-    #[error("token '{token}' is not authorized for tool '{tool}'")]
+    // No "token ..." phrasing: the body redactor would blank the rest of the line.
+    #[error("caller is not authorized for tool '{tool}'")]
     ToolNotInScope {
         /// The name of the denied token (truncated digest).
         token: String,
@@ -585,7 +594,7 @@ pub enum ScopeError {
         tool: &'static str,
     },
     /// Token lacks permission for this device.
-    #[error("token '{token}' is not authorized for router '{router}' (tool '{tool}')")]
+    #[error("caller is not authorized for router '{router}' (tool '{tool}')")]
     RouterNotInScope {
         /// The name of the denied token (truncated digest).
         token: String,
@@ -949,7 +958,7 @@ mod server_tools_const_tests {
 impl JmcpHandler {
     #[tool(
         name = "get_device_list",
-        description = "Get the Junos devices visible to this caller. Returns [] when the caller's device scope has no current inventory matches. Set include_blocklist=true to return {name, blocklist} objects with each device's effective policy mode and its commands/config/pfe_commands rules and allow/allowed_pipes/pfe_allow/pfe_allowed_pipes entries, each with its inventory location; defaults are listed before device rules, which is a listing and not an evaluation order."
+        description = "Get the Junos devices visible to this caller. Returns [] when the caller's device scope has no current inventory matches. Set include_blocklist=true (requires the get_device_list.include_blocklist tool scope; a wildcard scope grants it) to return {name, blocklist} objects with each device's effective policy mode and its commands/config/pfe_commands rules and allow/allowed_pipes/pfe_allow/pfe_allowed_pipes entries, each with its inventory location; defaults are listed before device rules, which is a listing and not an evaluation order."
     )]
     async fn get_device_list(
         &self,
@@ -963,6 +972,12 @@ impl JmcpHandler {
             audit.deny("tool_scope");
             return Self::scope_to_call_result(e);
         }
+        if args.include_blocklist
+            && let Err(e) = self.check_tool_scope(ctx, rust_junosmcp_auth::INCLUDE_BLOCKLIST_SCOPE)
+        {
+            audit.deny("tool_scope");
+            return Self::scope_to_call_result(e);
+        }
         let inv = self.dm.inventory();
         let names = rust_junosmcp_auth::filter_device_names(ctx, inv.names());
         let result = if args.include_blocklist {
@@ -972,13 +987,7 @@ impl JmcpHandler {
         };
         match &result {
             Ok(v) => {
-                if let Some(arr) = v
-                    .as_object()
-                    .and_then(|o| o.get("names"))
-                    .and_then(|n| n.as_array())
-                {
-                    audit.meta("count", arr.len() as u64);
-                }
+                record_list_count(&mut audit, v);
                 audit.succeed();
             }
             Err(e) => audit.fail_kind(e.audit_kind(), e),
@@ -1006,13 +1015,7 @@ impl JmcpHandler {
         let result = router_list::handle_names(names).await;
         match &result {
             Ok(v) => {
-                if let Some(arr) = v
-                    .as_object()
-                    .and_then(|o| o.get("names"))
-                    .and_then(|n| n.as_array())
-                {
-                    audit.meta("count", arr.len() as u64);
-                }
+                record_list_count(&mut audit, v);
                 audit.succeed();
             }
             Err(e) => audit.fail_kind(e.audit_kind(), e),
@@ -2761,6 +2764,7 @@ mod scope_tests {
             .collect();
         let expected: std::collections::HashSet<String> = rust_junosmcp_auth::KNOWN_TOOLS
             .iter()
+            .filter(|name| !rust_junosmcp_auth::PSEUDO_TOOLS.contains(name))
             .map(|name| (*name).to_string())
             .collect();
         assert_eq!(names, expected);
@@ -3459,6 +3463,27 @@ mod redaction_coverage_tests {
     /// RADIUS/TACACS shared secret, an SNMP community, and a password. Never
     /// real device output — synthetic `FAKE...` values only, matching a
     /// synthetic hostname (RFC 2606 `example.net`).
+    /// Scope-denial texts must survive the body redactor, or callers cannot
+    /// tell which scope they lack.
+    #[test]
+    fn scope_denial_texts_survive_redact_body() {
+        for error in [
+            ScopeError::ToolNotInScope {
+                token: "t".into(),
+                tool: "get_device_list.include_blocklist",
+            }
+            .to_string(),
+            ScopeError::RouterNotInScope {
+                token: "t".into(),
+                router: "r1".into(),
+                tool: "get_junos_config",
+            }
+            .to_string(),
+        ] {
+            assert_eq!(redact_body(&error), error);
+        }
+    }
+
     const FAKE_JUNOS_HASH: &str = "$9$FAKE9uBEreWx-VwgJGiHmz3nCA0IcSlKMX";
     const FAKE_PSK: &str = "FAKE-psk-9c203b81";
     const FAKE_RADIUS_SECRET: &str = "FAKE-radius-secret-4b1e";
@@ -4210,5 +4235,39 @@ mod redact_last_mile_tests {
             "secret leaked (not printed here to avoid echoing it into test output)"
         );
         assert_eq!(value["router"], FAKE_HOSTNAME, "hostname lost");
+    }
+}
+
+#[cfg(test)]
+mod list_count_audit_tests {
+    use super::record_list_count;
+    use mecmcp_audit::AuditScope;
+    use mecmcp_audit::testutil::run_with_capture;
+    use serde_json::json;
+
+    fn audited_count(listing: serde_json::Value) -> String {
+        run_with_capture(|| {
+            let mut audit = AuditScope::stdio("get_device_list", "read", vec![]);
+            record_list_count(&mut audit, &listing);
+            audit.succeed();
+        })
+    }
+
+    #[test]
+    fn bare_names_array_records_count() {
+        assert!(audited_count(json!(["r1", "r2", "r3"])).contains("count=3"));
+    }
+
+    #[test]
+    fn include_blocklist_objects_record_count() {
+        let out = audited_count(json!([{"name": "r1"}, {"name": "r2"}]));
+        assert!(out.contains("count=2"), "output: {out}");
+    }
+
+    #[test]
+    fn empty_listing_records_zero() {
+        // `device_count=0` is always present; strip it so only the meta can match.
+        let out = audited_count(json!([])).replace("device_count=", "");
+        assert!(out.contains("count=0"), "output: {out}");
     }
 }

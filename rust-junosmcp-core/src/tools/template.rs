@@ -78,7 +78,7 @@ use crate::helpers::{
     refuse_override_outside_changeset, resolve_confirm_timeout, resolve_load_action,
     rollback_deadline_unix,
 };
-use crate::policy::Policy;
+use crate::policy::{Policy, RuleSource};
 use crate::tools::TemplateArgs;
 use crate::tools::candidate_transaction::{self, CandidateMode, CandidateRequest, CandidateResult};
 use serde_json::json;
@@ -197,7 +197,7 @@ pub async fn handle_with_cancel(
                     "router": d,
                     "rendered_template": rendered,
                     "config_format": format,
-                    "error": denied_row_error(&pattern, source_str, d),
+                    "error": denied_row_error(&pattern, source, d),
                 }));
                 continue;
             }
@@ -341,10 +341,13 @@ async fn commit_one(
 }
 
 /// Per-device row error for a config-blocklist denial, naming where the rule lives.
-fn denied_row_error(pattern: &str, rule_source: &str, device: &str) -> String {
+fn denied_row_error(pattern: &str, rule_source: RuleSource, device: &str) -> String {
     let location =
         crate::policy::rule_location(rule_source, device, crate::policy::BlocklistDomain::Config);
-    format!("blocklist denied: pattern `{pattern}` from {rule_source} ({location})")
+    format!(
+        "blocklist denied: pattern `{pattern}` from {} ({location})",
+        rule_source.as_str()
+    )
 }
 
 #[cfg(test)]
@@ -354,11 +357,11 @@ mod tests {
     #[test]
     fn denied_row_error_names_rule_location() {
         assert_eq!(
-            denied_row_error("delete *", "device", "r1"),
+            denied_row_error("delete *", RuleSource::Device, "r1"),
             "blocklist denied: pattern `delete *` from device (inventory entry 'r1'.blocklist.config)"
         );
         assert_eq!(
-            denied_row_error("delete *", "defaults", "r1"),
+            denied_row_error("delete *", RuleSource::Defaults, "r1"),
             "blocklist denied: pattern `delete *` from defaults (_blocklist_defaults.config)"
         );
     }

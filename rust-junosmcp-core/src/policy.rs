@@ -117,12 +117,12 @@ fn compile_allowlist(
 fn compile_domain_rules(
     defaults: &[RuleSpec],
     device: Option<(&str, &[RuleSpec])>,
-    scope_prefix: &str,
+    domain_key: BlocklistDomain,
 ) -> Result<mecmcp_policy::DomainRules<Action>, JmcpError> {
     let mut domain = mecmcp_policy::DomainRules {
         defaults: compile_rules(
             defaults,
-            &format!("_blocklist_defaults.{scope_prefix}"),
+            &rule_location(RuleSource::Defaults, "", domain_key),
             RuleSource::Defaults,
         )?,
         ..Default::default()
@@ -132,7 +132,7 @@ fn compile_domain_rules(
     {
         let compiled = compile_rules(
             rules,
-            &format!("device '{name}'.blocklist.{scope_prefix}"),
+            &rule_location(RuleSource::Device, name, domain_key),
             RuleSource::Device,
         )?;
         if !compiled.is_empty() {
@@ -232,6 +232,24 @@ impl Policy {
             }
         };
 
+        // Compile defaults first so a bad default entry is reported against
+        // `_blocklist_defaults`, not against the first device that merges it.
+        let default_allow_entries = compile_allowlist(
+            default_allow,
+            &rule_location(RuleSource::Defaults, "", BlocklistDomain::Allow),
+        )?;
+        let default_pipe_entries = compile_allowlist(
+            default_pipes,
+            &rule_location(RuleSource::Defaults, "", BlocklistDomain::AllowedPipes),
+        )?;
+        let default_pfe_allow_entries = compile_allowlist(
+            default_pfe_allow,
+            &rule_location(RuleSource::Defaults, "", BlocklistDomain::PfeAllow),
+        )?;
+        let default_pfe_pipe_entries = compile_allowlist(
+            default_pfe_pipes,
+            &rule_location(RuleSource::Defaults, "", BlocklistDomain::PfeAllowedPipes),
+        )?;
         let mut per_device = HashMap::new();
         let mut devices_with_rules = 0usize;
 
@@ -248,17 +266,17 @@ impl Policy {
             let commands_rules = compile_domain_rules(
                 default_commands_specs,
                 device_bl.map(|b| (name.as_str(), b.commands.as_slice())),
-                "commands",
+                BlocklistDomain::Commands,
             )?;
             let config_rules = compile_domain_rules(
                 default_config_specs,
                 device_bl.map(|b| (name.as_str(), b.config.as_slice())),
-                "config",
+                BlocklistDomain::Config,
             )?;
             let pfe_rules = compile_domain_rules(
                 default_pfe_specs,
                 device_bl.map(|b| (name.as_str(), b.pfe_commands.as_slice())),
-                "pfe_commands",
+                BlocklistDomain::PfeCommands,
             )?;
 
             let merged_allow: Vec<String> = default_allow
@@ -275,10 +293,18 @@ impl Policy {
                         .unwrap_or_default(),
                 )
                 .collect();
-            let allow_entries =
-                compile_allowlist(&merged_allow, &format!("device '{name}'.allow"))?;
-            let pipe_entries =
-                compile_allowlist(&merged_pipes, &format!("device '{name}'.allowed_pipes"))?;
+            let allow_entries = compile_allowlist(
+                &merged_allow,
+                &rule_location(RuleSource::Device, name.as_str(), BlocklistDomain::Allow),
+            )?;
+            let pipe_entries = compile_allowlist(
+                &merged_pipes,
+                &rule_location(
+                    RuleSource::Device,
+                    name.as_str(),
+                    BlocklistDomain::AllowedPipes,
+                ),
+            )?;
 
             let merged_pfe_allow: Vec<String> = default_pfe_allow
                 .iter()
@@ -294,11 +320,17 @@ impl Policy {
                         .unwrap_or_default(),
                 )
                 .collect();
-            let pfe_allow_entries =
-                compile_allowlist(&merged_pfe_allow, &format!("device '{name}'.pfe_allow"))?;
+            let pfe_allow_entries = compile_allowlist(
+                &merged_pfe_allow,
+                &rule_location(RuleSource::Device, name.as_str(), BlocklistDomain::PfeAllow),
+            )?;
             let pfe_pipe_entries = compile_allowlist(
                 &merged_pfe_pipes,
-                &format!("device '{name}'.pfe_allowed_pipes"),
+                &rule_location(
+                    RuleSource::Device,
+                    name.as_str(),
+                    BlocklistDomain::PfeAllowedPipes,
+                ),
             )?;
 
             let commands_domain = mecmcp_policy::CommandDomain {
@@ -322,16 +354,11 @@ impl Policy {
         }
 
         let default_commands_rules =
-            compile_domain_rules(default_commands_specs, None, "commands")?;
-        let default_config_rules = compile_domain_rules(default_config_specs, None, "config")?;
-        let default_pfe_rules = compile_domain_rules(default_pfe_specs, None, "pfe_commands")?;
-        let default_allow_entries = compile_allowlist(default_allow, "_blocklist_defaults.allow")?;
-        let default_pipe_entries =
-            compile_allowlist(default_pipes, "_blocklist_defaults.allowed_pipes")?;
-        let default_pfe_allow_entries =
-            compile_allowlist(default_pfe_allow, "_blocklist_defaults.pfe_allow")?;
-        let default_pfe_pipe_entries =
-            compile_allowlist(default_pfe_pipes, "_blocklist_defaults.pfe_allowed_pipes")?;
+            compile_domain_rules(default_commands_specs, None, BlocklistDomain::Commands)?;
+        let default_config_rules =
+            compile_domain_rules(default_config_specs, None, BlocklistDomain::Config)?;
+        let default_pfe_rules =
+            compile_domain_rules(default_pfe_specs, None, BlocklistDomain::PfeCommands)?;
         let default_policy = mecmcp_policy::Policy::new(
             command_mode,
             mecmcp_policy::CommandDomain {
@@ -528,12 +555,29 @@ impl BlocklistDomain {
 }
 
 /// Where a blocklist rule lives, for denial messages (inventory keys only,
-/// never file paths). `rule_source` is `"device"` or `"defaults"`.
-pub fn rule_location(rule_source: &str, device: &str, domain: BlocklistDomain) -> String {
+/// never file paths). The match on `rule_source` is exhaustive so a new
+/// source variant cannot silently be reported as defaults.
+pub fn rule_location(rule_source: RuleSource, device: &str, domain: BlocklistDomain) -> String {
     let domain = domain.as_str();
     match rule_source {
-        "device" => format!("inventory entry '{device}'.blocklist.{domain}"),
-        _ => format!("_blocklist_defaults.{domain}"),
+        RuleSource::Device => format!("inventory entry '{device}'.blocklist.{domain}"),
+        RuleSource::Defaults => format!("_blocklist_defaults.{domain}"),
+    }
+}
+
+/// The allow-list key a `DeniedAllowlist` refusal checked, from the policy
+/// domain and the machine-readable denial reason.
+pub fn allowlist_checked_domain(domain: BlocklistDomain, reason: &str) -> BlocklistDomain {
+    match (
+        domain,
+        reason == mecmcp_policy::AllowlistDenyReason::PipeNotAllowlisted.as_str(),
+    ) {
+        (BlocklistDomain::Commands, true) => BlocklistDomain::AllowedPipes,
+        (BlocklistDomain::Commands, false) => BlocklistDomain::Allow,
+        (BlocklistDomain::PfeCommands, true) => BlocklistDomain::PfeAllowedPipes,
+        (BlocklistDomain::PfeCommands, false) => BlocklistDomain::PfeAllow,
+        // Allowlists only gate the commands and pfe_commands domains.
+        (other, _) => other,
     }
 }
 
@@ -543,9 +587,6 @@ pub fn rule_location(rule_source: &str, device: &str, domain: BlocklistDomain) -
 /// `Decision` match lives in exactly one place — see the module docs on
 /// `mecmcp_policy::Decision` for why matching only `Deny` (and treating
 /// `DenyAllowlist` as an implicit allow) is a live vulnerability.
-///
-/// `domain` is the policy key a `Deny` came from; it is carried into the error
-/// so the denial message can name where the matching rule lives.
 ///
 /// `domain` is the policy key a `Deny` came from; it is carried into the error
 /// so the denial message can name where the matching rule lives.
@@ -573,7 +614,7 @@ pub fn enforce_decision(
                 tool,
                 router: router.to_string(),
                 pattern,
-                rule_source: source_str,
+                rule_source: source,
                 domain,
                 input_excerpt: excerpt(raw_input).into(),
                 line_number: None,
@@ -594,6 +635,7 @@ pub fn enforce_decision(
                 tool,
                 router: router.to_string(),
                 reason: reason_str,
+                domain,
                 input_excerpt: excerpt(&normalized),
             })
         }
@@ -661,6 +703,48 @@ mod tests {
                 assert_eq!(pattern, "[unterminated");
             }
             _ => panic!("expected BlocklistRuleInvalid, got {err:?}"),
+        }
+    }
+
+    /// Scope string of the compile error `Policy::build` returns for a device
+    /// whose `blocklist` is `blocklist_json`.
+    fn device_compile_error_scope(blocklist_json: &str) -> String {
+        let inv = inv_from(&format!(
+            r#"{{"r1":{{"ip":"1.1.1.1","username":"u","auth":{{"type":"password","password":"x"}},
+                "blocklist":{blocklist_json}}}}}"#
+        ));
+        match Policy::build(&inv).unwrap_err() {
+            JmcpError::BlocklistRuleInvalid { scope, .. }
+            | JmcpError::AllowlistEntryInvalid { scope, .. } => scope,
+            other => panic!("expected a compile error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn device_compile_errors_use_rule_location_spelling() {
+        for key in ["commands", "config", "pfe_commands"] {
+            let scope = device_compile_error_scope(&format!(
+                r#"{{"{key}":[{{"action":"deny","pattern":"[bad"}}]}}"#
+            ));
+            assert_eq!(scope, format!("inventory entry 'r1'.blocklist.{key}"));
+        }
+        for key in ["allow", "allowed_pipes", "pfe_allow", "pfe_allowed_pipes"] {
+            let scope = device_compile_error_scope(&format!(r#"{{"{key}":["show *"]}}"#));
+            assert_eq!(scope, format!("inventory entry 'r1'.blocklist.{key}"));
+        }
+    }
+
+    #[test]
+    fn bad_default_allow_entry_is_reported_against_defaults() {
+        let inv = inv_from(
+            r#"{"_blocklist_defaults":{"allow":["show *"]},
+                "r1":{"ip":"1.1.1.1","username":"u","auth":{"type":"password","password":"x"}}}"#,
+        );
+        match Policy::build(&inv).unwrap_err() {
+            JmcpError::AllowlistEntryInvalid { scope, .. } => {
+                assert_eq!(scope, "_blocklist_defaults.allow");
+            }
+            other => panic!("expected AllowlistEntryInvalid, got {other:?}"),
         }
     }
 
@@ -1172,11 +1256,13 @@ mod tests {
                 tool,
                 router,
                 reason,
+                domain,
                 input_excerpt,
             } => {
                 assert_eq!(tool, "execute_junos_command");
                 assert_eq!(router, "r1");
                 assert_eq!(reason, "not_allowlisted");
+                assert_eq!(domain, BlocklistDomain::Commands);
                 assert_eq!(input_excerpt, "sh ver");
             }
             other => panic!("expected DeniedAllowlist, got {other:?}"),
