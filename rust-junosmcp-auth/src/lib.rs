@@ -75,9 +75,18 @@ pub const SRX_TOOLS: &[&str] = &[
 /// Facade tool names, separate from the concrete endpoint registries.
 pub const FACADE_TOOLS: &[&str] = &["execute"];
 
+/// Pseudo tool names that gate an option of a real tool rather than a tool of
+/// their own. They are token-scope vocabulary only, so [`JUNOS_TOOLS`] (which
+/// mirrors the `#[tool]` surface) excludes them.
+pub const PSEUDO_TOOLS: &[&str] = &[INCLUDE_BLOCKLIST_SCOPE];
+
+/// Scope required, besides `get_device_list`, for `include_blocklist: true`.
+pub const INCLUDE_BLOCKLIST_SCOPE: &str = "get_device_list.include_blocklist";
+
 /// All tool names accepted in token scopes, kept globally alphabetized for
 /// stable diagnostics. This must remain the exact union of [`JUNOS_TOOLS`],
-/// [`SRX_TOOLS`], and [`FACADE_TOOLS`]; registry tests enforce that invariant.
+/// [`SRX_TOOLS`], [`FACADE_TOOLS`], and [`PSEUDO_TOOLS`]; registry tests
+/// enforce that invariant.
 pub const KNOWN_TOOLS: &[&str] = &[
     "add_device",
     "apply_junos_change_set",
@@ -98,6 +107,7 @@ pub const KNOWN_TOOLS: &[&str] = &[
     "gather_device_facts",
     "get_chassis_cluster_status",
     "get_device_list",
+    "get_device_list.include_blocklist",
     "get_junos_candidate_fingerprint",
     "get_junos_change_set_status",
     "get_junos_config",
@@ -173,6 +183,7 @@ mod tests {
             .iter()
             .chain(SRX_TOOLS.iter())
             .chain(FACADE_TOOLS.iter())
+            .chain(PSEUDO_TOOLS.iter())
             .copied()
             .collect();
 
@@ -182,10 +193,10 @@ mod tests {
         );
         assert_eq!(
             KNOWN_TOOLS.len(),
-            JUNOS_TOOLS.len() + SRX_TOOLS.len() + FACADE_TOOLS.len(),
+            JUNOS_TOOLS.len() + SRX_TOOLS.len() + FACADE_TOOLS.len() + PSEUDO_TOOLS.len(),
             "endpoint registries must not contain duplicate tool names"
         );
-        assert_eq!(KNOWN_TOOLS.len(), 44);
+        assert_eq!(KNOWN_TOOLS.len(), 45);
     }
 
     #[test]

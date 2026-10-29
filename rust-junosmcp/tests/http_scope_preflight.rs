@@ -994,7 +994,7 @@ fn get_device_list_include_blocklist_omits_out_of_scope_devices() {
         &tokens,
         "one-device",
         ScopeSet::Allowlist(vec!["r1".into()]),
-        tool_allowlist(&["get_device_list"]),
+        tool_allowlist(&["get_device_list", "get_device_list.include_blocklist"]),
         &KnownNames {
             devices: None,
             tools: rust_junosmcp_auth::KNOWN_TOOLS,
@@ -1026,4 +1026,34 @@ fn get_device_list_include_blocklist_omits_out_of_scope_devices() {
         !text.contains("secret-r2-rule") && !text.contains("'r2'"),
         "{text}"
     );
+}
+
+/// Call `get_device_list` with `arguments` under a token holding `tools`.
+fn device_list_call(tools: ScopeSet, arguments: Value) -> PostResult {
+    let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+        "name":"get_device_list","arguments":arguments}});
+    scoped_requests(tools, vec![request]).remove(0)
+}
+
+#[test]
+fn include_blocklist_requires_its_own_tool_grant() {
+    let tools = tool_allowlist(&["get_device_list"]);
+    let denied = device_list_call(tools.clone(), json!({"include_blocklist":true}));
+    assert_eq!(denied.body["result"]["isError"], true, "{}", denied.body);
+    assert_tool_success(&device_list_call(tools.clone(), json!({})));
+    assert_tool_success(&device_list_call(tools, json!({"include_blocklist":false})));
+}
+
+#[test]
+fn include_blocklist_allowed_with_explicit_grant() {
+    let tools = tool_allowlist(&["get_device_list", "get_device_list.include_blocklist"]);
+    assert_tool_success(&device_list_call(tools, json!({"include_blocklist":true})));
+}
+
+#[test]
+fn include_blocklist_allowed_for_wildcard_tools() {
+    assert_tool_success(&device_list_call(
+        ScopeSet::Wildcard,
+        json!({"include_blocklist":true}),
+    ));
 }

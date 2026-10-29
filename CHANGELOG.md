@@ -14,7 +14,10 @@ All notable user-facing changes are recorded here. Format loosely follows
   `commands`/`config`/`pfe_commands` rules and the `allow`, `allowed_pipes`,
   `pfe_allow` and `pfe_allowed_pipes` entries, each with the inventory
   location it came from. Defaults are listed before device rules (a listing,
-  not an evaluation order) (#578).
+  not an evaluation order) (#578). `include_blocklist: true` also requires the
+  `get_device_list.include_blocklist` tool scope: a wildcard (`*`) token has
+  it, an explicit tool list must name it, and denial is the usual tool-scope
+  error (stdio and the plain call are unaffected) (#590).
 
 ### Changed
 

@@ -210,7 +210,11 @@ fn lists_all_known_tools() {
         .iter()
         .filter_map(|tool| tool.get("name").and_then(serde_json::Value::as_str))
         .collect();
-    let expected: HashSet<&str> = rust_junosmcp_auth::KNOWN_TOOLS.iter().copied().collect();
+    let expected: HashSet<&str> = rust_junosmcp_auth::KNOWN_TOOLS
+        .iter()
+        .copied()
+        .filter(|name| !rust_junosmcp_auth::PSEUDO_TOOLS.contains(name))
+        .collect();
     assert_eq!(names, expected);
     assert_eq!(tools.len(), 44);
     // 28 before Phase 5; the change-set tools took it to 33,

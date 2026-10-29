@@ -957,7 +957,7 @@ mod server_tools_const_tests {
 impl JmcpHandler {
     #[tool(
         name = "get_device_list",
-        description = "Get the Junos devices visible to this caller. Returns [] when the caller's device scope has no current inventory matches. Set include_blocklist=true to return {name, blocklist} objects with each device's effective policy mode and its commands/config/pfe_commands rules and allow/allowed_pipes/pfe_allow/pfe_allowed_pipes entries, each with its inventory location; defaults are listed before device rules, which is a listing and not an evaluation order."
+        description = "Get the Junos devices visible to this caller. Returns [] when the caller's device scope has no current inventory matches. Set include_blocklist=true (requires the get_device_list.include_blocklist tool scope; a wildcard scope grants it) to return {name, blocklist} objects with each device's effective policy mode and its commands/config/pfe_commands rules and allow/allowed_pipes/pfe_allow/pfe_allowed_pipes entries, each with its inventory location; defaults are listed before device rules, which is a listing and not an evaluation order."
     )]
     async fn get_device_list(
         &self,
@@ -968,6 +968,12 @@ impl JmcpHandler {
         let mut audit = audit_scope(ctx, "get_device_list", "read", vec![]);
 
         if let Err(e) = self.check_tool_scope(ctx, "get_device_list") {
+            audit.deny("tool_scope");
+            return Self::scope_to_call_result(e);
+        }
+        if args.include_blocklist
+            && let Err(e) = self.check_tool_scope(ctx, rust_junosmcp_auth::INCLUDE_BLOCKLIST_SCOPE)
+        {
             audit.deny("tool_scope");
             return Self::scope_to_call_result(e);
         }
@@ -2757,6 +2763,7 @@ mod scope_tests {
             .collect();
         let expected: std::collections::HashSet<String> = rust_junosmcp_auth::KNOWN_TOOLS
             .iter()
+            .filter(|name| !rust_junosmcp_auth::PSEUDO_TOOLS.contains(name))
             .map(|name| (*name).to_string())
             .collect();
         assert_eq!(names, expected);
