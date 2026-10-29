@@ -455,8 +455,8 @@ pub enum JmcpError {
     /// *normalized* command (`Decision::DenyAllowlist::normalized`), never
     /// the raw input, so the audit trail never records unsanitized input.
     #[error(
-        "denied by allowlist: {tool} on '{router}': {reason}; input: {input_excerpt}; \
-         checked {} and {}",
+        "denied by allowlist: {tool} on '{router}': {reason}; checked {} and {}; \
+         input: {input_excerpt}",
         crate::policy::rule_location(
             crate::policy::RuleSource::Defaults,
             router,
@@ -1057,8 +1057,8 @@ mod tests {
                 e.to_string(),
                 format!(
                     "denied by allowlist: execute_junos_command on 'r1': {reason}; \
-                     input: show x; checked _blocklist_defaults.{key} and \
-                     inventory entry 'r1'.blocklist.{key}"
+                     checked _blocklist_defaults.{key} and \
+                     inventory entry 'r1'.blocklist.{key}; input: show x"
                 )
             );
         }

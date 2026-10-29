@@ -1039,9 +1039,17 @@ fn device_list_call(tools: ScopeSet, arguments: Value) -> PostResult {
 fn include_blocklist_requires_its_own_tool_grant() {
     let tools = tool_allowlist(&["get_device_list"]);
     let denied = device_list_call(tools.clone(), json!({"include_blocklist":true}));
-    assert_eq!(denied.body["result"]["isError"], true, "{}", denied.body);
+    assert_scope_denied(&denied);
     assert_tool_success(&device_list_call(tools.clone(), json!({})));
     assert_tool_success(&device_list_call(tools, json!({"include_blocklist":false})));
+}
+
+#[test]
+fn include_blocklist_batch_member_is_preflighted() {
+    let tools = tool_allowlist(&["get_device_list"]);
+    let request = json!([{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+        "name":"get_device_list","arguments":{"include_blocklist":true}}}]);
+    assert_scope_denied(&scoped_requests(tools, vec![request]).remove(0));
 }
 
 #[test]

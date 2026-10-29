@@ -585,7 +585,8 @@ pub(super) fn audit_confirm_meta(audit: &mut AuditScope, caller_mins: Option<u32
 #[derive(Debug, thiserror::Error)]
 pub enum ScopeError {
     /// Token lacks permission for this tool.
-    #[error("token '{token}' is not authorized for tool '{tool}'")]
+    // No "token ..." phrasing: the body redactor would blank the rest of the line.
+    #[error("caller is not authorized for tool '{tool}'")]
     ToolNotInScope {
         /// The name of the denied token (truncated digest).
         token: String,
@@ -593,7 +594,7 @@ pub enum ScopeError {
         tool: &'static str,
     },
     /// Token lacks permission for this device.
-    #[error("token '{token}' is not authorized for router '{router}' (tool '{tool}')")]
+    #[error("caller is not authorized for router '{router}' (tool '{tool}')")]
     RouterNotInScope {
         /// The name of the denied token (truncated digest).
         token: String,
@@ -3462,6 +3463,27 @@ mod redaction_coverage_tests {
     /// RADIUS/TACACS shared secret, an SNMP community, and a password. Never
     /// real device output — synthetic `FAKE...` values only, matching a
     /// synthetic hostname (RFC 2606 `example.net`).
+    /// Scope-denial texts must survive the body redactor, or callers cannot
+    /// tell which scope they lack.
+    #[test]
+    fn scope_denial_texts_survive_redact_body() {
+        for error in [
+            ScopeError::ToolNotInScope {
+                token: "t".into(),
+                tool: "get_device_list.include_blocklist",
+            }
+            .to_string(),
+            ScopeError::RouterNotInScope {
+                token: "t".into(),
+                router: "r1".into(),
+                tool: "get_junos_config",
+            }
+            .to_string(),
+        ] {
+            assert_eq!(redact_body(&error), error);
+        }
+    }
+
     const FAKE_JUNOS_HASH: &str = "$9$FAKE9uBEreWx-VwgJGiHmz3nCA0IcSlKMX";
     const FAKE_PSK: &str = "FAKE-psk-9c203b81";
     const FAKE_RADIUS_SECRET: &str = "FAKE-radius-secret-4b1e";

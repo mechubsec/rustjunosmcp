@@ -189,12 +189,12 @@ mod tests {
 
         assert_eq!(
             known, endpoint_tools,
-            "KNOWN_TOOLS must be the exact union of endpoint and facade registries"
+            "KNOWN_TOOLS must be the exact union of endpoint, facade and pseudo registries"
         );
         assert_eq!(
             KNOWN_TOOLS.len(),
             JUNOS_TOOLS.len() + SRX_TOOLS.len() + FACADE_TOOLS.len() + PSEUDO_TOOLS.len(),
-            "endpoint registries must not contain duplicate tool names"
+            "tool registries must not contain duplicate tool names"
         );
         assert_eq!(KNOWN_TOOLS.len(), 45);
     }

@@ -16,17 +16,25 @@ All notable user-facing changes are recorded here. Format loosely follows
   location it came from. Defaults are listed before device rules (a listing,
   not an evaluation order) (#578). `include_blocklist: true` also requires the
   `get_device_list.include_blocklist` tool scope: a wildcard (`*`) token has
-  it, an explicit tool list must name it, and denial is the usual tool-scope
-  error (stdio and the plain call are unaffected) (#590).
+  it, an explicit tool list must name it. Over HTTP a miss is the usual
+  preflight 403 `insufficient_scope`; the handler also returns an `isError`
+  result `caller is not authorized for tool 'get_device_list.include_blocklist'`.
+  stdio and the plain call are unaffected (#590).
 
 ### Changed
 
+- Tool and device scope denial texts no longer start with `token '<name>'`
+  (the body redactor blanked them to `token [REDACTED]`). They now read
+  `caller is not authorized for tool '<tool>'` / `... for router '<router>'
+  (tool '<tool>')`; SRX texts keep their `[code=...]` prefix (#590).
 - Allowlist denials (`denied by allowlist: ...`) now append `; checked
   _blocklist_defaults.<key> and inventory entry '<device>'.blocklist.<key>`,
   where `<key>` is `allow`/`allowed_pipes` (commands) or
   `pfe_allow`/`pfe_allowed_pipes` (pfe_commands). Both locations are always
   named, even when the device defines no such list. The existing prefix and the
-  audit record are unchanged (#589).
+  audit shape is unchanged (the audit `error` value gains the suffix). The
+  suffix sits before `input:` so redaction of the caller-controlled input
+  cannot erase it (#589).
 - Inventory compile errors for blocklist and allowlist entries now name the
   location as `inventory entry '<device>'.blocklist.<key>` (was
   `device '<device>'.blocklist.<key>` / `device '<device>'.allow`), matching

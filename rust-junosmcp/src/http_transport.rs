@@ -160,6 +160,16 @@ fn tool_call_exceeds_scope(value: &Value, caller: &mecmcp_transport::CallerScope
     {
         return true;
     }
+    // `include_blocklist: true` needs its own pseudo scope (#590).
+    if tool == "get_device_list"
+        && params.pointer("/arguments/include_blocklist") == Some(&Value::Bool(true))
+        && !caller.tools.allows_tool(
+            rust_junosmcp_auth::INCLUDE_BLOCKLIST_SCOPE,
+            rust_junosmcp_auth::WRITE_TOOLS,
+        )
+    {
+        return true;
+    }
     if tool == "execute" {
         return facade_call_exceeds_scope(params.get("arguments"), caller);
     }

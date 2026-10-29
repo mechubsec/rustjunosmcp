@@ -232,6 +232,24 @@ impl Policy {
             }
         };
 
+        // Compile defaults first so a bad default entry is reported against
+        // `_blocklist_defaults`, not against the first device that merges it.
+        let default_allow_entries = compile_allowlist(
+            default_allow,
+            &rule_location(RuleSource::Defaults, "", BlocklistDomain::Allow),
+        )?;
+        let default_pipe_entries = compile_allowlist(
+            default_pipes,
+            &rule_location(RuleSource::Defaults, "", BlocklistDomain::AllowedPipes),
+        )?;
+        let default_pfe_allow_entries = compile_allowlist(
+            default_pfe_allow,
+            &rule_location(RuleSource::Defaults, "", BlocklistDomain::PfeAllow),
+        )?;
+        let default_pfe_pipe_entries = compile_allowlist(
+            default_pfe_pipes,
+            &rule_location(RuleSource::Defaults, "", BlocklistDomain::PfeAllowedPipes),
+        )?;
         let mut per_device = HashMap::new();
         let mut devices_with_rules = 0usize;
 
@@ -341,22 +359,6 @@ impl Policy {
             compile_domain_rules(default_config_specs, None, BlocklistDomain::Config)?;
         let default_pfe_rules =
             compile_domain_rules(default_pfe_specs, None, BlocklistDomain::PfeCommands)?;
-        let default_allow_entries = compile_allowlist(
-            default_allow,
-            &rule_location(RuleSource::Defaults, "", BlocklistDomain::Allow),
-        )?;
-        let default_pipe_entries = compile_allowlist(
-            default_pipes,
-            &rule_location(RuleSource::Defaults, "", BlocklistDomain::AllowedPipes),
-        )?;
-        let default_pfe_allow_entries = compile_allowlist(
-            default_pfe_allow,
-            &rule_location(RuleSource::Defaults, "", BlocklistDomain::PfeAllow),
-        )?;
-        let default_pfe_pipe_entries = compile_allowlist(
-            default_pfe_pipes,
-            &rule_location(RuleSource::Defaults, "", BlocklistDomain::PfeAllowedPipes),
-        )?;
         let default_policy = mecmcp_policy::Policy::new(
             command_mode,
             mecmcp_policy::CommandDomain {
@@ -566,7 +568,10 @@ pub fn rule_location(rule_source: RuleSource, device: &str, domain: BlocklistDom
 /// The allow-list key a `DeniedAllowlist` refusal checked, from the policy
 /// domain and the machine-readable denial reason.
 pub fn allowlist_checked_domain(domain: BlocklistDomain, reason: &str) -> BlocklistDomain {
-    match (domain, reason == "pipe_not_allowlisted") {
+    match (
+        domain,
+        reason == mecmcp_policy::AllowlistDenyReason::PipeNotAllowlisted.as_str(),
+    ) {
         (BlocklistDomain::Commands, true) => BlocklistDomain::AllowedPipes,
         (BlocklistDomain::Commands, false) => BlocklistDomain::Allow,
         (BlocklistDomain::PfeCommands, true) => BlocklistDomain::PfeAllowedPipes,
@@ -726,6 +731,20 @@ mod tests {
         for key in ["allow", "allowed_pipes", "pfe_allow", "pfe_allowed_pipes"] {
             let scope = device_compile_error_scope(&format!(r#"{{"{key}":["show *"]}}"#));
             assert_eq!(scope, format!("inventory entry 'r1'.blocklist.{key}"));
+        }
+    }
+
+    #[test]
+    fn bad_default_allow_entry_is_reported_against_defaults() {
+        let inv = inv_from(
+            r#"{"_blocklist_defaults":{"allow":["show *"]},
+                "r1":{"ip":"1.1.1.1","username":"u","auth":{"type":"password","password":"x"}}}"#,
+        );
+        match Policy::build(&inv).unwrap_err() {
+            JmcpError::AllowlistEntryInvalid { scope, .. } => {
+                assert_eq!(scope, "_blocklist_defaults.allow");
+            }
+            other => panic!("expected AllowlistEntryInvalid, got {other:?}"),
         }
     }
 
