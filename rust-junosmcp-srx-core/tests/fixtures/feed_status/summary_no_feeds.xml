@@ -1,0 +1,16 @@
+<!-- Layout as captured on the lab vSRX (26.2R1.7, 2026-10-29) with no feed configured. -->
+<output>
+Dynamic-address session scan status            : Disable
+Hold-interval for dynamic-address session scan : 10 seconds
+
+
+Instance Name                                  : default
+    Total number of IPv4 entries               : 0
+    Total number of IPv4 entries from feed     : 0
+    Total number of IPv6 entries               : 0
+    Total number of IPv6 entries from feed     : 0
+
+Instance Name                                  : geoip
+    Total number of IPv4 entries               : 0
+    Total number of IPv6 entries               : 0
+</output>

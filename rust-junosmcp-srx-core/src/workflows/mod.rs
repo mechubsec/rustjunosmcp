@@ -5,6 +5,7 @@ pub mod appid_package;
 pub mod cluster_health;
 pub mod cluster_status;
 mod config_fetch;
+pub mod feed_status;
 pub mod flow_sessions;
 pub mod idp_package;
 pub mod license;
@@ -47,6 +48,7 @@ mod schema_tripwire {
     fn every_srx_argument_type_is_closed_and_describes_its_alias() {
         assert_closed_and_aliased::<super::cluster_health::ClusterHealthArgs>("ClusterHealthArgs");
         assert_closed_and_aliased::<super::cluster_status::ClusterStatusArgs>("ClusterStatusArgs");
+        assert_closed_and_aliased::<super::feed_status::FeedStatusArgs>("FeedStatusArgs");
         assert_closed_and_aliased::<super::services_status::ServicesStatusArgs>(
             "ServicesStatusArgs",
         );

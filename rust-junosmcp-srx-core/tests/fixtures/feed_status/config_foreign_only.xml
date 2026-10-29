@@ -1,0 +1,21 @@
+<!-- Synthetic: one foreign (non-mecfeedmcp) feed server only. -->
+<configuration>
+  <security>
+    <dynamic-address>
+      <feed-server>
+        <name>OTHER</name>
+        <url>https://intel.example.net/feed-1.tgz</url>
+        <feed-name>
+          <name>blacklist-1</name>
+          <path>feed-1/blacklist-1</path>
+        </feed-name>
+      </feed-server>
+      <address-name>
+        <name>OTHER-BLOCKLIST</name>
+        <profile>
+          <feed-name>blacklist-1</feed-name>
+        </profile>
+      </address-name>
+    </dynamic-address>
+  </security>
+</configuration>

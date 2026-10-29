@@ -1,0 +1,25 @@
+<!--
+  Synthetic: per-feed block layout from the srx-dynamic-ip-feed reference,
+  unverified on a device. Every feed failed, and each status text echoes a
+  raw, credential-bearing URL (QQ* markers) that must be replaced.
+-->
+<output>
+Server Name                                    : MECFEED
+    Hostname/IP                                : https://QQsvc:QQpw@feeds.example.net:8443
+    User Name                                  : QQuser
+    Feed Name                                  : mecfeed-address
+        Total IPv4 entries                     : 0
+        Total IPv6 entries                     : 0
+        Next update                            : 2026-10-29 14:10:12 UTC
+        Last update status                     : failed&lt;http return error code 401 from https://QQsvc:QQpw@feeds.example.net:8443/feeds/junos-dynamic-address/address?token=QQtok#QQfrag&gt;
+    Feed Name                                  : mecfeed-stray
+        Total IPv4 entries                     : 0
+        Total IPv6 entries                     : 0
+        Last update status                     : failed&lt;tls handshake with https://QQsvc:QQpw@feeds.example.net:8443 failed&gt;
+
+Server Name                                    : MECFEED-PFX
+    Feed Name                                  : mecfeed-prefix
+        Total IPv4 entries                     : 0
+        Total IPv6 entries                     : 0
+        Last update status                     : failed&lt;connect to https://QQbearer@feeds.example.net:8443/proxy/feeds/junos-dynamic-address/prefix?sig=QQsig timed out&gt;
+</output>

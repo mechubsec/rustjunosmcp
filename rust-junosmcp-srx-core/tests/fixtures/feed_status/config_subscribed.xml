@@ -1,0 +1,70 @@
+<!--
+  Synthetic `show configuration security dynamic-address` reply (rustez body,
+  no rpc-reply wrapper). Every QQ* string and the $9$ value are credential
+  markers that must never reach tool output.
+  - MECFEED: credentials in the server URL, query/fragment on one feed path,
+    a leading-slash path on an unmapped feed, and a deactivated feed.
+  - MECFEED-PFX: full feed URL on the server (no path), token as username,
+    arbitrary query key, reverse-proxy prefix.
+  - OTHER: a foreign (non-mecfeedmcp) feed server.
+-->
+<configuration>
+  <security>
+    <dynamic-address>
+      <feed-server>
+        <name>MECFEED</name>
+        <url>https://QQsvc:QQpw@feeds.example.net:8443</url>
+        <user-name>QQuser</user-name>
+        <password>$9$QQx</password>
+        <tls-profile>MECFEED-TLS</tls-profile>
+        <update-interval>300</update-interval>
+        <hold-interval>86400</hold-interval>
+        <feed-name>
+          <name>mecfeed-address</name>
+          <path>feeds/junos-dynamic-address/address?token=QQtok#QQfrag</path>
+        </feed-name>
+        <feed-name>
+          <name>mecfeed-stray</name>
+          <path>/feeds/junos-dynamic-address/prefix</path>
+        </feed-name>
+        <feed-name inactive="inactive">
+          <name>mecfeed-off</name>
+          <path>feeds/junos-dynamic-address/address</path>
+        </feed-name>
+      </feed-server>
+      <feed-server>
+        <name>MECFEED-PFX</name>
+        <url>https://QQbearer@feeds.example.net:8443/proxy/feeds/junos-dynamic-address/prefix?sig=QQsig</url>
+        <feed-name>
+          <name>mecfeed-prefix</name>
+        </feed-name>
+      </feed-server>
+      <feed-server>
+        <name>OTHER</name>
+        <url>https://intel.example.net/feed-1.tgz</url>
+        <feed-name>
+          <name>blacklist-1</name>
+          <path>feed-1/blacklist-1</path>
+        </feed-name>
+      </feed-server>
+      <address-name>
+        <name>MECFEED-ADDRESS</name>
+        <profile>
+          <feed-name>mecfeed-address</feed-name>
+        </profile>
+      </address-name>
+      <address-name>
+        <name>MECFEED-PREFIX</name>
+        <profile>
+          <feed-name>mecfeed-prefix</feed-name>
+        </profile>
+      </address-name>
+      <address-name>
+        <name>OTHER-BLOCKLIST</name>
+        <profile>
+          <feed-name>blacklist-1</feed-name>
+        </profile>
+      </address-name>
+    </dynamic-address>
+  </security>
+</configuration>

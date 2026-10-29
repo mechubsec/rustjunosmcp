@@ -25,6 +25,9 @@ pub use workflows::cluster_health::{
 pub use workflows::cluster_status::{
     ClusterNode, ClusterStatusArgs, ClusterStatusData, RedundancyGroup, RgMember,
 };
+pub use workflows::feed_status::{
+    FeedKind, FeedStatus, FeedStatusArgs, FeedStatusData, NodeFeedStatus,
+};
 pub use workflows::flow_sessions::{FlowSession, FlowSessionQuery, FlowSessionsArgs, NodeSessions};
 pub use workflows::idp_package::{
     DownloadAndInstallCompletedData, DownloadAndInstallResponse, IdpAction, IdpCheckServerData,
