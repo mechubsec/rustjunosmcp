@@ -152,8 +152,8 @@ pub struct EmptyArgs {}
 pub struct GetDeviceListArgs {
     /// When true, return `{name, blocklist}` objects instead of bare names,
     /// where `blocklist` is the device's effective policy: `mode`, the
-    /// `commands`/`config`/`pfe_commands` rules and the `allow`/`allowed_pipes`
-    /// entries, each with the inventory location it came from. Default false.
+    /// `commands`/`config`/`pfe_commands` rules and the `allow`, `allowed_pipes`,
+    /// `pfe_allow` and `pfe_allowed_pipes` entries, each with the inventory location it came from. Default false.
     #[serde(default)]
     pub include_blocklist: bool,
 }

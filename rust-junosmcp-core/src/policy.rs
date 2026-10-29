@@ -492,7 +492,8 @@ impl Policy {
     }
 }
 
-/// Blocklist rule domain a denial came from.
+/// Policy key a rule or allowlist entry lives under: the domain a denial came
+/// from, or a listing-only key (`allow*`) shown by `get_device_list`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlocklistDomain {
     /// `commands` rules.
@@ -505,6 +506,10 @@ pub enum BlocklistDomain {
     Allow,
     /// `allowed_pipes` entries (listing only; never a denial source).
     AllowedPipes,
+    /// `pfe_allow` entries (listing only; never a denial source).
+    PfeAllow,
+    /// `pfe_allowed_pipes` entries (listing only; never a denial source).
+    PfeAllowedPipes,
 }
 
 impl BlocklistDomain {
@@ -516,6 +521,8 @@ impl BlocklistDomain {
             Self::PfeCommands => "pfe_commands",
             Self::Allow => "allow",
             Self::AllowedPipes => "allowed_pipes",
+            Self::PfeAllow => "pfe_allow",
+            Self::PfeAllowedPipes => "pfe_allowed_pipes",
         }
     }
 }
@@ -536,6 +543,12 @@ pub fn rule_location(rule_source: &str, device: &str, domain: BlocklistDomain) -
 /// `Decision` match lives in exactly one place — see the module docs on
 /// `mecmcp_policy::Decision` for why matching only `Deny` (and treating
 /// `DenyAllowlist` as an implicit allow) is a live vulnerability.
+///
+/// `domain` is the policy key a `Deny` came from; it is carried into the error
+/// so the denial message can name where the matching rule lives.
+///
+/// `domain` is the policy key a `Deny` came from; it is carried into the error
+/// so the denial message can name where the matching rule lives.
 pub fn enforce_decision(
     decision: Decision<'_, Action>,
     tool: &'static str,

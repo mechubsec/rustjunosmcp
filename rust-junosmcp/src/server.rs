@@ -949,7 +949,7 @@ mod server_tools_const_tests {
 impl JmcpHandler {
     #[tool(
         name = "get_device_list",
-        description = "Get the Junos devices visible to this caller. Returns [] when the caller's device scope has no current inventory matches. Set include_blocklist=true to return {name, blocklist} objects with each device's effective policy mode and its commands/config/pfe_commands rules and allow/allowed_pipes entries, each with its inventory location; defaults are listed before device rules, which is a listing and not an evaluation order."
+        description = "Get the Junos devices visible to this caller. Returns [] when the caller's device scope has no current inventory matches. Set include_blocklist=true to return {name, blocklist} objects with each device's effective policy mode and its commands/config/pfe_commands rules and allow/allowed_pipes/pfe_allow/pfe_allowed_pipes entries, each with its inventory location; defaults are listed before device rules, which is a listing and not an evaluation order."
     )]
     async fn get_device_list(
         &self,
@@ -963,13 +963,10 @@ impl JmcpHandler {
             audit.deny("tool_scope");
             return Self::scope_to_call_result(e);
         }
-        let names = rust_junosmcp_auth::filter_device_names(ctx, self.dm.inventory().names());
+        let inv = self.dm.inventory();
+        let names = rust_junosmcp_auth::filter_device_names(ctx, inv.names());
         let result = if args.include_blocklist {
-            router_list::handle_blocklist(
-                names,
-                self.dm.inventory().as_ref(),
-                self.policy.load().command_mode(),
-            )
+            router_list::handle_blocklist(names, &inv, self.policy.load().command_mode())
         } else {
             router_list::handle_names(names).await
         };

@@ -1,6 +1,5 @@
 //! `get_router_list` — return the inventory's router names. Pure, no device contact.
 
-pub use super::GetDeviceListArgs;
 use crate::error::JmcpError;
 use crate::inventory::{BlocklistRules, Inventory, RuleSpec};
 use crate::policy::{BlocklistDomain, CommandMode, RuleSource, rule_location};
@@ -75,6 +74,8 @@ pub fn handle_blocklist(
             "pfe_commands": rules(BlocklistDomain::PfeCommands, |r| &r.pfe_commands),
             "allow": entries(BlocklistDomain::Allow, |r| &r.allow),
             "allowed_pipes": entries(BlocklistDomain::AllowedPipes, |r| &r.allowed_pipes),
+            "pfe_allow": entries(BlocklistDomain::PfeAllow, |r| &r.pfe_allow),
+            "pfe_allowed_pipes": entries(BlocklistDomain::PfeAllowedPipes, |r| &r.pfe_allowed_pipes),
         }}));
     }
     Ok(Value::Array(out))
@@ -83,6 +84,7 @@ pub fn handle_blocklist(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::GetDeviceListArgs;
     use std::io::Write;
 
     fn make_inv(json: &str) -> Arc<Inventory> {
@@ -113,12 +115,13 @@ mod tests {
             "mode": "blocklist",
             "commands": [{"action":"deny","pattern":"request system *"}],
             "config": [{"action":"deny","pattern":"delete *"}],
-            "allow": ["show version"]
+            "allow": ["show version"],
+            "pfe_allow": ["show nh"]
         },
         "a":{"ip":"1.1.1.1","username":"u","auth":{"type":"password","password":"x"},
              "blocklist":{"commands":[{"action":"allow","pattern":"request system zeroize"}],
                           "pfe_commands":[{"action":"deny","pattern":"show nh *"}],
-                          "allowed_pipes":["grep"]}},
+                          "allowed_pipes":["grep"],"pfe_allowed_pipes":["match"]}},
         "z":{"ip":"1.1.1.2","username":"u","auth":{"type":"password","password":"x"}}
     }"#;
 
@@ -159,6 +162,14 @@ mod tests {
         assert_eq!(
             bl["allowed_pipes"],
             json!([{"entry":"grep","source":"inventory entry 'a'.blocklist.allowed_pipes"}])
+        );
+        assert_eq!(
+            bl["pfe_allow"],
+            json!([{"entry":"show nh","source":"_blocklist_defaults.pfe_allow"}])
+        );
+        assert_eq!(
+            bl["pfe_allowed_pipes"],
+            json!([{"entry":"match","source":"inventory entry 'a'.blocklist.pfe_allowed_pipes"}])
         );
     }
 

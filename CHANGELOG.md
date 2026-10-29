@@ -11,12 +11,14 @@ All notable user-facing changes are recorded here. Format loosely follows
 - `get_device_list` takes an optional `include_blocklist` argument (default
   `false`; output unchanged when absent). When `true` it returns
   `{name, blocklist}` per visible device: the effective `mode`, the
-  `commands`/`config`/`pfe_commands` rules and the `allow`/`allowed_pipes`
-  entries, each with the inventory location it came from. Defaults are listed
+  `commands`/`config`/`pfe_commands` rules and the `allow`, `allowed_pipes`,
+  `pfe_allow` and `pfe_allowed_pipes` entries, each with the inventory location it came from. Defaults are listed
   before device rules (a listing, not an evaluation order) (#578).
 
 ### Changed
 
+- `render_and_apply_j2_template` per-device blocklist errors now also name the
+  rule location, appended after the existing text (#578).
 - Blocklist denial messages now say where the matching rule lives, e.g.
   `matched rule 'X' from inventory entry 'r1'.blocklist.commands (action=deny,
   source=device)` or `from _blocklist_defaults.config`. `source=` is unchanged
