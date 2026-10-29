@@ -65,6 +65,7 @@ All notable user-facing changes are recorded here. Format loosely follows
   annotations are unchanged. The signature-package tools still return a
   protocol `invalid_params` error for invalid input.
 
+- Bump the mecmcp crates to v0.31.0 (`junos::redact_text`, linear-time `redact_log_text`; `CallerCtx` gains `token_created_at`/`token_expires_at`). The upstream built-in `whoami` tool is opt-in and is not registered here, so the tool surface and schemas are unchanged.
 - Tool and device scope denial texts no longer start with `token '<name>'`
   (the body redactor blanked them to `token [REDACTED]`). They now read
   `caller is not authorized for tool '<tool>'` / `... for router '<router>'
