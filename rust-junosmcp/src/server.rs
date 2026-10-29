@@ -509,6 +509,14 @@ pub(super) fn redact_last_mile(
     }
 }
 
+/// Record `count` (devices returned) on a device-list audit scope. Both list
+/// tools return a bare JSON array, of names or of `include_blocklist` objects.
+fn record_list_count(audit: &mut AuditScope, listing: &serde_json::Value) {
+    if let Some(arr) = listing.as_array() {
+        audit.meta("count", arr.len() as u64);
+    }
+}
+
 /// Helper to construct an `AuditScope` from an `Option<&CallerCtx>`.
 ///
 /// The shared `mecmcp-audit` crate's API split the old single `new(Option<&CallerCtx>, ...)`
@@ -972,13 +980,7 @@ impl JmcpHandler {
         };
         match &result {
             Ok(v) => {
-                if let Some(arr) = v
-                    .as_object()
-                    .and_then(|o| o.get("names"))
-                    .and_then(|n| n.as_array())
-                {
-                    audit.meta("count", arr.len() as u64);
-                }
+                record_list_count(&mut audit, v);
                 audit.succeed();
             }
             Err(e) => audit.fail_kind(e.audit_kind(), e),
@@ -1006,13 +1008,7 @@ impl JmcpHandler {
         let result = router_list::handle_names(names).await;
         match &result {
             Ok(v) => {
-                if let Some(arr) = v
-                    .as_object()
-                    .and_then(|o| o.get("names"))
-                    .and_then(|n| n.as_array())
-                {
-                    audit.meta("count", arr.len() as u64);
-                }
+                record_list_count(&mut audit, v);
                 audit.succeed();
             }
             Err(e) => audit.fail_kind(e.audit_kind(), e),
@@ -4210,5 +4206,39 @@ mod redact_last_mile_tests {
             "secret leaked (not printed here to avoid echoing it into test output)"
         );
         assert_eq!(value["router"], FAKE_HOSTNAME, "hostname lost");
+    }
+}
+
+#[cfg(test)]
+mod list_count_audit_tests {
+    use super::record_list_count;
+    use mecmcp_audit::AuditScope;
+    use mecmcp_audit::testutil::run_with_capture;
+    use serde_json::json;
+
+    fn audited_count(listing: serde_json::Value) -> String {
+        run_with_capture(|| {
+            let mut audit = AuditScope::stdio("get_device_list", "read", vec![]);
+            record_list_count(&mut audit, &listing);
+            audit.succeed();
+        })
+    }
+
+    #[test]
+    fn bare_names_array_records_count() {
+        assert!(audited_count(json!(["r1", "r2", "r3"])).contains("count=3"));
+    }
+
+    #[test]
+    fn include_blocklist_objects_record_count() {
+        let out = audited_count(json!([{"name": "r1"}, {"name": "r2"}]));
+        assert!(out.contains("count=2"), "output: {out}");
+    }
+
+    #[test]
+    fn empty_listing_records_zero() {
+        // `device_count=0` is always present; strip it so only the meta can match.
+        let out = audited_count(json!([])).replace("device_count=", "");
+        assert!(out.contains("count=0"), "output: {out}");
     }
 }

@@ -24,6 +24,13 @@ All notable user-facing changes are recorded here. Format loosely follows
   source=device)` or `from _blocklist_defaults.config`. `source=` is unchanged
   (#578).
 
+### Fixed
+
+- `get_device_list` and `get_router_list` now record the `count` audit meta
+  (number of devices returned, including with `include_blocklist`). It was
+  never recorded before, so audit records for these tools gain a `count` field
+  (#587).
+
 ## [2.4.0] - 2026-10-26
 
 ### Added
