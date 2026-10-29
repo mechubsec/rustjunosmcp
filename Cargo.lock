@@ -3226,10 +3226,12 @@ dependencies = [
 name = "rust-junosmcp-srx-core"
 version = "2.4.0"
 dependencies = [
+ "aho-corasick",
  "base64ct",
  "flate2",
  "ipnet",
  "mecmcp-redact",
+ "percent-encoding",
  "pretty_assertions",
  "quick-xml",
  "rand 0.10.3",

@@ -45,21 +45,28 @@
 //!   into the response, and reported `url`s carry no userinfo, query or
 //!   fragment. Device text (`next_update`, `last_update_status`, `error`, and
 //!   the message of a config-side `SrxError::Rpc` or `SrxError::Parse`) is
-//!   scrubbed in two linear passes:
+//!   scrubbed in three passes, each linear in the text for a given config:
 //!   1. An exact echo of a configured raw URL (server or effective) becomes
-//!      its sanitised form. Every other occurrence of a configured secret
-//!      becomes `[REDACTED]`, whatever the echo's shape. The secrets are the
-//!      username, password, query string and fragment of every `url` and
-//!      `path` leaf and every effective URL (split by text, not parsed), plus
-//!      every `user-name` and `password` value. They come from a textual
-//!      scan of the raw config reply, so a reply that does not parse is
-//!      covered too, as are foreign and deactivated feeds.
-//!   2. Best effort, for URLs not in the config: a token split on whitespace
+//!      its sanitised form.
+//!   2. Every occurrence of a configured secret becomes `[REDACTED]`, whatever
+//!      the echo's shape; overlapping or adjacent occurrences merge into one
+//!      `[REDACTED]`. The secrets of every `url` and `path` leaf and every
+//!      effective URL are its username, password, query string and fragment
+//!      split by text, plus, when the `url` parser accepts it, the username
+//!      and password as that parser reads them, raw and percent-decoded.
+//!      Every `user-name` and `password` value is a secret too. All come from
+//!      a textual scan of the raw config reply, so a reply that does not parse
+//!      is covered, as are foreign and deactivated feeds; a leaf with no
+//!      matching close tag contributes its text up to the next tag.
+//!   3. Best effort, for URLs not in the config: a token split on whitespace
 //!      and `<>()"'` that parses as a URL with userinfo, a query or a fragment
 //!      is sanitised.
 //!
-//!   Not guaranteed: a configured secret echoed in another encoding
-//!   (percent-decoded or re-escaped), or a credential of an unconfigured URL
+//!   If a matcher cannot be built or a search fails, the whole text becomes
+//!   `[REDACTED]`. Not guaranteed: a configured secret echoed in any other
+//!   encoding than those above (for example re-escaped); a query value echoed
+//!   without its `key=`, which is redacted only when it equals a whole
+//!   configured query or fragment string; a credential of an unconfigured URL
 //!   that is not one parseable token. A short secret also redacts unrelated
 //!   text that contains it.
 //! - **Failures:** a config rpc-error other than `not-configured` fails
@@ -72,6 +79,7 @@
 use crate::workflows::config_fetch::get_configuration_subtree;
 use crate::xml::{multi_re_split, rpc_error_parts, sanitize_rustez_xml};
 use crate::{SrxError, SrxToolResponse};
+use aho_corasick::{AhoCorasick, MatchKind};
 use rust_junosmcp_core::device_manager::PooledDevice;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -467,8 +475,17 @@ fn entry_total(ipv4: Option<Option<u64>>, ipv6: Option<Option<u64>>) -> Option<u
 
 /// Removes configured credentials from device text (module doc, "Credentials").
 struct Scrubber {
-    /// `(needle, replacement)`, longest needle first; never an empty needle.
-    patterns: Vec<(String, String)>,
+    /// `None` when a matcher could not be built; `scrub` then fails closed.
+    matchers: Option<Matchers>,
+}
+
+struct Matchers {
+    /// Raw URLs that carry a secret, matched leftmost-longest.
+    exact: AhoCorasick,
+    /// Sanitised form of each `exact` pattern, by pattern index.
+    sanitised: Vec<String>,
+    /// Secret needles, matched with overlaps.
+    secrets: AhoCorasick,
 }
 
 impl Scrubber {
@@ -478,55 +495,57 @@ impl Scrubber {
         let mut raw_urls = leaf_texts(config_xml, "url");
         raw_urls.extend(leaf_texts(config_xml, "path"));
         raw_urls.extend(effective_urls.iter().map(|u| (*u).to_owned()));
-        let mut patterns: Vec<(String, String)> = Vec::new();
+        let mut exact: Vec<(String, String)> = Vec::new();
+        let mut secrets: Vec<String> = Vec::new();
         for raw in &raw_urls {
             if let Some(clean) = clean_if_secret(raw) {
-                patterns.push((raw.clone(), clean));
+                exact.push((raw.clone(), clean));
             }
-            for part in secret_parts(raw) {
-                patterns.push((part.to_owned(), REDACTED.to_owned()));
+            secrets.extend(secret_parts(raw).into_iter().map(str::to_owned));
+            // The lenient parser that accepts a feed also finds userinfo the
+            // text split misses (`https:u:p@h`, `https:/u:p@h`, `https:///u:p@h`).
+            if let Ok(parsed) = url::Url::parse(raw) {
+                for part in [parsed.username(), parsed.password().unwrap_or("")] {
+                    secrets.push(part.to_owned());
+                    if let Ok(decoded) = percent_encoding::percent_decode_str(part).decode_utf8() {
+                        secrets.push(decoded.into_owned());
+                    }
+                }
             }
         }
         // Never read into the response, but device text could echo them.
-        for tag in ["user-name", "password"] {
-            patterns.extend(
-                leaf_texts(config_xml, tag)
-                    .into_iter()
-                    .map(|value| (value, REDACTED.to_owned())),
-            );
-        }
-        // An empty needle would match without advancing `redact`.
-        patterns.retain(|(needle, _)| !needle.is_empty());
-        patterns.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
-        patterns.dedup_by(|a, b| a.0 == b.0);
-        Self { patterns }
-    }
-
-    /// Both passes: configured secrets, then the URL-token backstop.
-    fn scrub(&self, text: &str) -> String {
-        sanitize_url_tokens(&self.redact(text))
-    }
-
-    /// One pass: at each position the longest matching needle is replaced.
-    fn redact(&self, text: &str) -> String {
-        let mut out = String::with_capacity(text.len());
-        let mut rest = text;
-        while !rest.is_empty() {
-            let hit = self.patterns.iter().find_map(|(needle, replacement)| {
-                Some((rest.strip_prefix(needle.as_str())?, replacement))
+        secrets.extend(leaf_texts(config_xml, "user-name"));
+        secrets.extend(leaf_texts(config_xml, "password"));
+        // An empty needle would match everywhere.
+        secrets.retain(|needle| !needle.is_empty());
+        let (raw, sanitised): (Vec<String>, Vec<String>) = exact.into_iter().unzip();
+        let exact = AhoCorasick::builder()
+            .match_kind(MatchKind::LeftmostLongest)
+            .build(&raw)
+            .ok();
+        let matchers = exact
+            .zip(AhoCorasick::new(&secrets).ok())
+            .map(|(exact, secrets)| Matchers {
+                exact,
+                sanitised,
+                secrets,
             });
-            if let Some((after, replacement)) = hit {
-                out.push_str(replacement);
-                rest = after;
-                continue;
-            }
-            let mut chars = rest.chars();
-            if let Some(c) = chars.next() {
-                out.push(c);
-            }
-            rest = chars.as_str();
-        }
-        out
+        Self { matchers }
+    }
+
+    /// The three passes; the whole text becomes `[REDACTED]` on any failure.
+    fn scrub(&self, text: &str) -> String {
+        self.try_scrub(text).unwrap_or_else(|| REDACTED.to_owned())
+    }
+
+    fn try_scrub(&self, text: &str) -> Option<String> {
+        let matchers = self.matchers.as_ref()?;
+        let exact = matchers
+            .exact
+            .try_replace_all(text, &matchers.sanitised)
+            .ok()?;
+        let redacted = redact_overlapping(&matchers.secrets, &exact)?;
+        Some(sanitize_url_tokens(&redacted))
     }
 
     /// Scrub the device-supplied message of a config-side error.
@@ -547,11 +566,40 @@ impl Scrubber {
     }
 }
 
+/// Replace every occurrence of every needle, overlapping ones included, with
+/// one `[REDACTED]` per merged run. `None` when the search fails.
+fn redact_overlapping(needles: &AhoCorasick, text: &str) -> Option<String> {
+    // Runs stay sorted and disjoint: hits arrive ordered by end, so a hit can
+    // only overlap or touch the trailing runs.
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for hit in needles.try_find_overlapping_iter(text).ok()? {
+        let (mut start, mut end) = (hit.start(), hit.end());
+        while let Some(&(run_start, run_end)) = runs.last() {
+            if start > run_end {
+                break;
+            }
+            start = start.min(run_start);
+            end = end.max(run_end);
+            runs.pop();
+        }
+        runs.push((start, end));
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (start, end) in runs {
+        out.push_str(text.get(copied..start)?);
+        out.push_str(REDACTED);
+        copied = end;
+    }
+    out.push_str(text.get(copied..)?);
+    Some(out)
+}
+
 /// Entity-decoded, trimmed text of every `<tag>…</tag>` element, found by
 /// text so a reply that does not parse still yields its values.
 fn leaf_texts(xml: &str, tag: &str) -> Vec<String> {
     let open = format!("<{tag}");
-    let close = format!("</{tag}>");
+    let close = format!("/{tag}>");
     let mut texts = Vec::new();
     let mut rest = xml;
     while let Some((_, after_open)) = rest.split_once(open.as_str()) {
@@ -566,11 +614,12 @@ fn leaf_texts(xml: &str, tag: &str) -> Vec<String> {
         if attributes.ends_with('/') {
             continue;
         }
-        let Some((text, tail)) = body.split_once(close.as_str()) else {
-            break;
-        };
+        // Leaf text runs to the next `<`. A malformed leaf (no matching close
+        // tag there) still yields its text, failing closed, and the scan
+        // resumes inside it so the following leaves are not swallowed.
+        let (text, after_lt) = body.split_once('<').unwrap_or((body, ""));
         texts.push(decode_entities(text.trim()));
-        rest = tail;
+        rest = after_lt.strip_prefix(close.as_str()).unwrap_or(body);
     }
     texts
 }
@@ -1044,13 +1093,29 @@ mod tests {
 
     /// Serialized response for a summary whose `Last update status` is `status`.
     fn status_echo(status: &str) -> String {
+        status_echo_with(PROBE_CONFIG, status)
+    }
+
+    /// As [`status_echo`], against `config`; the feed must be named `f`.
+    fn status_echo_with(config: &str, status: &str) -> String {
         let escaped = status
             .replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;");
         let summary = format!("<output>Feed Name : f\n  Last update status : {escaped}\n</output>");
-        let resp = parse(PROBE_CONFIG, Ok(&summary)).expect("parse");
+        let resp = parse(config, Ok(&summary)).expect("parse");
+        assert_eq!(resp.state, SrxState::Active, "feed f must be subscribed");
         serde_json::to_string(&resp).expect("serializes")
+    }
+
+    /// A one-feed config with `server_url` and optional Basic-auth leaves.
+    fn feed_config(server_url: &str, auth: &str) -> String {
+        format!(
+            "<configuration><security><dynamic-address><feed-server>\
+             <name>S</name><url>{server_url}</url>{auth}\
+             <feed-name><name>f</name><path>feeds/junos-dynamic-address/address</path>\
+             </feed-name></feed-server></dynamic-address></security></configuration>"
+        )
     }
 
     fn assert_no_probe_secret(text: &str, context: &str) {
@@ -1171,5 +1236,100 @@ mod tests {
             feeds[0].url,
             "https://feeds.example.net/feeds/junos-dynamic-address/prefix"
         );
+    }
+
+    // ── Fix round 2 ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn lenient_url_forms_still_yield_userinfo_needles() {
+        // The `url` parser accepts these as subscribed feeds, but none has a
+        // literal `://` before the userinfo (or it has an extra `/`).
+        for server_url in [
+            r"https:QQa:QQb@feeds.example.net:8443",
+            r"https:/QQa:QQb@feeds.example.net:8443",
+            r"https:\QQa:QQb@feeds.example.net:8443",
+            r"https:\\QQa:QQb@feeds.example.net:8443",
+            r"https:///QQa:QQb@feeds.example.net:8443",
+        ] {
+            let config = feed_config(server_url, "");
+            for echo in [
+                "url=https://QQa:QQb@h/x",
+                "url:https://QQa:QQb@h/x",
+                "[https://QQa:QQb@h/x]",
+                "{https://QQa:QQb@h/x}",
+                "https://QQa:QQb@h:99999/x",
+                "https://QQa:QQb@",
+                "user QQa rejected",
+                "password QQb invalid",
+                server_url,
+            ] {
+                let json = status_echo_with(&config, echo);
+                for secret in ["QQa", "QQb"] {
+                    assert!(
+                        !json.contains(secret),
+                        "url {server_url}, echo {echo}: leaks {secret}: {json}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn overlapping_secrets_merge_into_one_redaction() {
+        let config = feed_config(
+            "https://feeds.example.net:8443",
+            "<user-name>adminQQ</user-name><password>QQpass</password>",
+        );
+        let status = |echo: &str| -> String {
+            let resp = parse(
+                &config,
+                Ok(&format!(
+                    "<output>Feed Name : f\n  Last update status : {echo}\n</output>"
+                )),
+            )
+            .expect("parse");
+            let mut nodes = resp.data.expect("active").nodes;
+            nodes
+                .remove(0)
+                .feeds
+                .remove(0)
+                .last_update_status
+                .expect("status")
+        };
+        assert_eq!(status("adminQQpass"), REDACTED);
+        assert_eq!(status("x adminQQpass y"), format!("x {REDACTED} y"));
+        // Adjacent occurrences merge too.
+        assert_eq!(status("adminQQQQpass"), REDACTED);
+
+        // A needle overlapping itself.
+        let self_overlap = feed_config(
+            "https://feeds.example.net:8443",
+            "<user-name>QQxQQ</user-name>",
+        );
+        let resp = parse(
+            &self_overlap,
+            Ok("<output>Feed Name : f\n  Last update status : QQxQQxQQ!\n</output>"),
+        )
+        .expect("parse");
+        let got = resp.data.expect("active").nodes[0].feeds[0]
+            .last_update_status
+            .clone();
+        assert_eq!(got.as_deref(), Some("[REDACTED]!"));
+    }
+
+    #[test]
+    fn leaf_texts_skips_a_malformed_leaf_and_continues() {
+        // A mis-closed leaf, a good one, then an unclosed one at the end.
+        let xml = "<url>https://QQa:QQb@x</path><url>https://QQc:QQd@h</url><url>https://QQe:QQf@t";
+        assert_eq!(
+            leaf_texts(xml, "url"),
+            vec![
+                "https://QQa:QQb@x",
+                "https://QQc:QQd@h",
+                "https://QQe:QQf@t"
+            ]
+        );
+        let got = Scrubber::new(xml, &[]).scrub("QQa QQb QQc QQd QQe QQf");
+        assert!(!got.contains("QQ"), "{got}");
     }
 }
