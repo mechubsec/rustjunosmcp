@@ -21,7 +21,7 @@
 //! pass on its summary response is a second, cheap safety net, not a
 //! replacement for that pass.
 
-use super::{JmcpHandler, audit_scope, caller_ctx, mint_request_id};
+use super::{JmcpHandler, audit_scope, caller_ctx, fail_redacted, mint_request_id};
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Extensions};
@@ -1375,17 +1375,6 @@ impl JmcpHandler {
         }
         result.map(|body| CallToolResult::success(vec![ContentBlock::text(body)]))
     }
-}
-
-/// Settle `audit` as failed with the error text run through the same
-/// redaction as client output: a device `<error-message>` can echo a credential
-/// and the audit `error` field must stay secret-free.
-fn fail_redacted(
-    audit: &mut mecmcp_audit::AuditScope,
-    kind: &'static str,
-    error: &impl std::fmt::Display,
-) {
-    audit.fail_kind(kind, super::redact_body(&error.to_string()));
 }
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]

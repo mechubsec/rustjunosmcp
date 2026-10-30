@@ -45,10 +45,10 @@ All notable user-facing changes are recorded here. Format loosely follows
   (number of devices returned, including with `include_blocklist`). It was
   never recorded before, so audit records for these tools gain a `count` field
   (#587).
-- The audit `error` field of SRX tools (workflow, device-open and
-  signature-package failures) is now redacted like client output, so a
-  device `<error-message>` that echoes a credential no longer reaches the
-  audit log. `collect_jtac_support_bundle` workflow failures and the
+- The audit `error` field is now redacted like client output for all tools
+  (Junos and SRX), so a device `<error-message>` that echoes a credential no
+  longer reaches the audit log. Error kinds and client results are
+  unchanged. `collect_jtac_support_bundle` workflow failures and the
   signature-package pre-run checks now settle the audit too.
 
 ### Changed

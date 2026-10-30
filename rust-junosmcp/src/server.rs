@@ -518,6 +518,19 @@ fn record_list_count(audit: &mut AuditScope, listing: &serde_json::Value) {
     }
 }
 
+/// Settle `audit` as failed with `error` run through [`redact_body`], the same
+/// redaction client output gets: a device `<error-message>` can echo a
+/// credential, and the audit `error` field must stay secret-free
+/// (`docs/AUDIT.md`). The single place that builds audit error text from a
+/// non-constant error; constant kinds/strings may still call `fail_kind`.
+pub(super) fn fail_redacted(
+    audit: &mut AuditScope,
+    kind: &'static str,
+    error: &impl std::fmt::Display,
+) {
+    audit.fail_kind(kind, redact_body(&error.to_string()));
+}
+
 /// Helper to construct an `AuditScope` from an `Option<&CallerCtx>`.
 ///
 /// The shared `mecmcp-audit` crate's API split the old single `new(Option<&CallerCtx>, ...)`
@@ -991,7 +1004,7 @@ impl JmcpHandler {
                 record_list_count(&mut audit, v);
                 audit.succeed();
             }
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1019,7 +1032,7 @@ impl JmcpHandler {
                 record_list_count(&mut audit, v);
                 audit.succeed();
             }
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1056,7 +1069,7 @@ impl JmcpHandler {
                 audit.meta("output_bytes", v.to_string().len() as u64);
                 audit.succeed();
             }
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1094,7 +1107,7 @@ impl JmcpHandler {
                 audit.meta("output_bytes", v.to_string().len() as u64);
                 audit.succeed();
             }
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1148,7 +1161,7 @@ impl JmcpHandler {
                 audit.meta("output_bytes", v.to_string().len() as u64);
                 audit.succeed();
             }
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1180,7 +1193,7 @@ impl JmcpHandler {
                 audit.meta("output_bytes", v.to_string().len() as u64);
                 audit.succeed();
             }
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1234,7 +1247,7 @@ impl JmcpHandler {
         .await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1278,7 +1291,7 @@ impl JmcpHandler {
                 .await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1313,7 +1326,7 @@ impl JmcpHandler {
         let result = discard_candidate::handle_with_cancel(args, self.dm.clone(), ct).await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1367,7 +1380,7 @@ impl JmcpHandler {
         .await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1408,7 +1421,7 @@ impl JmcpHandler {
         let result = confirm_commit::handle(args, self.dm.clone(), attribution).await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1446,7 +1459,7 @@ impl JmcpHandler {
                 audit.meta("output_bytes", v.to_string().len() as u64);
                 audit.succeed();
             }
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1483,7 +1496,7 @@ impl JmcpHandler {
         let result = batch::handle(args, self.dm.clone(), self.policy.load_full()).await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1552,7 +1565,7 @@ impl JmcpHandler {
                 }
                 audit.succeed();
             }
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1598,7 +1611,7 @@ impl JmcpHandler {
                 if matches!(e, rust_junosmcp_core::JmcpError::InventoryReadonly) {
                     audit.deny("inventory_readonly");
                 } else {
-                    audit.fail_kind(e.audit_kind(), &e);
+                    fail_redacted(&mut audit, e.audit_kind(), &e);
                 }
                 Err(e)
             }
@@ -1639,7 +1652,7 @@ impl JmcpHandler {
                 if matches!(e, rust_junosmcp_core::JmcpError::InventoryReadonly) {
                     audit.deny("inventory_readonly");
                 } else {
-                    audit.fail_kind(e.audit_kind(), &e);
+                    fail_redacted(&mut audit, e.audit_kind(), &e);
                 }
                 Err(e)
             }
@@ -1679,7 +1692,7 @@ impl JmcpHandler {
                 }
                 audit.succeed();
             }
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1716,7 +1729,7 @@ impl JmcpHandler {
                 }
                 audit.succeed();
             }
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1766,7 +1779,7 @@ impl JmcpHandler {
         .await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1812,7 +1825,7 @@ impl JmcpHandler {
                 }
                 audit.succeed();
             }
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1872,7 +1885,7 @@ impl JmcpHandler {
         .await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1944,7 +1957,7 @@ impl JmcpHandler {
         .await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -1996,7 +2009,7 @@ impl JmcpHandler {
         .await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -2050,7 +2063,7 @@ impl JmcpHandler {
         .await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -2101,7 +2114,7 @@ impl JmcpHandler {
         .await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -2137,7 +2150,7 @@ impl JmcpHandler {
         let result = changeset::get_candidate_fingerprint(args, self.dm.clone()).await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -2175,7 +2188,7 @@ impl JmcpHandler {
         };
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -2212,7 +2225,7 @@ impl JmcpHandler {
             changeset::list_change_sets(args, self.coordinator.clone(), self.dm.clone()).await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
     }
@@ -2359,7 +2372,7 @@ fn record_rejected_call(
         "reject",
         device.into_iter().collect(),
     );
-    audit.fail_kind("dispatch_rejected", message);
+    fail_redacted(&mut audit, "dispatch_rejected", &message);
     // Emitted on drop.
 }
 
