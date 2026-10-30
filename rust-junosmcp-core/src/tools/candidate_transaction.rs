@@ -330,29 +330,43 @@ async fn execute<B: CandidateBackend>(
     // (equivalent to the CLI `configure; rollback 0; exit`) and opens no
     // private database, so the shared dirty changes are the ones cleared (#176).
     if matches!(request.mode, CandidateMode::Discard) {
-        // Discarding pending protected edits on a plane-owned device is as much
-        // a write as committing them, so classify the shared candidate first.
+        // Discarding pending edits on a plane-owned device is as much a write as
+        // committing them, and without a lock it cannot be checked atomically.
+        // Early returns here are not reusable: run() would read that as proof
+        // cleanup succeeded and clear a recorded cleanup taint.
         let mut warning = None;
         if authority.0.is_plane_owned() {
-            let checked = match run_step(deadline, operation_timeout, ct, backend.diff()).await {
-                Ok(diff) => plane_guard::check(
-                    request.tool,
-                    device,
-                    authority.0,
-                    authority.1,
-                    Some(&diff),
-                    request.allow_plane_owned_writes,
-                ),
-                Err(error) => Err(error),
-            };
-            match checked {
-                Ok(found) => warning = found,
+            let diff = match run_step(deadline, operation_timeout, ct, backend.diff()).await {
+                Ok(diff) => diff,
                 Err(error) => {
-                    // Nothing was changed; only a dropped RPC leaves the session uncertain.
-                    let reusable = !matches!(error, JmcpError::Cancelled | JmcpError::Timeout(_));
                     return Execution {
                         result: Err(error),
-                        reusable,
+                        reusable: false,
+                        warning: None,
+                    };
+                }
+            };
+            if diff.trim().is_empty() {
+                // Nothing pending: skip the rollback so there is no window to race.
+                return Execution {
+                    result: Ok(CandidateResult::Discarded),
+                    reusable: false,
+                    warning: None,
+                };
+            }
+            match plane_guard::check_discard(
+                request.tool,
+                device,
+                authority.0,
+                authority.1,
+                &diff,
+                request.allow_plane_owned_writes,
+            ) {
+                Ok(found) => warning = found,
+                Err(error) => {
+                    return Execution {
+                        result: Err(error),
+                        reusable: false,
                         warning: None,
                     };
                 }
@@ -1159,15 +1173,45 @@ mod tests {
             execution.result,
             Err(JmcpError::PlaneManagedConfig { .. })
         ));
-        assert!(execution.reusable);
+        assert!(
+            !execution.reusable,
+            "a refusal must not read as cleanup proof"
+        );
         assert_eq!(state.lock().unwrap().events, vec![Op::Diff]);
         assert!(state.lock().unwrap().dirty, "pending edits must survive");
     }
 
+    /// Discard cannot lock, so the diff could change before rollback runs:
+    /// any pending change is refused, not just a protected one.
     #[tokio::test]
-    async fn sd_discard_of_unprotected_edits_reverts() {
+    async fn sd_discard_of_unprotected_pending_edits_is_refused_untouched() {
         let (execution, state) =
             run_discard_as(JunosAuthority::SecurityDirectorCloud, INTERFACE_DIFF, false).await;
+        assert!(matches!(
+            execution.result,
+            Err(JmcpError::PlaneManagedConfig { .. })
+        ));
+        assert!(!execution.reusable);
+        assert_eq!(state.lock().unwrap().events, vec![Op::Diff]);
+        assert!(state.lock().unwrap().dirty);
+    }
+
+    #[tokio::test]
+    async fn sd_discard_of_clean_candidate_skips_rollback() {
+        let (execution, state) =
+            run_discard_as(JunosAuthority::SecurityDirectorCloud, "", false).await;
+        assert!(matches!(execution.result, Ok(CandidateResult::Discarded)));
+        assert!(
+            !execution.reusable,
+            "no cleanup ran, so no taint is cleared"
+        );
+        assert_eq!(state.lock().unwrap().events, vec![Op::Diff]);
+    }
+
+    #[tokio::test]
+    async fn sd_discard_of_unprotected_edits_with_flag_reverts_silently() {
+        let (execution, state) =
+            run_discard_as(JunosAuthority::SecurityDirectorCloud, INTERFACE_DIFF, true).await;
         assert!(matches!(execution.result, Ok(CandidateResult::Discarded)));
         assert!(execution.warning.is_none());
         assert_eq!(state.lock().unwrap().events, vec![Op::Diff, Op::Rollback]);

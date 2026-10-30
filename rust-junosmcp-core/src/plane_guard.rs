@@ -320,6 +320,50 @@ pub fn check(
     ))
 }
 
+/// Decide whether `discard_candidate` may revert the shared candidate.
+///
+/// Discard cannot lock (Junos refuses to lock a modified candidate), so on a
+/// plane-owned device another session could add protected edits between this
+/// check and the rollback. Any pending change is therefore refused unless
+/// `allow_plane_owned_writes` is set; an empty `diff` needs no discard at all.
+pub fn check_discard(
+    tool: &'static str,
+    device: &str,
+    authority: &JunosAuthority,
+    source: AuthoritySource,
+    diff: &str,
+    allow_plane_owned_writes: bool,
+) -> Result<Option<String>, JmcpError> {
+    let checked = check(
+        tool,
+        device,
+        authority,
+        source,
+        Some(diff),
+        allow_plane_owned_writes,
+    )?;
+    if checked.is_some()
+        || allow_plane_owned_writes
+        || !authority.is_plane_owned()
+        || diff.trim().is_empty()
+    {
+        return Ok(checked);
+    }
+    Err(refuse(
+        tool,
+        device,
+        authority,
+        format!(
+            "the shared candidate has pending changes, and on this {authority}-managed SRX ({source}) \
+             a discard cannot be checked atomically: another session could add security changes \
+             before it runs. Ask the user to review and discard them in the device CLI \
+             (`configure`, then `rollback 0`).",
+            authority = authority.as_str(),
+            source = source.as_str()
+        ),
+    ))
+}
+
 /// Build the refusal error for `authority`.
 fn refuse(
     tool: &'static str,
@@ -715,6 +759,46 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(warning.contains("delete and re-import"));
+    }
+
+    fn discard(
+        authority: &JunosAuthority,
+        diff: &str,
+        allow: bool,
+    ) -> Result<Option<String>, JmcpError> {
+        check_discard(
+            "discard_candidate",
+            "srx1",
+            authority,
+            AuthoritySource::Declared,
+            diff,
+            allow,
+        )
+    }
+
+    #[test]
+    fn discard_on_sd_refuses_any_pending_change() {
+        let sd = JunosAuthority::SecurityDirectorCloud;
+        let unprotected = discard(&sd, INTERFACE_DIFF, false).unwrap_err().to_string();
+        assert!(unprotected.contains("rollback 0"));
+        let protected = discard(&sd, SECURITY_DIFF, false).unwrap_err().to_string();
+        assert!(protected.contains("security nat"));
+    }
+
+    #[test]
+    fn discard_passes_when_empty_flagged_or_local() {
+        let sd = JunosAuthority::SecurityDirectorCloud;
+        assert!(matches!(discard(&sd, "", false), Ok(None)));
+        assert!(matches!(discard(&sd, INTERFACE_DIFF, true), Ok(None)));
+        assert!(matches!(discard(&sd, SECURITY_DIFF, true), Ok(Some(_))));
+        assert!(matches!(
+            discard(&JunosAuthority::Local, SECURITY_DIFF, false),
+            Ok(None)
+        ));
+        assert!(matches!(
+            discard(&JunosAuthority::Unknown, SECURITY_DIFF, false),
+            Ok(None)
+        ));
     }
 
     #[test]
