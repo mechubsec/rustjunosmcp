@@ -619,10 +619,20 @@ impl DeviceTransaction for JunosTransaction {
         // Plane guard: a declared authority (read fresh, so a re-tag since create
         // is honoured) wins; only an `Unknown` device is probed. The candidate is
         // locked, so every refusal or probe failure reverts and releases it.
+        // The endpoint is pinned with it: every later inventory read in this
+        // stage must describe the device this locked session is connected to.
         let declared = {
             let inv = self.device_manager.inventory();
-            inv.get(&self.router)
-                .map(|entry| entry.config_authority.clone())
+            inv.get(&self.router).map(|entry| {
+                (
+                    entry.config_authority.clone(),
+                    (entry.ip.clone(), entry.port),
+                )
+            })
+        };
+        let (declared, pinned_endpoint) = match declared {
+            Ok((declared, endpoint)) => (Ok(declared), Some(endpoint)),
+            Err(error) => (Err(error), None),
         };
         let resolved = match declared {
             Ok(declared) => plane_guard::resolve_authority(&mut dev, &declared).await,
@@ -673,10 +683,20 @@ impl DeviceTransaction for JunosTransaction {
                 // rustjunosmcp#495).
                 let inventory_lookup: Result<(_, _, _), JmcpError> = {
                     let inv = self.device_manager.inventory();
-                    inv.get(&self.router).map(|entry| {
-                        (
-                            // Only ever tightens: a re-tag to a plane mid-apply
-                            // counts (fresh read), and a reload can never loosen
+                    inv.get(&self.router).and_then(|entry| {
+                        // A reload that retargeted this name would mix another
+                        // device's authority and logins into this session's
+                        // guard: fail closed instead.
+                        if pinned_endpoint.as_ref() != Some(&(entry.ip.clone(), entry.port)) {
+                            return Err(JmcpError::Validation(format!(
+                                "device '{}' was retargeted in the inventory during apply; \
+                                 refusing to continue on the old session",
+                                self.router
+                            )));
+                        }
+                        Ok((
+                            // Same device, so only ever tighten: a re-tag to a
+                            // plane mid-apply counts, and a reload cannot loosen
                             // the plane resolved for this locked session.
                             if entry.config_authority.is_plane_owned() {
                                 entry.config_authority.clone()
@@ -687,7 +707,7 @@ impl DeviceTransaction for JunosTransaction {
                             },
                             entry.plane_commit_logins.clone(),
                             entry.username.clone(),
-                        )
+                        ))
                     })
                 };
 
