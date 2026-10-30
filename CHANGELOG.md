@@ -65,6 +65,10 @@ All notable user-facing changes are recorded here. Format loosely follows
   `commands[].value`) now also get the Junos-only key vocabulary that text
   bodies already had, so a Junos-only secret such as `privacy-key` is masked
   in batch output as it is in `execute_junos_command` output (#579).
+- `get_device_list` and `get_router_list` now record the `count` audit meta
+  (number of devices returned, including with `include_blocklist`). It was
+  never recorded before, so audit records for these tools gain a `count` field
+  (#587).
 
 ### Changed
 
