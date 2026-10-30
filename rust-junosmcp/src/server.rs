@@ -3870,15 +3870,15 @@ mod redact_last_mile_tests {
     /// like the single-command path; a text value beside it keeps #579 text.
     #[test]
     fn redact_body_masks_xml_batch_values() {
-        let secret = "Zq9wXv7LmP";
+        let probe = "Zq9wXv7LmP";
         let body = serde_json::json!([{"router": "r1", "commands": [
             {"command": "show configuration | display xml", "ok": true,
-             "value": format!("<configuration><snmp><privacy-key>{secret}</privacy-key></snmp></configuration>")},
+             "value": format!("<configuration><snmp><privacy-key>{probe}</privacy-key></snmp></configuration>")},
             {"command": "show security flow session summary", "ok": true,
              "value": "Valid sessions: 12\nthen log session-init"}
         ]}]);
         let redacted = redact_body(&body.to_string());
-        assert!(!redacted.contains(secret), "XML secret leaked: {redacted}");
+        assert!(!redacted.contains(probe), "XML secret leaked: {redacted}");
         assert!(
             redacted.contains("Valid sessions: 12") && redacted.contains("then log session-init"),
             "session text lost: {redacted}"
@@ -3889,16 +3889,16 @@ mod redact_last_mile_tests {
     /// vocabulary too, in a batch value and on the single-command path.
     #[test]
     fn redact_body_masks_cli_text_inside_xml_output() {
-        let secret = "Zq9wXv7LmP";
+        let probe = "Zq9wXv7LmP";
         let xml = format!(
-            "<rpc-reply><output>set snmp v3 usm local-engine user u privacy-aes128 privacy-key \"{secret}\"</output></rpc-reply>"
+            "<rpc-reply><output>set snmp v3 usm local-engine user u privacy-aes128 privacy-key \"{probe}\"</output></rpc-reply>"
         );
         let batch = serde_json::json!([{"router": "r1", "commands": [
             {"command": "show configuration", "ok": true, "value": xml}
         ]}]);
         for body in [batch.to_string(), xml.clone()] {
             let redacted = redact_body(&body);
-            assert!(!redacted.contains(secret), "leaked: {redacted}");
+            assert!(!redacted.contains(probe), "leaked: {redacted}");
         }
     }
 
@@ -3907,16 +3907,16 @@ mod redact_last_mile_tests {
     /// #579 session text in the same value survives.
     #[test]
     fn redact_body_applies_junos_vocabulary_to_batch_values() {
-        let secret = "Zq9wXv7LmP";
+        let probe = "Zq9wXv7LmP";
         let value = format!(
-            "set snmp v3 usm local-engine user u privacy-des privacy-key \"{secret}\"\nValid sessions: 12\nthen log session-init"
+            "set snmp v3 usm local-engine user u privacy-des privacy-key \"{probe}\"\nValid sessions: 12\nthen log session-init"
         );
         let body = serde_json::json!([{"router": "r1", "commands": [
             {"command": "show configuration", "ok": true, "value": value}
         ]}]);
         let redacted = redact_body(&body.to_string());
         assert!(
-            !redacted.contains(secret),
+            !redacted.contains(probe),
             "Junos-only secret leaked: {redacted}"
         );
         assert!(
@@ -3981,12 +3981,12 @@ mod redact_last_mile_tests {
         let value: Value = serde_json::from_str(&redacted).unwrap();
         assert_eq!(value, json, "non-secret session keywords were masked");
 
-        let secret = serde_json::json!({
+        let probe = serde_json::json!({
             "session-id": "FAKEsessionvalue",
             "session-token": "FAKEsessiontoken",
             "limit-session": { "password": "FAKEpw" },
         });
-        let redacted = redact_body(&secret.to_string());
+        let redacted = redact_body(&probe.to_string());
         assert!(
             !redacted.contains("FAKEsession") && !redacted.contains("FAKEpw"),
             "session secret leaked"
