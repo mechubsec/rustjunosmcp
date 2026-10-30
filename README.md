@@ -888,7 +888,7 @@ its next push. Set `config_authority` on the device in `devices.json`:
 |-------|---------|
 | `local` | This server owns the config. No plane checks. |
 | `mist` | Managed by Juniper Mist. Read-only through this server. |
-| `security-director-cloud` | Security Director Cloud owns `security`, `applications` and `schedulers`. |
+| `security-director-cloud` | Security Director Cloud owns `security`, `applications`, `schedulers` and its `system services outbound-ssh` session. |
 | `security-director-onprem` | Security Director On-Prem owns the same trees. |
 | `unknown` | The default. The device is probed before each configuration write (see below). |
 
@@ -913,11 +913,18 @@ writable. A probe that fails refuses the write (fail closed).
   it), then releases it; `create_junos_change_set` already refuses a payload
   plan for a device declared `mist`.
 - Security Director: only a change whose `show | compare` diff touches
-  `security`, `applications` or `schedulers`, including through `groups`,
-  `logical-systems` or `tenants`. The rest of the config (interfaces, routing,
-  system) stays writable, with one conservative exception: a top-level
-  `apply-groups` or `apply-groups-except` change is refused too, because the
-  group may carry `security` configuration. The refusal reverts the candidate and releases
+  `security`, `applications`, `schedulers` or `system services outbound-ssh`,
+  including through `groups`, `logical-systems` or `tenants`. Outbound-ssh is
+  Security Director's connection to the SRX: changing it can disconnect the
+  device, and on an `unknown` device deleting it would also defeat detection.
+  Deactivating `system` or `system services` as a whole counts as touching it,
+  since the diff hides the body.
+  If Security Director no longer manages the device, declare
+  `config_authority: "local"`. The rest of the config (interfaces, routing,
+  the rest of system) stays writable, with two conservative exceptions, because the
+  group may carry `security` configuration: a top-level `apply-groups` or
+  `apply-groups-except` change, and deactivating a whole group, logical system
+  or tenant (the diff hides its body). The refusal reverts the candidate and releases
   the lock, and names the tool to use instead (for example `prepare_sdc_nat_write`
   or `plan_mist_change`).
 - Tools covered: `load_and_commit_config`, `render_and_apply_j2_template`,

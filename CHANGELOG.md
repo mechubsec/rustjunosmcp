@@ -13,7 +13,11 @@ All notable user-facing changes are recorded here. Format loosely follows
   from `show configuration system services outbound-ssh` (Mist, Security
   Director Cloud, Security Director On-Prem). Mist devices are read-only.
   Security Director devices refuse only changes whose `show | compare` diff
-  touches `security`, `applications` or `schedulers`. The direct candidate tools
+  touches `security`, `applications`, `schedulers` or `system services
+  outbound-ssh` (SD's own connection to the device), plus conservative refusals
+  for a top-level `apply-groups` change and for deactivating a whole `system`,
+  `system services`, group, logical system or tenant, whose body the diff hides.
+  The direct candidate tools
   (`load_and_commit_config`, `render_and_apply_j2_template`,
   `commit_check_config`) enforce this against the real diff, then revert and
   release the lock on refusal; `rollback_config` previews are checked the same
