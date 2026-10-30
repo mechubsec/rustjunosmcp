@@ -1280,9 +1280,14 @@ impl JmcpHandler {
         let hash = rust_junosmcp_core::tools::transfer_file::hex32(&digest);
         audit.meta("config_sha256", hash);
 
-        let result =
-            commit_check::handle_with_cancel(args, self.dm.clone(), self.policy.load_full(), ct)
-                .await;
+        let result = commit_check::handle_with_cancel(
+            args,
+            self.dm.clone(),
+            self.policy.load_full(),
+            self.allow_plane_owned_writes,
+            ct,
+        )
+        .await;
         match &result {
             Ok(_) => audit.succeed(),
             Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
@@ -1317,7 +1322,13 @@ impl JmcpHandler {
             return Self::scope_to_call_result(e);
         }
 
-        let result = discard_candidate::handle_with_cancel(args, self.dm.clone(), ct).await;
+        let result = discard_candidate::handle_with_cancel(
+            args,
+            self.dm.clone(),
+            self.allow_plane_owned_writes,
+            ct,
+        )
+        .await;
         match &result {
             Ok(_) => audit.succeed(),
             Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
@@ -1550,8 +1561,14 @@ impl JmcpHandler {
             audit_confirm_meta(&mut audit, args.confirm_timeout_mins);
         }
 
-        let result =
-            template::handle_with_cancel(args, self.dm.clone(), self.policy.load_full(), ct).await;
+        let result = template::handle_with_cancel(
+            args,
+            self.dm.clone(),
+            self.policy.load_full(),
+            self.allow_plane_owned_writes,
+            ct,
+        )
+        .await;
         match &result {
             Ok(v) => {
                 if let Some(rendered) = v.get("rendered").and_then(|r| r.as_str()) {

@@ -36,41 +36,29 @@ pub async fn handle(
 
 /// Cancellable variant of `handle` for use in transport shutdown paths.
 ///
-/// `_allow_plane_owned_writes` is unused: a plane-owned commit is refused
-/// unconditionally below (MEC-1879, P5c), so the flag has no effect here. The
-/// parameter stays so this handler's signature matches the others the CLI
-/// dispatches to generically.
+/// `allow_plane_owned_writes` only softens the plane guard inside the candidate
+/// transaction (Mist, or a protected-hierarchy diff on Security Director). A
+/// `commit=true` on a declared plane-owned device is refused unconditionally
+/// below (MEC-1879, P5c), flag or not.
 pub async fn handle_with_cancel(
     args: RollbackConfigArgs,
     dm: Arc<DeviceManager>,
-    _allow_plane_owned_writes: bool,
+    allow_plane_owned_writes: bool,
     ct: CancellationToken,
 ) -> Result<Value, JmcpError> {
-    // Confirm the router exists and check config authority.
-    let authority_warning: Option<String> = {
-        let inv = dm.inventory();
-        let device_entry = inv.get(&args.device)?;
+    // Confirm the router exists.
+    let device_entry_authority = dm.inventory().get(&args.device)?.config_authority.clone();
 
-        // Only check if actually committing (preview mode is read-only).
-        if args.commit {
-            // Plane-owned rollback commits are refused unconditionally here,
-            // even with --allow-plane-owned-writes (MEC-1879, P5c): the
-            // rollback-depth guard only exists on the change-set path, so a
-            // direct-commit rollback has no equivalent safeguard to run under.
-            if device_entry.config_authority.is_plane_owned() {
-                return Err(JmcpError::PlaneOwnedRollbackConfigRefused {
-                    device: args.device.clone(),
-                    authority: device_entry.config_authority.as_str().to_string(),
-                });
-            }
-
-            // Authority is Local or Unknown here (plane-owned already
-            // returned above), so there is never a warning to attach.
-            None
-        } else {
-            None
-        }
-    };
+    // Plane-owned rollback commits are refused unconditionally here, even with
+    // --allow-plane-owned-writes (MEC-1879, P5c): the rollback-depth guard only
+    // exists on the change-set path, so a direct-commit rollback has no
+    // equivalent safeguard to run under. Preview mode is read-only.
+    if args.commit && device_entry_authority.is_plane_owned() {
+        return Err(JmcpError::PlaneOwnedRollbackConfigRefused {
+            device: args.device.clone(),
+            authority: device_entry_authority.as_str().to_string(),
+        });
+    }
 
     // Validate rollback version 0..=49.
     let version = validate_rollback_version(args.version)?;
@@ -104,7 +92,7 @@ pub async fn handle_with_cancel(
         }
     };
 
-    match candidate_transaction::run(
+    let (result, authority_warning) = candidate_transaction::run(
         &dm,
         &args.device,
         CandidateRequest {
@@ -113,19 +101,25 @@ pub async fn handle_with_cancel(
             mode,
             // Unused: this loads an archived rollback, not a caller payload.
             load_action: rustez::LoadAction::Merge,
+            tool: "rollback_config",
+            allow_plane_owned_writes,
         },
         timeout_dur,
         &ct,
     )
-    .await?
-    {
+    .await?;
+    match result {
         CandidateResult::DryRun { diff } => {
             // Preview mode: config loaded and diffed, then discarded.
-            Ok(json!({
+            let mut result = json!({
                 "committed": false,
                 "diff": diff,
                 "version": version
-            }))
+            });
+            if let Some(warning) = authority_warning {
+                result["warning"] = json!(warning);
+            }
+            Ok(result)
         }
         CandidateResult::Committed { diff } => {
             // Commit succeeded (normal or confirmed).
@@ -292,5 +286,34 @@ mod tests {
         )
         .await;
         assert!(matches!(r, Err(JmcpError::BadRollbackVersion(50))));
+    }
+
+    /// Rollback preview touches the candidate, so a Mist device is refused
+    /// before connecting even with `commit=false`.
+    #[tokio::test]
+    async fn mist_preview_is_refused_before_connect() {
+        let inv = inv_with(
+            r#"{"r1":{"ip":"203.0.113.1","port":1,"username":"u","auth":{"type":"password","password":"x"},"config_authority":"mist"}}"#,
+        );
+        let dm = Arc::new(DeviceManager::new(inv));
+        let r = handle(
+            RollbackConfigArgs {
+                device: "r1".into(),
+                version: 1,
+                commit: false,
+                confirm_timeout_mins: None,
+                commit_comment: None,
+                timeout: 5,
+            },
+            dm,
+            false,
+        )
+        .await;
+        match r {
+            Err(e @ JmcpError::PlaneManagedConfig { .. }) => {
+                assert_eq!(e.audit_kind(), "blocked");
+            }
+            other => panic!("expected PlaneManagedConfig, got {other:?}"),
+        }
     }
 }

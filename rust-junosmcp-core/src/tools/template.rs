@@ -107,8 +107,16 @@ pub async fn handle(
     args: TemplateArgs,
     dm: Arc<DeviceManager>,
     policy: Arc<Policy>,
+    allow_plane_owned_writes: bool,
 ) -> Result<serde_json::Value, JmcpError> {
-    handle_with_cancel(args, dm, policy, CancellationToken::new()).await
+    handle_with_cancel(
+        args,
+        dm,
+        policy,
+        allow_plane_owned_writes,
+        CancellationToken::new(),
+    )
+    .await
 }
 
 /// Cancellable variant of `handle` for use in transport shutdown paths.
@@ -116,6 +124,7 @@ pub async fn handle_with_cancel(
     args: TemplateArgs,
     dm: Arc<DeviceManager>,
     policy: Arc<Policy>,
+    allow_plane_owned_writes: bool,
     ct: CancellationToken,
 ) -> Result<serde_json::Value, JmcpError> {
     let devices = resolve_devices(&args)?;
@@ -223,6 +232,7 @@ pub async fn handle_with_cancel(
             &args.commit_comment,
             args.dry_run,
             args.confirm_timeout_mins,
+            allow_plane_owned_writes,
             &dm,
             Duration::from_secs(args.timeout),
             &ct,
@@ -230,13 +240,23 @@ pub async fn handle_with_cancel(
         .await
         {
             Err(JmcpError::Cancelled) => return Err(JmcpError::Cancelled),
-            Ok(CommitOneOutcome::DryRun { diff }) => json!({
-                "router": d,
-                "rendered_template": rendered,
-                "config_format": format,
-                "diff": diff,
-            }),
-            Ok(CommitOneOutcome::Committed { echo, confirmed }) => {
+            Ok(CommitOneOutcome::DryRun { diff, warning }) => {
+                let mut row = json!({
+                    "router": d,
+                    "rendered_template": rendered,
+                    "config_format": format,
+                    "diff": diff,
+                });
+                if let Some(warning) = warning {
+                    row["warning"] = json!(warning);
+                }
+                row
+            }
+            Ok(CommitOneOutcome::Committed {
+                echo,
+                confirmed,
+                warning,
+            }) => {
                 let mut row = json!({
                     "router": d,
                     "rendered_template": rendered,
@@ -256,6 +276,9 @@ pub async fn handle_with_cancel(
                          Send another commit to confirm with confirm_commit.",
                         mins
                     ));
+                }
+                if let Some(warning) = warning {
+                    row["warning"] = json!(warning);
                 }
                 row
             }
@@ -277,10 +300,12 @@ pub async fn handle_with_cancel(
 enum CommitOneOutcome {
     DryRun {
         diff: String,
+        warning: Option<String>,
     },
     Committed {
         echo: String,
         confirmed: Option<u32>,
+        warning: Option<String>,
     },
 }
 
@@ -297,6 +322,7 @@ async fn commit_one(
     commit_comment: &str,
     dry_run: bool,
     confirm_timeout_mins: Option<u32>,
+    allow_plane_owned_writes: bool,
     dm: &Arc<DeviceManager>,
     timeout: Duration,
     ct: &CancellationToken,
@@ -316,7 +342,7 @@ async fn commit_one(
             ),
         }
     };
-    match candidate_transaction::run(
+    let (result, warning) = candidate_transaction::run(
         dm,
         device_name,
         CandidateRequest {
@@ -324,16 +350,19 @@ async fn commit_one(
             rollback_source: None,
             mode,
             load_action,
+            tool: "render_and_apply_j2_template",
+            allow_plane_owned_writes,
         },
         timeout,
         ct,
     )
-    .await?
-    {
-        CandidateResult::DryRun { diff } => Ok(CommitOneOutcome::DryRun { diff }),
+    .await?;
+    match result {
+        CandidateResult::DryRun { diff } => Ok(CommitOneOutcome::DryRun { diff, warning }),
         CandidateResult::Committed { .. } => Ok(CommitOneOutcome::Committed {
             echo: commit_comment,
             confirmed,
+            warning,
         }),
         CandidateResult::CommitFailed { error, .. } => Err(JmcpError::Validation(error)),
         _ => unreachable!("template transaction returned the wrong result kind"),
@@ -547,7 +576,9 @@ mod tests {
         );
         let dm = Arc::new(DeviceManager::new(inv.clone()));
         let pol = Arc::new(Policy::build(&inv).unwrap());
-        let r = handle(args_render_only(vec!["r1"]), dm, pol).await.unwrap();
+        let r = handle(args_render_only(vec!["r1"]), dm, pol, false)
+            .await
+            .unwrap();
         let rows = r["results"].as_array().unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["router"], "r1");
@@ -563,7 +594,7 @@ mod tests {
         );
         let dm = Arc::new(DeviceManager::new(inv.clone()));
         let pol = Arc::new(Policy::build(&inv).unwrap());
-        let r = handle(args_render_only(vec!["nope"]), dm, pol).await;
+        let r = handle(args_render_only(vec!["nope"]), dm, pol, false).await;
         assert!(matches!(r, Err(JmcpError::UnknownRouter(_))));
     }
 
@@ -576,7 +607,7 @@ mod tests {
         let pol = Arc::new(Policy::build(&inv).unwrap());
         let mut a = args_render_only(vec!["r1"]);
         a.device_name = Some("r1".into());
-        let r = handle(a, dm, pol).await;
+        let r = handle(a, dm, pol, false).await;
         assert!(matches!(r, Err(JmcpError::Validation(_))));
     }
 
@@ -600,7 +631,7 @@ mod tests {
         let mut a = args_apply(vec!["r1"], false);
         a.template_content = "set foo\ndelete protocols bgp".into();
         a.vars_content = "{}".into();
-        let r = handle(a, dm, pol).await.unwrap();
+        let r = handle(a, dm, pol, false).await.unwrap();
         let rows = r["results"].as_array().unwrap();
         assert_eq!(rows.len(), 1);
         assert!(rows[0]["error"].as_str().unwrap().contains("delete *"));
@@ -620,7 +651,7 @@ mod tests {
         a.template_content = "system { host-name r1; }".into();
         a.vars_content = "{}".into();
         a.config_format = Some("text".into());
-        let r = handle(a, dm, pol).await;
+        let r = handle(a, dm, pol, false).await;
         assert!(
             matches!(r, Err(JmcpError::TemplateFormatMismatch { ref format }) if format == "text")
         );
@@ -640,7 +671,7 @@ mod tests {
         let pol = Arc::new(Policy::build(&inv).unwrap());
         let mut a = args_render_only(vec!["r1"]);
         a.mode = "override".into();
-        let r = handle(a, dm, pol).await;
+        let r = handle(a, dm, pol, false).await;
         match r {
             Err(JmcpError::OverrideRequiresChangeSet { tool }) => {
                 assert_eq!(tool, "render_and_apply_j2_template");
@@ -658,7 +689,24 @@ mod tests {
         let pol = Arc::new(Policy::build(&inv).unwrap());
         let mut a = args_render_only(vec!["r1"]);
         a.mode = "wipe".into();
-        let r = handle(a, dm, pol).await;
+        let r = handle(a, dm, pol, false).await;
         assert!(matches!(r, Err(JmcpError::BadLoadMode(ref s)) if s == "wipe"));
+    }
+
+    #[tokio::test]
+    async fn apply_to_mist_device_is_refused_in_the_row_before_connect() {
+        let inv = inv_with(
+            r#"{"r1":{"ip":"203.0.113.1","port":1,"username":"u","auth":{"type":"password","password":"x"},"config_authority":"mist"}}"#,
+        );
+        let dm = Arc::new(DeviceManager::new(inv.clone()));
+        let pol = Arc::new(Policy::build(&inv).unwrap());
+        let mut args = args_render_only(vec!["r1"]);
+        args.apply_config = true;
+        let r = handle(args, dm, pol, false).await.unwrap();
+        let error = r["results"][0]["error"].as_str().unwrap();
+        assert!(
+            error.contains("render_and_apply_j2_template") && error.contains("Juniper Mist"),
+            "unexpected row error: {error}"
+        );
     }
 }

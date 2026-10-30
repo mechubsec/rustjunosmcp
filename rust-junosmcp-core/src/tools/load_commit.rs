@@ -48,19 +48,9 @@ pub async fn handle_with_cancel(
 ) -> Result<Value, JmcpError> {
     validate_input_length("config_text", &args.config_text)?;
 
-    // Confirm the router exists and check config authority before policy check.
-    let authority_warning = {
-        let inv = dm.inventory();
-        let device_entry = inv.get(&args.device)?;
-
-        // Check config_authority: refuse if plane-owned and not explicitly allowed.
-        crate::helpers::check_plane_owned_operation(
-            "load_and_commit_config",
-            &args.device,
-            &device_entry.config_authority,
-            allow_plane_owned_writes,
-        )?
-    };
+    // Confirm the router exists before consulting the policy. Plane
+    // ownership is checked inside the candidate transaction.
+    let _ = dm.inventory().get(&args.device)?;
 
     // The format gate is part of the policy check; downstream
     // build_config_payload still validates the value separately.
@@ -125,7 +115,7 @@ pub async fn handle_with_cancel(
             None,
         ),
     };
-    let result = candidate_transaction::run(
+    let (result, authority_warning) = candidate_transaction::run(
         &dm,
         &args.device,
         CandidateRequest {
@@ -133,6 +123,8 @@ pub async fn handle_with_cancel(
             rollback_source: None,
             mode,
             load_action,
+            tool: "load_and_commit_config",
+            allow_plane_owned_writes,
         },
         timeout_dur,
         &ct,
@@ -439,6 +431,38 @@ mod tests {
                 assert_eq!(tool, "load_and_commit_config");
             }
             other => panic!("expected OverrideRequiresChangeSet, got {other:?}"),
+        }
+    }
+
+    /// Mist devices are read-only: refused before any connection attempt
+    /// (203.0.113.1:1 would otherwise surface a connect error).
+    #[tokio::test]
+    async fn mist_device_is_refused_before_connect() {
+        let inv = inv_with(
+            r#"{"r1":{"ip":"203.0.113.1","port":1,"username":"u","auth":{"type":"password","password":"x"},"config_authority":"mist"}}"#,
+        );
+        let dm = Arc::new(DeviceManager::new(inv.clone()));
+        let pol = Arc::new(Policy::build(&inv).unwrap());
+        let r = handle(
+            LoadCommitArgs {
+                device: "r1".into(),
+                config_text: "set system host-name x".into(),
+                config_format: "set".into(),
+                mode: "merge".into(),
+                commit_comment: "test".into(),
+                confirm_timeout_mins: None,
+                timeout: 5,
+            },
+            dm,
+            pol,
+            false,
+        )
+        .await;
+        match r {
+            Err(e @ JmcpError::PlaneManagedConfig { .. }) => {
+                assert_eq!(e.audit_kind(), "blocked");
+            }
+            other => panic!("expected PlaneManagedConfig, got {other:?}"),
         }
     }
 }
