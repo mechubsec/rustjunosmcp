@@ -4,9 +4,11 @@
 //! provide the change-set lifecycle (fingerprint → stage → diff → validate →
 //! commit) for Junos devices.
 
+use crate::config_authority::JunosAuthority;
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
 use crate::helpers::build_config_payload;
+use crate::plane_guard;
 use crate::tools::candidate_transaction::CheckOutcome;
 use async_trait::async_trait;
 use mecmcp_audit::Attribution;
@@ -258,6 +260,14 @@ pub struct JunosTransaction {
     /// every existing cleanup path in that method still operates on an owned
     /// local and is unchanged.
     locked_session: tokio::sync::Mutex<Option<crate::device_manager::PooledDevice>>,
+    /// Downgrade plane-owned refusals to warnings (`--allow-plane-owned-writes`).
+    allow_plane_owned_writes: bool,
+    /// Plane-guard warning recorded by `stage()` when the flag let a write through.
+    plane_warning: std::sync::Mutex<Option<String>>,
+    /// Plane-guard refusal from `stage()` as `(tool, device, authority, detail)`,
+    /// kept because the coordinator stringifies stage errors and the caller
+    /// needs the typed `PlaneManagedConfig` back for its audit kind and code.
+    plane_refusal: std::sync::Mutex<Option<(&'static str, String, String, String)>>,
 }
 
 impl JunosTransaction {
@@ -267,6 +277,119 @@ impl JunosTransaction {
             device_manager,
             router,
             locked_session: tokio::sync::Mutex::new(None),
+            allow_plane_owned_writes: false,
+            plane_warning: std::sync::Mutex::new(None),
+            plane_refusal: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Let plane-owned writes through with a warning instead of refusing them.
+    pub fn with_allow_plane_owned_writes(mut self, allow: bool) -> Self {
+        self.allow_plane_owned_writes = allow;
+        self
+    }
+
+    /// Warning recorded by `stage()` for an allowed plane-owned write, if any.
+    pub fn plane_warning(&self) -> Option<String> {
+        self.plane_warning
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Record a warning; a `None` leaves any recorded one alone.
+    fn record_plane_warning(&self, warning: Option<String>) {
+        let Some(warning) = warning else { return };
+        *self
+            .plane_warning
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(warning);
+    }
+
+    /// The plane-guard refusal `stage()` returned, rebuilt as the typed error.
+    pub fn take_plane_refusal(&self) -> Option<JmcpError> {
+        let (tool, device, authority, detail) = self
+            .plane_refusal
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()?;
+        Some(JmcpError::PlaneManagedConfig {
+            tool,
+            device,
+            authority,
+            detail,
+        })
+    }
+
+    /// Remember `error` if it is a plane refusal. A `CandidateCleanupFailed`
+    /// wrapping one is not recorded: the cleanup failure must stay visible.
+    fn record_plane_refusal(&self, error: &JmcpError) {
+        let JmcpError::PlaneManagedConfig {
+            tool,
+            device,
+            authority,
+            detail,
+        } = error
+        else {
+            return;
+        };
+        *self
+            .plane_refusal
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some((tool, device.clone(), authority.clone(), detail.clone()));
+    }
+
+    /// Revert anything loaded into the candidate and release the lock, then
+    /// return `primary` (or a `CandidateCleanupFailed` carrying it when cleanup
+    /// itself failed). `context` names the refusal for the log lines.
+    async fn revert_and_release(
+        &self,
+        dev: &mut crate::device_manager::PooledDevice,
+        loaded: usize,
+        primary: JmcpError,
+        context: &str,
+    ) -> JmcpError {
+        let mut revert_err_opt = None;
+        let mut unlock_err_opt = None;
+
+        if loaded > 0 {
+            let reverted = match dev.config() {
+                Ok(mut cfg) => cfg.rollback(0).await.map_err(|error| error.to_string()),
+                Err(error) => Err(error.to_string()),
+            };
+            if let Err(revert_error) = reverted {
+                tracing::error!(
+                    router = %self.router,
+                    loaded,
+                    primary_error = %primary,
+                    revert_error = %revert_error,
+                    "failed to revert partial stage after {context}; session tainted"
+                );
+                revert_err_opt = Some(revert_error);
+            }
+        }
+
+        // The revert above dirtied the candidate, so this closes rather
+        // than unlocks — under our own lock, never after it (#316).
+        if let Err(unlock_error) = dev.release_lock().await {
+            tracing::error!(
+                router = %self.router,
+                primary_error = %primary,
+                unlock_error = %unlock_error,
+                "failed to release lock after {context}; session tainted"
+            );
+            unlock_err_opt = Some(unlock_error.to_string());
+        }
+
+        match (revert_err_opt, unlock_err_opt) {
+            (None, None) => primary,
+            (revert, unlock) => JmcpError::CandidateCleanupFailed {
+                primary: primary.to_string(),
+                rollback: revert
+                    .unwrap_or_else(|| if loaded > 0 { "ok" } else { "skipped" }.into()),
+                unlock: unlock.unwrap_or_else(|| "ok".into()),
+            },
         }
     }
 }
@@ -483,14 +606,67 @@ impl DeviceTransaction for JunosTransaction {
             }
         };
 
-        let mut cfg = dev.config()?;
-
         // Lock the candidate, unless `lock()` already did it on this session.
-        if !already_locked && let Err(error) = cfg.lock().await {
-            // Lock failed before any load. Session is clean; allow pooling.
-            dev.allow_reuse();
-            return Err(error.into());
+        if !already_locked {
+            let mut cfg = dev.config()?;
+            if let Err(error) = cfg.lock().await {
+                // Lock failed before any load. Session is clean; allow pooling.
+                dev.allow_reuse();
+                return Err(error.into());
+            }
         }
+
+        // Plane guard: a declared authority (read fresh, so a re-tag since create
+        // is honoured) wins; only an `Unknown` device is probed. The candidate is
+        // locked, so every refusal or probe failure reverts and releases it.
+        // The endpoint is pinned with it: every later inventory read in this
+        // stage must describe the device this locked session is connected to.
+        let declared = {
+            let inv = self.device_manager.inventory();
+            inv.get(&self.router).map(|entry| {
+                (
+                    entry.config_authority.clone(),
+                    (entry.ip.clone(), entry.port),
+                )
+            })
+        };
+        let (declared, pinned_endpoint) = match declared {
+            Ok((declared, endpoint)) => (Ok(declared), Some(endpoint)),
+            Err(error) => (Err(error), None),
+        };
+        let resolved = match declared {
+            Ok(declared) => plane_guard::resolve_authority(&mut dev, &declared).await,
+            Err(error) => Err(error),
+        };
+        let (authority, source) = match resolved {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                return Err(self
+                    .revert_and_release(&mut dev, 0, error, "plane authority resolution failure")
+                    .await);
+            }
+        };
+        if authority == JunosAuthority::Mist {
+            match plane_guard::check(
+                "apply_junos_change_set",
+                &self.router,
+                &authority,
+                source,
+                None,
+                self.allow_plane_owned_writes,
+            ) {
+                Ok(warning) => self.record_plane_warning(warning),
+                Err(refusal) => {
+                    let error = self
+                        .revert_and_release(&mut dev, 0, refusal, "plane-owned refusal")
+                        .await;
+                    self.record_plane_refusal(&error);
+                    return Err(error);
+                }
+            }
+        }
+
+        let mut cfg = dev.config()?;
 
         // Load actions. Track success count for partial-failure revert.
         for (loaded, resolved) in resolved_actions.into_iter().enumerate() {
@@ -507,12 +683,31 @@ impl DeviceTransaction for JunosTransaction {
                 // rustjunosmcp#495).
                 let inventory_lookup: Result<(_, _, _), JmcpError> = {
                     let inv = self.device_manager.inventory();
-                    inv.get(&self.router).map(|entry| {
-                        (
-                            entry.config_authority.clone(),
+                    inv.get(&self.router).and_then(|entry| {
+                        // A reload that retargeted this name would mix another
+                        // device's authority and logins into this session's
+                        // guard: fail closed instead.
+                        if pinned_endpoint.as_ref() != Some(&(entry.ip.clone(), entry.port)) {
+                            return Err(JmcpError::Validation(format!(
+                                "device '{}' was retargeted in the inventory during apply; \
+                                 refusing to continue on the old session",
+                                self.router
+                            )));
+                        }
+                        Ok((
+                            // Same device, so only ever tighten: a re-tag to a
+                            // plane mid-apply counts, and a reload cannot loosen
+                            // the plane resolved for this locked session.
+                            if entry.config_authority.is_plane_owned() {
+                                entry.config_authority.clone()
+                            } else if authority.is_plane_owned() {
+                                authority.clone()
+                            } else {
+                                entry.config_authority.clone()
+                            },
                             entry.plane_commit_logins.clone(),
                             entry.username.clone(),
-                        )
+                        ))
                     })
                 };
 
@@ -594,57 +789,15 @@ impl DeviceTransaction for JunosTransaction {
                 };
 
                 if let Err(depth_error) = depth_check {
-                    // Same cleanup contract as a load failure below, but the
-                    // primary error is already a `JmcpError` built from this
-                    // check rather than the wire-level load result.
-                    let mut revert_err_opt = None;
-                    let mut unlock_err_opt = None;
-
-                    if loaded > 0
-                        && let Err(revert_error) = cfg.rollback(0).await
-                    {
-                        tracing::error!(
-                            router = %self.router,
+                    // Same cleanup contract as a load failure below.
+                    return Err(self
+                        .revert_and_release(
+                            &mut dev,
                             loaded,
-                            primary_error = %depth_error,
-                            revert_error = %revert_error,
-                            "failed to revert partial stage after apply-time plane-owned \
-                             rollback refusal; session tainted"
-                        );
-                        revert_err_opt = Some(revert_error.to_string());
-                    }
-
-                    if let Err(unlock_error) = dev.release_lock().await {
-                        tracing::error!(
-                            router = %self.router,
-                            primary_error = %depth_error,
-                            unlock_error = %unlock_error,
-                            "failed to release lock after apply-time plane-owned rollback \
-                             refusal; session tainted"
-                        );
-                        unlock_err_opt = Some(unlock_error.to_string());
-                    }
-
-                    return match (&revert_err_opt, &unlock_err_opt) {
-                        (Some(revert_err), Some(unlock_err)) => {
-                            Err(JmcpError::CandidateCleanupFailed {
-                                primary: depth_error.to_string(),
-                                rollback: revert_err.clone(),
-                                unlock: unlock_err.clone(),
-                            })
-                        }
-                        (Some(revert_err), None) => Err(JmcpError::CandidateCleanupFailed {
-                            primary: depth_error.to_string(),
-                            rollback: revert_err.clone(),
-                            unlock: "ok".into(),
-                        }),
-                        (None, Some(unlock_err)) => Err(JmcpError::CandidateCleanupFailed {
-                            primary: depth_error.to_string(),
-                            rollback: if loaded > 0 { "ok" } else { "skipped" }.into(),
-                            unlock: unlock_err.clone(),
-                        }),
-                        (None, None) => Err(depth_error),
-                    };
+                            depth_error,
+                            "apply-time plane-owned rollback refusal",
+                        )
+                        .await);
                 }
             }
 
@@ -657,66 +810,33 @@ impl DeviceTransaction for JunosTransaction {
 
             if let Err(error) = load_result {
                 // Partial failure. Revert the candidate (rollback 0) and unlock.
-                // Both must succeed before we allow the session back into the pool.
-                // Finding 2 (P1): Cleanup failures must be visible in the returned
-                // error, not just logged. A failed revert on a standalone device can
-                // leave earlier actions sitting in the shared candidate, breaking the
-                // all-or-none staging contract, and the caller sees nothing telling it
-                // recovery is needed.
-                let mut revert_err_opt = None;
-                let mut unlock_err_opt = None;
-
-                if loaded > 0
-                    && let Err(revert_error) = cfg.rollback(0).await
-                {
-                    tracing::error!(
-                        router = %self.router,
-                        loaded,
-                        primary_error = %error,
-                        revert_error = %revert_error,
-                        "failed to revert partial stage; session tainted"
-                    );
-                    revert_err_opt = Some(revert_error.to_string());
-                }
-
-                // The revert above dirtied the candidate, so this closes rather
-                // than unlocks — under our own lock, never after it (#316).
-                if let Err(unlock_error) = dev.release_lock().await {
-                    tracing::error!(
-                        router = %self.router,
-                        primary_error = %error,
-                        unlock_error = %unlock_error,
-                        "failed to release lock after load failure; session tainted"
-                    );
-                    unlock_err_opt = Some(unlock_error.to_string());
-                }
-
-                // Return the cleanup-aware error if cleanup failed, otherwise the primary.
-                return match (&revert_err_opt, &unlock_err_opt) {
-                    (Some(revert_err), Some(unlock_err)) => {
-                        Err(JmcpError::CandidateCleanupFailed {
-                            primary: error.to_string(),
-                            rollback: revert_err.clone(),
-                            unlock: unlock_err.clone(),
-                        })
-                    }
-                    (Some(revert_err), None) => Err(JmcpError::CandidateCleanupFailed {
-                        primary: error.to_string(),
-                        rollback: revert_err.clone(),
-                        unlock: "ok".into(),
-                    }),
-                    (None, Some(unlock_err)) => Err(JmcpError::CandidateCleanupFailed {
-                        primary: error.to_string(),
-                        rollback: if loaded > 0 { "ok" } else { "skipped" }.into(),
-                        unlock: unlock_err.clone(),
-                    }),
-                    (None, None) => Err(error.into()),
-                };
+                // Both must succeed before we allow the session back into the pool,
+                // and cleanup failures must be visible in the returned error.
+                return Err(self
+                    .revert_and_release(&mut dev, loaded, error.into(), "load failure")
+                    .await);
             }
         }
 
         // Capture the diff.
         let diff = cfg.diff().await?.unwrap_or_default();
+        match plane_guard::check(
+            "apply_junos_change_set",
+            &self.router,
+            &authority,
+            source,
+            Some(&diff),
+            self.allow_plane_owned_writes,
+        ) {
+            Ok(warning) => self.record_plane_warning(warning),
+            Err(refusal) => {
+                let error = self
+                    .revert_and_release(&mut dev, actions.len(), refusal, "plane-owned refusal")
+                    .await;
+                self.record_plane_refusal(&error);
+                return Err(error);
+            }
+        }
 
         // Defect #1: DO NOT unlock. Retain the session and lock so validate and
         // commit operate on the same private candidate database. On a chassis

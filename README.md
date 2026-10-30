@@ -879,6 +879,80 @@ sudo journalctl -u rust-junosmcp -b | grep -i "allow-direct-commit is enabled"
 
 Silence means it is off.
 
+## Security Director and Mist-managed SRX
+
+A device can be configured by a management plane that overwrites local edits at
+its next push. Set `config_authority` on the device in `devices.json`:
+
+| Value | Meaning |
+|-------|---------|
+| `local` | This server owns the config. No plane checks. |
+| `mist` | Managed by Juniper Mist. Read-only through this server. |
+| `security-director-cloud` | Security Director Cloud owns `security`, `applications`, `schedulers` and its `system services outbound-ssh` session. |
+| `security-director-onprem` | Security Director On-Prem owns the same trees. |
+| `unknown` | The default. The device is probed before each configuration write (see below). |
+
+```json
+{"edge-srx": {"ip": "192.0.2.10", "username": "netconf", "auth": {"type": "ssh_key", "private_key_path": "/etc/jmcp/id_ed25519"}, "config_authority": "security-director-cloud"}}
+```
+
+**Detection.** A declared value always wins, and declaring `local` turns
+detection off. Only an `unknown` device is probed, with one extra read per write
+(`show configuration system services outbound-ssh`), and only by the
+configuration tools listed below: `upgrade_junos` uses the declared value alone,
+so declare plane-managed devices you upgrade through this server. An `outbound-ssh` client
+named `mist` means Mist; a `sdcloud.juniperclouds.net` address means Security
+Director Cloud; a client named `EMS-...` means Security Director On-Prem. Mist
+takes precedence over Security Director. Anything else stays `unknown` and is
+writable. A probe that fails refuses the write (fail closed).
+
+**What is refused.**
+
+- Mist: every write. The direct tools refuse before locking the candidate.
+  `apply_junos_change_set` refuses after taking the lock (the probe runs inside
+  it), then releases it; `create_junos_change_set` already refuses a payload
+  plan for a device declared `mist`.
+- Security Director: only a change whose `show | compare` diff touches
+  `security`, `applications`, `schedulers` or `system services outbound-ssh`,
+  including through `groups`, `logical-systems` or `tenants`. Outbound-ssh is
+  Security Director's connection to the SRX: changing it can disconnect the
+  device, and on an `unknown` device deleting it would also defeat detection.
+  Deactivating `system` or `system services` as a whole counts as touching it,
+  since the diff hides the body.
+  If Security Director no longer manages the device, declare
+  `config_authority: "local"`. The rest of the config (interfaces, routing,
+  the rest of system) stays writable, with two conservative exceptions, because the
+  group may carry `security` configuration: a top-level `apply-groups` or
+  `apply-groups-except` change, and deactivating a whole group, logical system
+  or tenant (the diff hides its body). The refusal reverts the candidate and releases
+  the lock, and names the tool to use instead (for example `prepare_sdc_nat_write`
+  or `plan_mist_change`).
+- Tools covered: `load_and_commit_config`, `render_and_apply_j2_template`,
+  `commit_check_config`, `rollback_config`, `discard_candidate` and
+  `apply_junos_change_set`. A refused change set ends `failed`.
+- `discard_candidate` cannot lock (Junos refuses to lock a modified candidate),
+  so on a plane-owned device it cannot check the pending edits atomically: it
+  refuses whenever the candidate has pending changes, and names the CLI
+  `rollback 0` instead. An empty candidate is a no-op.
+- `upgrade_junos`, `rollback_config` with `commit=true`, and the change-set
+  rollback guards (depth, commit-0 attribution, mixed actions, lab mode) keep
+  their existing plane-owned refusals. A detected plane also gets the depth and
+  commit-0 attribution guards when the change set is applied; the mixed-action
+  and lab-mode checks run at create, before any probe, so they need a declared
+  value.
+
+**`--allow-plane-owned-writes`** turns the plane-guard refusals above (the Mist
+refusal, the protected-diff refusal and the discard refusal) into warnings. It
+also lets `upgrade_junos` run on a device declared plane-owned (with a warning),
+as it did before. It does not lift the rollback guards in the previous
+paragraph, which stay unconditional. The warnings:
+
+- Mist: `WARNING: '<device>' is managed by Juniper Mist (...). This change will be overwritten and erased by the next Mist push.`
+- Security Director: `WARNING: '<device>' is managed by Security Director ... and this change touches <paths>. This may cause you to have to delete and re-import your security and NAT policy.`
+
+The warning is returned as `warning` (direct tools) or `config_authority_warning`
+(`apply_junos_change_set`).
+
 ## Audit logging
 
 `rust-junosmcp` emits structured audit events for every Junos and SRX tool invocation. Each event records the caller, tool, target routers, authorization decision, outcome, and duration. See [`docs/AUDIT.md`](docs/AUDIT.md) for the full schema and forwarding guidance.

@@ -527,8 +527,15 @@ pub async fn create_change_set(
         attribution,
         owner_subject,
         CancellationToken::new(),
+        false,
     )
     .await
+}
+
+/// True for the coordinator's wrapper around a `stage()` error. It reports a
+/// failed bookkeeping write (field `state`) before reaching that wrapper.
+fn is_stage_failure(error: &mecmcp_changeset::CoordinatorError) -> bool {
+    error.field() == "device" && error.message().starts_with("staging failed:")
 }
 
 /// Cancellable variant of `create_change_set` for use in transport shutdown paths.
@@ -539,6 +546,7 @@ pub async fn create_change_set(
 /// record `approve_change_set` later checks a verified approver against, so
 /// the same human cannot propose and approve through two tokens bound to the
 /// same IdP identity (MEC-994 W2/W4).
+#[allow(clippy::too_many_arguments)] // one flag over the limit; a struct would touch every caller
 pub async fn create_change_set_with_cancel(
     mut args: CreateChangeSetArgs,
     dm: Arc<DeviceManager>,
@@ -547,6 +555,7 @@ pub async fn create_change_set_with_cancel(
     attribution: Attribution,
     owner_subject: Option<rust_junosmcp_auth::OidcSubject>,
     _ct: CancellationToken,
+    allow_plane_owned_writes: bool,
 ) -> Result<Value, JmcpError> {
     // Validate the device exists, and capture its config authority for the
     // plane-owned rollback guard below (dropped at the end of this block;
@@ -689,6 +698,23 @@ pub async fn create_change_set_with_cancel(
                 )?;
             }
         }
+    }
+
+    // A declared Mist device is read-only, so refuse the plan up front rather
+    // than burn an approval. Any warning is dropped: apply re-resolves the
+    // authority and warns then. Placed after the rollback guard so its more
+    // specific refusals still win. Detection needs the device and happens at apply.
+    // A rollback-only plan (depth 0, a no-op load) is left to apply, which refuses it too.
+    let has_payload = args.actions.iter().any(|action| action.payload.is_some());
+    if has_payload && config_authority == crate::config_authority::JunosAuthority::Mist {
+        crate::plane_guard::check(
+            "create_junos_change_set",
+            &args.device,
+            &config_authority,
+            crate::plane_guard::AuthoritySource::Declared,
+            None,
+            allow_plane_owned_writes,
+        )?;
     }
 
     // `override` is only permitted through this change-set path because it
@@ -1019,6 +1045,7 @@ pub async fn apply_change_set(
         policy,
         attribution,
         CancellationToken::new(),
+        false,
     )
     .await
 }
@@ -1031,6 +1058,7 @@ pub async fn apply_change_set_with_cancel(
     policy: Arc<Policy>,
     attribution: Attribution,
     ct: CancellationToken,
+    allow_plane_owned_writes: bool,
 ) -> Result<Value, JmcpError> {
     // Validate the device exists and capture endpoint components.
     let inventory = dm.inventory();
@@ -1150,7 +1178,8 @@ pub async fn apply_change_set_with_cancel(
     });
 
     // Build the transaction backend.
-    let transaction = JunosTransaction::new(dm.clone(), args.device.clone());
+    let transaction = JunosTransaction::new(dm.clone(), args.device.clone())
+        .with_allow_plane_owned_writes(allow_plane_owned_writes);
 
     // For Junos, there is no XPath equivalent, so the primary target is None.
     // The primary action discriminator: the first payload action's resolved
@@ -1186,7 +1215,15 @@ pub async fn apply_change_set_with_cancel(
             &ct,
         )
         .await
-        .map_err(|e| JmcpError::Validation(e.to_string()))?;
+        // The coordinator stringifies stage errors; a plane refusal goes back typed
+        // so it is audited as `blocked` with the `unauthorized` code. Only the
+        // stage wrapper carries it: a bookkeeping failure must stay visible.
+        .map_err(|e| {
+            is_stage_failure(&e)
+                .then(|| transaction.take_plane_refusal())
+                .flatten()
+                .unwrap_or_else(|| JmcpError::Validation(e.to_string()))
+        })?;
 
     // The apply_change_set call stages all actions and returns the staged
     // handle. The caller (this tool) must then diff, validate, and commit.
@@ -1333,7 +1370,10 @@ pub async fn apply_change_set_with_cancel(
 
     // Build a config-authority warning when the device is not locally owned.
     use mecmcp_inventory::LocalAuthority;
-    let authority_warning = if !device_entry.config_authority.is_local() {
+    // A warning recorded by `stage()` (flagged plane-owned write) is more specific.
+    let authority_warning = if let Some(plane_warning) = transaction.plane_warning() {
+        Some(plane_warning)
+    } else if !device_entry.config_authority.is_local() {
         Some(format!(
             "WARNING: this device is owned by {}. Changes may be overwritten at the next push from the owning management plane.",
             config_authority.as_deref().unwrap_or("unknown")
@@ -3112,6 +3152,15 @@ mod tests {
         actions: Vec<JunosAction>,
         lab_mode: bool,
     ) -> Result<Value, JmcpError> {
+        create_on_device_allowing(authority, actions, lab_mode, false).await
+    }
+
+    async fn create_on_device_allowing(
+        authority: &str,
+        actions: Vec<JunosAction>,
+        lab_mode: bool,
+        allow_plane_owned_writes: bool,
+    ) -> Result<Value, JmcpError> {
         let inv = inv_with(&format!(
             r#"{{"r1":{{"ip":"127.0.0.1","username":"u","auth":{{"type":"password","password":"x"}},"config_authority":"{authority}"}}}}"#,
         ));
@@ -3124,7 +3173,7 @@ mod tests {
             test_coordinator(&state_dir)
         };
 
-        create_change_set(
+        create_change_set_with_cancel(
             CreateChangeSetArgs {
                 device: "r1".into(),
                 expected_fingerprint:
@@ -3136,9 +3185,65 @@ mod tests {
             coordinator,
             policy,
             test_attribution("alice"),
-                None,
-)
+            None,
+            CancellationToken::new(),
+            allow_plane_owned_writes,
+        )
         .await
+    }
+
+    #[test]
+    fn only_the_stage_wrapper_is_retyped() {
+        use mecmcp_changeset::CoordinatorError;
+        assert!(is_stage_failure(&CoordinatorError::new(
+            "device",
+            "staging failed: refused"
+        )));
+        assert!(!is_stage_failure(&CoordinatorError::new(
+            "state",
+            "disk full"
+        )));
+        assert!(!is_stage_failure(&CoordinatorError::new(
+            "device",
+            "device fingerprint changed"
+        )));
+    }
+
+    /// A declared Mist device is read-only, so a payload plan is refused at
+    /// create, classified as `blocked`, before any approval is spent.
+    #[tokio::test]
+    async fn create_change_set_refuses_payload_on_declared_mist_device() {
+        let r =
+            create_on_plane_owned_device("mist", vec![payload_action("set system a")], false).await;
+        match r {
+            Err(error @ JmcpError::PlaneManagedConfig { .. }) => {
+                assert_eq!(error.audit_kind(), "blocked");
+                assert!(error.to_string().contains("plan_mist_change"), "{error}");
+            }
+            other => panic!("expected PlaneManagedConfig, got {other:?}"),
+        }
+    }
+
+    /// `--allow-plane-owned-writes` lets the plan through; apply does the warning.
+    #[tokio::test]
+    async fn create_change_set_allows_payload_on_declared_mist_device_with_the_flag() {
+        let r =
+            create_on_device_allowing("mist", vec![payload_action("set system a")], false, true)
+                .await;
+        assert!(r.is_ok(), "{r:?}");
+    }
+
+    /// Security Director owns only part of the tree, so its plan is judged at
+    /// apply against the real diff, not refused up front.
+    #[tokio::test]
+    async fn create_change_set_allows_payload_on_declared_sd_device() {
+        let r = create_on_plane_owned_device(
+            "security-director-cloud",
+            vec![payload_action("set security zones")],
+            false,
+        )
+        .await;
+        assert!(r.is_ok(), "{r:?}");
     }
 
     /// MEC-1879 P5a: `rollback_source: 0` is a no-op load and is always

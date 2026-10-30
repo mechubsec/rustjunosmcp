@@ -4,6 +4,39 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Plane guard for Security Director and Mist-managed SRX. A device's managing
+  plane comes from `config_authority`; when that is `unknown` it is detected
+  from `show configuration system services outbound-ssh` (Mist, Security
+  Director Cloud, Security Director On-Prem). Mist devices are read-only.
+  Security Director devices refuse only changes whose `show | compare` diff
+  touches `security`, `applications`, `schedulers` or `system services
+  outbound-ssh` (SD's own connection to the device), plus conservative refusals
+  for a top-level `apply-groups` change and for deactivating a whole `system`,
+  `system services`, group, logical system or tenant, whose body the diff hides.
+  The direct candidate tools
+  (`load_and_commit_config`, `render_and_apply_j2_template`,
+  `commit_check_config`) enforce this against the real diff, then revert and
+  release the lock on refusal; `rollback_config` previews are checked the same
+  way. `discard_candidate` cannot lock, so on a plane-owned device it refuses
+  whenever the candidate has pending changes. `apply_junos_change_set`
+  enforces the same rules after staging (the change set ends `failed`), and
+  `create_junos_change_set` refuses a payload plan for a device declared `mist`.
+  `--allow-plane-owned-writes` downgrades these refusals to warnings; the
+  existing rollback guards stay unconditional, and the depth and commit-0
+  attribution guards now also apply to a detected plane at apply time. An `unknown` device costs one extra read per configuration write for
+  the probe; a failed probe refuses the write. `upgrade_junos` does not probe and
+  uses the declared value only. See README, "Security Director and Mist-managed SRX".
+
+### Changed
+
+- `load_and_commit_config` on a device declared `security-director-cloud` or
+  `security-director-onprem` now accepts changes outside `security`,
+  `applications` and `schedulers`; before, it refused the whole device.
+
 ## [2.5.0] - 2026-10-29
 
 ### Added

@@ -1892,6 +1892,7 @@ impl JmcpHandler {
             attribution,
             owner_subject,
             ct,
+            self.allow_plane_owned_writes,
         )
         .await;
         match &result {
@@ -2070,6 +2071,7 @@ impl JmcpHandler {
             self.policy.load_full(),
             attribution,
             ct,
+            self.allow_plane_owned_writes,
         )
         .await;
         match &result {

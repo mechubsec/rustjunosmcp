@@ -6,11 +6,16 @@
 //! its whole configuration. This module holds the pure
 //! logic: detecting the managing plane from `system services outbound-ssh`,
 //! finding protected hierarchies in a `show | compare` diff, and deciding
-//! whether a write is refused, warned about, or allowed. It performs no I/O.
+//! whether a write is refused, warned about, or allowed. Everything is pure
+//! except [`resolve_authority`], the one I/O helper: it probes an undeclared
+//! device so both candidate paths (direct and change-set) share one probe.
 
 use crate::config_authority::JunosAuthority;
 use crate::error::JmcpError;
 use std::collections::HashSet;
+
+/// Read-only command whose output identifies the managing plane.
+pub(crate) const OUTBOUND_SSH_COMMAND: &str = "show configuration system services outbound-ssh";
 
 /// Top-level hierarchies Security Director owns on a managed SRX.
 const PROTECTED: [&str; 3] = ["security", "applications", "schedulers"];
@@ -42,6 +47,23 @@ impl AuthoritySource {
             Self::Detected => "detected from system services outbound-ssh",
         }
     }
+}
+
+/// Effective managing plane for a device: a declared authority wins; only an
+/// `Unknown` device is probed with [`OUTBOUND_SSH_COMMAND`]. A failed probe is
+/// an error (fail closed); the caller decides what that does to the session.
+pub(crate) async fn resolve_authority(
+    dev: &mut rustez::Device,
+    declared: &JunosAuthority,
+) -> Result<(JunosAuthority, AuthoritySource), JmcpError> {
+    if *declared != JunosAuthority::Unknown {
+        return Ok((declared.clone(), AuthoritySource::Declared));
+    }
+    let stanza = dev
+        .cli(OUTBOUND_SSH_COMMAND)
+        .await
+        .map_err(JmcpError::from)?;
+    Ok((detect_authority(&stanza), AuthoritySource::Detected))
 }
 
 /// Infer the managing plane from `show configuration system services outbound-ssh`.
