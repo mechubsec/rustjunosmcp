@@ -13,7 +13,7 @@
     <dynamic-address>
       <feed-server>
         <name>MECFEED</name>
-        <url>https://QQsvc:QQpw@feeds.example.net:8443</url>
+        <url>https://QQsvc:$QQPW@feeds.example.net:8443</url>
         <user-name>QQuser</user-name>
         <password>$9$QQx</password>
         <tls-profile>MECFEED-TLS</tls-profile>

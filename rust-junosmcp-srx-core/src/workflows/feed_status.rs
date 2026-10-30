@@ -1096,12 +1096,12 @@ mod tests {
     #[test]
     fn scrub_catches_url_echo_in_another_form() {
         let scrubber = Scrubber::new(
-            "<url>https://QQsvc:QQpw@feeds.example.net:8443</url>",
-            &["https://QQsvc:QQpw@feeds.example.net:8443/feeds/junos-dynamic-address/address"],
+            "<url>https://QQsvc:$QQPW@feeds.example.net:8443</url>",
+            &["https://QQsvc:$QQPW@feeds.example.net:8443/feeds/junos-dynamic-address/address"],
         );
         // A doubled slash and an extra query (neither raw URL matches the whole
         // echo), and an unconfigured URL left to the token backstop.
-        let text = "data(https://QQsvc:QQpw@feeds.example.net:8443//feeds/x?QQq=1#QQf) \
+        let text = "data(https://QQsvc:$QQPW@feeds.example.net:8443//feeds/x?QQq=1#QQf) \
                     and \"https://QQt@other.example.net/y?QQz\" ok";
         let got = scrubber.scrub(text);
         assert!(!got.contains("QQ"), "{got}");
@@ -1138,7 +1138,7 @@ mod tests {
     /// server-url fallback can subscribe it).
     #[test]
     fn full_server_url_is_subscribed_with_or_without_a_path() {
-        let url = "https://QQu:QQp@feeds.example.net:8443/feeds/junos-dynamic-address/prefix";
+        let url = "https://QQu:$QQP@feeds.example.net:8443/feeds/junos-dynamic-address/prefix";
         for path in ["", "<path>other/stuff</path>"] {
             assert_eq!(
                 only_feed_url(&full_url_config(url, path)),
@@ -1150,7 +1150,8 @@ mod tests {
 
     #[test]
     fn full_server_url_query_is_stripped() {
-        let url = "https://QQu:QQp@feeds.example.net:8443/feeds/junos-dynamic-address/prefix?QQq=1";
+        let url =
+            "https://QQu:$QQP@feeds.example.net:8443/feeds/junos-dynamic-address/prefix?QQq=1";
         assert_eq!(
             only_feed_url(&full_url_config(url, "")),
             "https://feeds.example.net:8443/feeds/junos-dynamic-address/prefix"
@@ -1162,8 +1163,8 @@ mod tests {
     #[test]
     fn short_needle_does_not_leave_userinfo_of_an_unconfigured_url() {
         for (query, echo) in [
-            ("a=1", "https://ZZu:ZZpw@10.1.1.1/x"),
-            ("v=8", "https://ZZu:ZZpw@host:8443/x?k=1"),
+            ("a=1", "https://ZZu:$ZZPW@10.1.1.1/x"),
+            ("v=8", "https://ZZu:$ZZPW@host:8443/x?k=1"),
         ] {
             let scrubber = Scrubber::new(
                 &format!(
@@ -1218,7 +1219,7 @@ mod tests {
     #[test]
     fn non_http_scheme_is_not_a_mecfeed_feed() {
         let config = "<configuration><security><dynamic-address><feed-server>\
-             <name>S</name><url>QQuser:QQpw@feeds.example.net</url>\
+             <name>S</name><url>QQuser:$QQPW@feeds.example.net</url>\
              <feed-name><name>f</name><path>feeds/junos-dynamic-address/address</path></feed-name>\
              </feed-server></dynamic-address></security></configuration>";
         let resp = parse(config, Ok("<output/>")).expect("parse");
@@ -1227,9 +1228,9 @@ mod tests {
 
     // ── Fix round 1 ───────────────────────────────────────────────────────────
 
-    /// One mecfeed feed whose server URL carries `QQa:QQb` and path `?token=QQtok`.
+    /// One mecfeed feed whose server URL carries `QQa:$QQB` and path `?token=QQtok`.
     const PROBE_CONFIG: &str = "<configuration><security><dynamic-address><feed-server>\
-         <name>S</name><url>https://QQa:QQb@feeds.example.net:8443</url>\
+         <name>S</name><url>https://QQa:$QQB@feeds.example.net:8443</url>\
          <feed-name><name>f</name><path>feeds/junos-dynamic-address/address?token=QQtok</path>\
          </feed-name></feed-server></dynamic-address></security></configuration>";
 
@@ -1261,7 +1262,7 @@ mod tests {
     }
 
     fn assert_no_probe_secret(text: &str, context: &str) {
-        for secret in ["QQa", "QQb", "QQtok"] {
+        for secret in ["QQa", "QQB", "QQtok"] {
             assert!(!text.contains(secret), "{context}: leaks {secret}: {text}");
         }
     }
@@ -1269,12 +1270,12 @@ mod tests {
     #[test]
     fn configured_secrets_redacted_in_any_echo_shape() {
         for probe in [
-            "url=https://QQa:QQb@h/x",
-            "url:https://QQa:QQb@h/x",
-            "[https://QQa:QQb@h/x]",
-            "{https://QQa:QQb@h/x}",
-            "https://QQa:QQb@h:99999/x",
-            "https://QQa:QQb@",
+            "url=https://QQa:$QQB@h/x",
+            "url:https://QQa:$QQB@h/x",
+            "[https://QQa:$QQB@h/x]",
+            "{https://QQa:$QQB@h/x}",
+            "https://QQa:$QQB@h:99999/x",
+            "https://QQa:$QQB@",
             "/feeds/junos-dynamic-address/address?token=QQtok",
         ] {
             assert_no_probe_secret(&status_echo(probe), probe);
@@ -1284,7 +1285,7 @@ mod tests {
     #[test]
     fn exact_echo_still_becomes_the_sanitised_url() {
         let json = status_echo(
-            "failed<401 from https://QQa:QQb@feeds.example.net:8443/feeds/\
+            "failed<401 from https://QQa:$QQB@feeds.example.net:8443/feeds/\
              junos-dynamic-address/address?token=QQtok>",
         );
         assert!(
@@ -1313,7 +1314,7 @@ mod tests {
             "<multi-routing-engine-results>\
              <multi-routing-engine-item><re-name>node0</re-name><rpc-error>\
              <error-tag>operation-failed</error-tag>\
-             <error-message>cannot read url:https://QQa:QQb@x?token=QQtok</error-message>\
+             <error-message>cannot read url:https://QQa:$QQB@x?token=QQtok</error-message>\
              </rpc-error></multi-routing-engine-item>\
              <multi-routing-engine-item><re-name>node1</re-name>{PROBE_CONFIG}\
              </multi-routing-engine-item></multi-routing-engine-results>"
@@ -1330,7 +1331,7 @@ mod tests {
     #[test]
     fn config_parse_error_message_is_scrubbed() {
         // The stray close tag puts the password into roxmltree's message.
-        let malformed = "<configuration><url>https://QQa:QQb@feeds.example.net</url></QQb>";
+        let malformed = "<configuration><url>https://QQa:$QQB@feeds.example.net</url></$QQB>";
         match parse(malformed, Ok("<output/>")) {
             Err(SrxError::Parse(message)) => assert_no_probe_secret(&message, "parse message"),
             other => panic!("expected SrxError::Parse, got {other:?}"),
@@ -1387,26 +1388,26 @@ mod tests {
         // The `url` parser accepts these as subscribed feeds, but none has a
         // literal `://` before the userinfo (or it has an extra `/`).
         for server_url in [
-            r"https:QQa:QQb@feeds.example.net:8443",
-            r"https:/QQa:QQb@feeds.example.net:8443",
-            r"https:\QQa:QQb@feeds.example.net:8443",
-            r"https:\\QQa:QQb@feeds.example.net:8443",
-            r"https:///QQa:QQb@feeds.example.net:8443",
+            r"https:QQa:$QQB@feeds.example.net:8443",
+            r"https:/QQa:$QQB@feeds.example.net:8443",
+            r"https:\QQa:$QQB@feeds.example.net:8443",
+            r"https:\\QQa:$QQB@feeds.example.net:8443",
+            r"https:///QQa:$QQB@feeds.example.net:8443",
         ] {
             let config = feed_config(server_url, "");
             for echo in [
-                "url=https://QQa:QQb@h/x",
-                "url:https://QQa:QQb@h/x",
-                "[https://QQa:QQb@h/x]",
-                "{https://QQa:QQb@h/x}",
-                "https://QQa:QQb@h:99999/x",
-                "https://QQa:QQb@",
+                "url=https://QQa:$QQB@h/x",
+                "url:https://QQa:$QQB@h/x",
+                "[https://QQa:$QQB@h/x]",
+                "{https://QQa:$QQB@h/x}",
+                "https://QQa:$QQB@h:99999/x",
+                "https://QQa:$QQB@",
                 "user QQa rejected",
-                "password QQb invalid",
+                "password $QQB invalid",
                 server_url,
             ] {
                 let json = status_echo_with(&config, echo);
-                for secret in ["QQa", "QQb"] {
+                for secret in ["QQa", "QQB"] {
                     assert!(
                         !json.contains(secret),
                         "url {server_url}, echo {echo}: leaks {secret}: {json}"
@@ -1462,7 +1463,7 @@ mod tests {
     #[test]
     fn scrubber_keeps_a_secret_containing_a_bare_angle_bracket_whole() {
         // rustnetconf decodes `&lt;` in leaf text, so the config can carry a bare `<`.
-        let xml = "<url>https://ZZuser:ZZhead<-ZZtail@h/feeds/junos-dynamic-address/address</url>";
+        let xml = "<url>https://ZZhead<-ZZtail:$ZZP@h/feeds/junos-dynamic-address/address</url>";
         let got = Scrubber::new(xml, &[]).scrub("echo ZZhead<-ZZtail end");
         assert!(!got.contains("ZZ"), "{got}");
     }
@@ -1470,16 +1471,17 @@ mod tests {
     #[test]
     fn leaf_texts_skips_a_malformed_leaf_and_continues() {
         // A mis-closed leaf, a good one, then an unclosed one at the end.
-        let xml = "<url>https://QQa:QQb@x</path><url>https://QQc:QQd@h</url><url>https://QQe:QQf@t";
+        let xml =
+            "<url>https://QQa:$QQB@x</path><url>https://QQc:$QQD@h</url><url>https://QQe:$QQF@t";
         assert_eq!(
             leaf_texts(xml, "url"),
             vec![
-                "https://QQa:QQb@x",
-                "https://QQc:QQd@h",
-                "https://QQe:QQf@t"
+                "https://QQa:$QQB@x",
+                "https://QQc:$QQD@h",
+                "https://QQe:$QQF@t"
             ]
         );
-        let got = Scrubber::new(xml, &[]).scrub("QQa QQb QQc QQd QQe QQf");
+        let got = Scrubber::new(xml, &[]).scrub("QQa $QQB QQc $QQD QQe $QQF");
         assert!(!got.contains("QQ"), "{got}");
     }
 }

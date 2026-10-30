@@ -9,14 +9,14 @@ Dynamic-address session scan status            : Disable
 Hold-interval for dynamic-address session scan : 10 seconds
 
 Server Name                                    : MECFEED
-    Hostname/IP                                : https://QQsvc:QQpw@feeds.example.net:8443
+    Hostname/IP                                : https://QQsvc:$QQPW@feeds.example.net:8443
     Update interval                            : 300
     Hold interval                              : 86400
     TLS Profile Name                           : MECFEED-TLS
     User Name                                  : QQuser
     Feed Name                                  : mecfeed-address
         Mapped dynamic address name            : MECFEED-ADDRESS
-        URL                                    : https://QQsvc:QQpw@feeds.example.net:8443/feeds/junos-dynamic-address/address?token=QQtok#QQfrag
+        URL                                    : https://QQsvc:$QQPW@feeds.example.net:8443/feeds/junos-dynamic-address/address?token=QQtok#QQfrag
         Total IPv4 entries                     : 1
         Total IPv6 entries                     : 1
         Download errors                        : 0
