@@ -32,7 +32,24 @@ All notable user-facing changes are recorded here. Format loosely follows
   result `caller is not authorized for tool 'get_device_list.include_blocklist'`.
   stdio and the plain call are unaffected (#590).
 
+### Fixed
+
+- SRX workflow failures now settle the audit record once with the error's
+  `error_kind` (`timeout`, `rpc`, `parse`, `invalid_input`, ...). Before, 12
+  SRX workflow tools (cluster status, security services status, feature
+  license, VPN lifecycle, policy and NAT listings, address and application
+  resolution, cluster health, flow sessions, policy match, feed status)
+  returned a protocol error before settling, so one failure produced an
+  `unsettled` record plus a `dispatch_rejected` one.
+
 ### Changed
+
+- Those SRX tools now return a coded tool-error result instead of a protocol
+  error for workflow failures, matching device-open failures: transport
+  failures use the Junos mapping (`upstream_unavailable`, `retryable=true` on
+  retry-safe tools), invalid input is `invalid_argument`, and device RPC,
+  parse and schema errors are `outcome_unknown` (never retryable). Tool
+  schemas and annotations are unchanged.
 
 - Tool and device scope denial texts no longer start with `token '<name>'`
   (the body redactor blanked them to `token [REDACTED]`). They now read

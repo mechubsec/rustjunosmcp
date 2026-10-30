@@ -225,6 +225,30 @@ impl JmcpHandler {
         }
     }
 
+    /// Settle the audit for a failed SRX workflow and return the client result.
+    ///
+    /// Returning `Err` from a handler would leave the scope unsettled and make
+    /// `call_tool` record a second `dispatch_rejected`, so every failure is a
+    /// coded tool result. `Transport` uses the same mapping as `dm.open`
+    /// failures (retryable codes on read-only tools); `InvalidInput` is
+    /// `invalid_argument`; anything else (`Rpc`, `Parse`, ...) is
+    /// `outcome_unknown`, which is never retryable.
+    fn workflow_error_result(
+        e: rust_junosmcp_srx_core::SrxError,
+        audit: &mut mecmcp_audit::AuditScope,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        use mecmcp_server::ToolErrorCode;
+        use rust_junosmcp_srx_core::SrxError;
+        audit.fail_kind(e.audit_kind(), &e);
+        Ok(match e {
+            SrxError::Transport(inner) => super::coded_error_result(&inner),
+            SrxError::InvalidInput(_) => {
+                super::coded_error(ToolErrorCode::InvalidArgument, &e.to_string())
+            }
+            _ => super::coded_error(ToolErrorCode::OutcomeUnknown, &e.to_string()),
+        })
+    }
+
     fn validate_confirmation_request(
         &self,
         confirm: bool,
@@ -410,14 +434,11 @@ impl JmcpHandler {
                 return Ok(super::coded_error_result(&e));
             }
         };
-        let resp = rust_junosmcp_srx_core::workflows::cluster_status::run(&mut device, args)
-            .await
-            .map_err(|e| match e {
-                rust_junosmcp_srx_core::SrxError::InvalidInput(_) => {
-                    rmcp::ErrorData::invalid_params(e.to_string(), None)
-                }
-                _ => rmcp::ErrorData::internal_error(e.to_string(), None),
-            })?;
+        let resp =
+            match rust_junosmcp_srx_core::workflows::cluster_status::run(&mut device, args).await {
+                Ok(resp) => resp,
+                Err(e) => return Self::workflow_error_result(e, &mut audit),
+            };
         let result = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing ClusterStatusData: {e}"), None)
         });
@@ -471,14 +492,12 @@ impl JmcpHandler {
                 return Ok(super::coded_error_result(&e));
             }
         };
-        let resp = rust_junosmcp_srx_core::workflows::services_status::run(&mut device, args)
+        let resp = match rust_junosmcp_srx_core::workflows::services_status::run(&mut device, args)
             .await
-            .map_err(|e| match e {
-                rust_junosmcp_srx_core::SrxError::InvalidInput(_) => {
-                    rmcp::ErrorData::invalid_params(e.to_string(), None)
-                }
-                _ => rmcp::ErrorData::internal_error(e.to_string(), None),
-            })?;
+        {
+            Ok(resp) => resp,
+            Err(e) => return Self::workflow_error_result(e, &mut audit),
+        };
         let result = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing ServicesStatusData: {e}"), None)
         });
@@ -533,14 +552,10 @@ impl JmcpHandler {
                 return Ok(super::coded_error_result(&e));
             }
         };
-        let resp = rust_junosmcp_srx_core::workflows::license::run(&mut device, args)
-            .await
-            .map_err(|e| match e {
-                rust_junosmcp_srx_core::SrxError::InvalidInput(_) => {
-                    rmcp::ErrorData::invalid_params(e.to_string(), None)
-                }
-                _ => rmcp::ErrorData::internal_error(e.to_string(), None),
-            })?;
+        let resp = match rust_junosmcp_srx_core::workflows::license::run(&mut device, args).await {
+            Ok(resp) => resp,
+            Err(e) => return Self::workflow_error_result(e, &mut audit),
+        };
         let result = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing LicenseData: {e}"), None)
         });
@@ -592,14 +607,11 @@ impl JmcpHandler {
                 return Ok(super::coded_error_result(&e));
             }
         };
-        let resp = rust_junosmcp_srx_core::workflows::vpn_lifecycle::run(&mut device, args)
-            .await
-            .map_err(|e| match e {
-                rust_junosmcp_srx_core::SrxError::InvalidInput(_) => {
-                    rmcp::ErrorData::invalid_params(e.to_string(), None)
-                }
-                _ => rmcp::ErrorData::internal_error(e.to_string(), None),
-            })?;
+        let resp =
+            match rust_junosmcp_srx_core::workflows::vpn_lifecycle::run(&mut device, args).await {
+                Ok(resp) => resp,
+                Err(e) => return Self::workflow_error_result(e, &mut audit),
+            };
         let result = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing VpnLifecycleData: {e}"), None)
         });
@@ -646,14 +658,11 @@ impl JmcpHandler {
                 return Ok(super::coded_error_result(&e));
             }
         };
-        let resp = rust_junosmcp_srx_core::workflows::list_policies::run(&mut device, args)
-            .await
-            .map_err(|e| match e {
-                rust_junosmcp_srx_core::SrxError::InvalidInput(_) => {
-                    rmcp::ErrorData::invalid_params(e.to_string(), None)
-                }
-                _ => rmcp::ErrorData::internal_error(e.to_string(), None),
-            })?;
+        let resp =
+            match rust_junosmcp_srx_core::workflows::list_policies::run(&mut device, args).await {
+                Ok(resp) => resp,
+                Err(e) => return Self::workflow_error_result(e, &mut audit),
+            };
         let result = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing PolicyListData: {e}"), None)
         });
@@ -707,15 +716,12 @@ impl JmcpHandler {
                 return Ok(super::coded_error_result(&e));
             }
         };
-        let resp = rust_junosmcp_srx_core::workflows::resolve_address::run(&mut device, args)
+        let resp = match rust_junosmcp_srx_core::workflows::resolve_address::run(&mut device, args)
             .await
-            .map_err(|e| match e {
-                rust_junosmcp_srx_core::SrxError::InvalidInput(_)
-                | rust_junosmcp_srx_core::SrxError::ResolutionNameNotFound { .. } => {
-                    rmcp::ErrorData::invalid_params(e.to_string(), None)
-                }
-                _ => rmcp::ErrorData::internal_error(e.to_string(), None),
-            })?;
+        {
+            Ok(resp) => resp,
+            Err(e) => return Self::workflow_error_result(e, &mut audit),
+        };
         let result = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing AddressResolution: {e}"), None)
         });
@@ -774,15 +780,13 @@ impl JmcpHandler {
                 return Ok(super::coded_error_result(&e));
             }
         };
-        let resp = rust_junosmcp_srx_core::workflows::resolve_application::run(&mut device, args)
-            .await
-            .map_err(|e| match e {
-                rust_junosmcp_srx_core::SrxError::InvalidInput(_)
-                | rust_junosmcp_srx_core::SrxError::ResolutionNameNotFound { .. } => {
-                    rmcp::ErrorData::invalid_params(e.to_string(), None)
-                }
-                _ => rmcp::ErrorData::internal_error(e.to_string(), None),
-            })?;
+        let resp =
+            match rust_junosmcp_srx_core::workflows::resolve_application::run(&mut device, args)
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => return Self::workflow_error_result(e, &mut audit),
+            };
         let result = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing ApplicationResolution: {e}"), None)
         });
@@ -830,14 +834,11 @@ impl JmcpHandler {
                 return Ok(super::coded_error_result(&e));
             }
         };
-        let resp = rust_junosmcp_srx_core::workflows::list_nat_rules::run(&mut device, args)
-            .await
-            .map_err(|e| match e {
-                rust_junosmcp_srx_core::SrxError::InvalidInput(_) => {
-                    rmcp::ErrorData::invalid_params(e.to_string(), None)
-                }
-                _ => rmcp::ErrorData::internal_error(e.to_string(), None),
-            })?;
+        let resp =
+            match rust_junosmcp_srx_core::workflows::list_nat_rules::run(&mut device, args).await {
+                Ok(resp) => resp,
+                Err(e) => return Self::workflow_error_result(e, &mut audit),
+            };
         let result = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing NatRules: {e}"), None)
         });
@@ -1081,14 +1082,11 @@ impl JmcpHandler {
                 return Ok(super::coded_error_result(&e));
             }
         };
-        let resp = rust_junosmcp_srx_core::workflows::cluster_health::run(&mut device, args)
-            .await
-            .map_err(|e| match e {
-                rust_junosmcp_srx_core::SrxError::InvalidInput(_) => {
-                    rmcp::ErrorData::invalid_params(e.to_string(), None)
-                }
-                _ => rmcp::ErrorData::internal_error(e.to_string(), None),
-            })?;
+        let resp =
+            match rust_junosmcp_srx_core::workflows::cluster_health::run(&mut device, args).await {
+                Ok(resp) => resp,
+                Err(e) => return Self::workflow_error_result(e, &mut audit),
+            };
         let result = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing ClusterHealthData: {e}"), None)
         });
@@ -1226,14 +1224,11 @@ impl JmcpHandler {
                 return Ok(super::coded_error_result(&e));
             }
         };
-        let resp = rust_junosmcp_srx_core::workflows::flow_sessions::run(&mut device, args)
-            .await
-            .map_err(|e| match e {
-                rust_junosmcp_srx_core::SrxError::InvalidInput(_) => {
-                    rmcp::ErrorData::invalid_params(e.to_string(), None)
-                }
-                _ => rmcp::ErrorData::internal_error(e.to_string(), None),
-            })?;
+        let resp =
+            match rust_junosmcp_srx_core::workflows::flow_sessions::run(&mut device, args).await {
+                Ok(resp) => resp,
+                Err(e) => return Self::workflow_error_result(e, &mut audit),
+            };
         let result = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing FlowSessionQuery: {e}"), None)
         });
@@ -1285,14 +1280,11 @@ impl JmcpHandler {
                 return Ok(super::coded_error_result(&e));
             }
         };
-        let resp = rust_junosmcp_srx_core::workflows::policy_match::run(&mut device, args)
-            .await
-            .map_err(|e| match e {
-                rust_junosmcp_srx_core::SrxError::InvalidInput(_) => {
-                    rmcp::ErrorData::invalid_params(e.to_string(), None)
-                }
-                _ => rmcp::ErrorData::internal_error(e.to_string(), None),
-            })?;
+        let resp =
+            match rust_junosmcp_srx_core::workflows::policy_match::run(&mut device, args).await {
+                Ok(resp) => resp,
+                Err(e) => return Self::workflow_error_result(e, &mut audit),
+            };
         let result = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing PolicyMatchResult: {e}"), None)
         });
@@ -1350,14 +1342,11 @@ impl JmcpHandler {
                 return Ok(super::coded_error_result(&e));
             }
         };
-        let resp = rust_junosmcp_srx_core::workflows::feed_status::run(&mut device, args)
-            .await
-            .map_err(|e| match e {
-                rust_junosmcp_srx_core::SrxError::InvalidInput(_) => {
-                    rmcp::ErrorData::invalid_params(e.to_string(), None)
-                }
-                _ => rmcp::ErrorData::internal_error(e.to_string(), None),
-            })?;
+        let resp =
+            match rust_junosmcp_srx_core::workflows::feed_status::run(&mut device, args).await {
+                Ok(resp) => resp,
+                Err(e) => return Self::workflow_error_result(e, &mut audit),
+            };
         let result = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing FeedStatusData: {e}"), None)
         });
@@ -1798,5 +1787,68 @@ mod signature_error_tests {
             !error.message.contains(FAKE_NESTED_TOKEN),
             "a confirmation_token not minted at the plan's top level must not survive verbatim"
         );
+    }
+}
+
+#[cfg(test)]
+mod workflow_error_tests {
+    use super::*;
+    use mecmcp_audit::AuditScope;
+    use mecmcp_audit::testutil::run_with_capture;
+    use rust_junosmcp_core::JmcpError;
+    use rust_junosmcp_srx_core::SrxError;
+
+    /// Run the helper inside a read-only call and capture its audit output.
+    fn settle(error: SrxError) -> (CallToolResult, String) {
+        let mut result = None;
+        let out = run_with_capture(|| {
+            let mut audit = AuditScope::stdio("srx_flow_sessions", "read", vec!["r1".into()]);
+            result = Some(crate::server::READ_ONLY_CALL.sync_scope(true, || {
+                JmcpHandler::workflow_error_result(error, &mut audit).unwrap()
+            }));
+        });
+        (result.unwrap(), out)
+    }
+
+    fn body(result: &CallToolResult) -> serde_json::Value {
+        result.structured_content.clone().unwrap()
+    }
+
+    fn assert_single_settled(out: &str, kind: &str) {
+        assert_eq!(out.matches("result=").count(), 1, "output: {out}");
+        assert!(out.contains("result=error"), "output: {out}");
+        assert!(!out.contains("unsettled"), "output: {out}");
+        assert!(out.contains(&format!("error_kind={kind}")), "output: {out}");
+    }
+
+    #[test]
+    fn transport_timeout_is_retryable_upstream_unavailable() {
+        let (result, out) = settle(SrxError::Transport(JmcpError::Timeout(
+            std::time::Duration::from_secs(30),
+        )));
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(body(&result)["code"], "upstream_unavailable");
+        assert_eq!(body(&result)["retryable"], true);
+        assert_single_settled(&out, "timeout");
+    }
+
+    #[test]
+    fn rpc_failure_is_outcome_unknown_and_settled_once() {
+        let (result, out) = settle(SrxError::Rpc {
+            tag: "operation-failed".into(),
+            severity: "error".into(),
+            message: "boom".into(),
+        });
+        assert_eq!(body(&result)["code"], "outcome_unknown");
+        assert_eq!(body(&result)["retryable"], false);
+        assert_single_settled(&out, "rpc");
+    }
+
+    #[test]
+    fn invalid_input_is_invalid_argument_and_settled_once() {
+        let (result, out) = settle(SrxError::InvalidInput("bad prefix".into()));
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(body(&result)["code"], "invalid_argument");
+        assert_single_settled(&out, "invalid_input");
     }
 }
