@@ -333,6 +333,7 @@ pub(super) fn tool_error_code(error: &rust_junosmcp_core::JmcpError) -> ToolErro
         | E::OverrideRequiresChangeSet { .. }
         | E::OverrideRequiresHumanApproval { .. }
         | E::PlaneOwnedDevice { .. }
+        | E::PlaneManagedConfig { .. }
         | E::PlaneOwnedRollbackDepthRefused { .. }
         | E::PlaneOwnedRollbackOneRefused { .. }
         | E::PlaneOwnedRollbackMixedAction { .. }

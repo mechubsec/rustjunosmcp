@@ -537,6 +537,19 @@ pub enum JmcpError {
         authority: String,
     },
 
+    /// A config write refused because a management plane (Security Director or Mist) owns the hierarchy it touches.
+    #[error("refused: {tool} on '{device}': {detail}")]
+    PlaneManagedConfig {
+        /// Name of the MCP tool that was refused.
+        tool: &'static str,
+        /// Name of the device the tool call was targeting.
+        device: String,
+        /// Configuration authority that owns the hierarchy (e.g., "mist", "security-director-cloud").
+        authority: String,
+        /// Human-readable refusal text naming the tool to use instead.
+        detail: String,
+    },
+
     /// A `rollback_source` action referencing a depth of 1 or more was requested
     /// on a plane-owned device.
     ///
@@ -905,6 +918,7 @@ impl JmcpError {
             Self::AllowlistEntryInvalid { .. } => "invalid_input",
             Self::ConfigDomainAllowlistInvariant { .. } => "blocked",
             Self::PlaneOwnedDevice { .. } => "blocked",
+            Self::PlaneManagedConfig { .. } => "blocked",
             Self::PlaneOwnedRollbackDepthRefused { .. } => "blocked",
             Self::PlaneOwnedRollbackOneRefused { .. } => "blocked",
             Self::CommitLogMoved { .. } => "blocked",
@@ -1013,6 +1027,21 @@ mod tests {
     fn bad_rollback_version_shows_value_and_range() {
         let e = JmcpError::BadRollbackVersion(99);
         assert_eq!(e.to_string(), "rollback version 99 out of range (0..=49)");
+    }
+
+    #[test]
+    fn plane_managed_config_displays_tool_device_and_detail() {
+        let e = JmcpError::PlaneManagedConfig {
+            tool: "load_and_commit_config",
+            device: "srx1".into(),
+            authority: "mist".into(),
+            detail: "use rustmistmcp".into(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "refused: load_and_commit_config on 'srx1': use rustmistmcp"
+        );
+        assert_eq!(e.audit_kind(), "blocked");
     }
 
     #[test]

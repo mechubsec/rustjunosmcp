@@ -16,6 +16,7 @@ pub mod inventory;
 pub mod junos_commit_metadata;
 pub mod junos_transaction;
 pub mod output;
+pub mod plane_guard;
 pub mod policy;
 pub mod progress;
 pub mod schema_alias;
