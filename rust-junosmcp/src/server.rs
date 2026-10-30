@@ -3965,6 +3965,24 @@ mod redact_last_mile_tests {
             .expect("redact_body must return input that still parses as XML");
     }
 
+    /// XML text nodes (`<output>` CLI text) keep #579 counters and keywords;
+    /// an element whose name contains `session` is still masked.
+    #[test]
+    fn redact_body_xml_text_keeps_counters_but_session_named_elements_stay_masked() {
+        let text = redact_body(
+            "<rpc-reply><output>Valid sessions: 12\nthen log session-init</output></rpc-reply>",
+        );
+        assert!(
+            text.contains("Valid sessions: 12") && text.contains("then log session-init"),
+            "XML text counters lost: {text}"
+        );
+        let element = redact_body("<rpc-reply><valid-sessions>12</valid-sessions></rpc-reply>");
+        assert!(
+            element.contains("<valid-sessions>[REDACTED]</valid-sessions>"),
+            "session element not masked: {element}"
+        );
+    }
+
     /// Non-secret Junos `session` keywords survive the last-mile pass in
     /// structured XML and JSON bodies, while real session secrets stay masked.
     #[test]

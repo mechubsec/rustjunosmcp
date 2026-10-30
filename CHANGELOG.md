@@ -59,8 +59,11 @@ All notable user-facing changes are recorded here. Format loosely follows
   <addr>` or `destination-port`/`source-port <n>` filter; echoes with a
   `| match "..."` pipe are still masked. Still masked by design:
   `Dynamic-address session scan status ...`, the DHCP binding header (cut from
-  `Session` onward, not just the `Session Id` column), and counters in XML
-  (`| display xml`) bodies (#579).
+  `Session` onward, not just the `Session Id` column), and XML elements whose
+  name contains `session` (for example `<valid-sessions>12</valid-sessions>`,
+  masked by the element-name denylist). CLI counters and keywords inside XML
+  text nodes (`<output>Valid sessions: 12</output>` from `| display xml`) are
+  preserved like plain text (#579).
 - Security: JSON tool bodies (for example `execute_junos_command_batch`
   `commands[].value`) and XML text, attributes and comments now also get the
   Junos-only key vocabulary that text bodies already had (supplied by
