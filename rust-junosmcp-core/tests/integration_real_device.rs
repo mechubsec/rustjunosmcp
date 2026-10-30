@@ -264,7 +264,7 @@ async fn live_render_show_version_template_dry_run() {
         timeout: 360,
     };
 
-    let r = rust_junosmcp_core::tools::template::handle(args, dm, pol)
+    let r = rust_junosmcp_core::tools::template::handle(args, dm, pol, false)
         .await
         .expect("handle ok");
     let row = &r["results"][0];

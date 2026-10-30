@@ -1,7 +1,9 @@
 //! Shared candidate configuration transaction lifecycle.
 
+use crate::config_authority::JunosAuthority;
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
+use crate::plane_guard::{self, AuthoritySource};
 use async_trait::async_trait;
 use rustez::{ConfigManager, ConfigPayload, LoadAction};
 use rustnetconf::error::{NetconfError, RpcError};
@@ -61,6 +63,10 @@ pub(crate) enum CandidateMode {
 
 #[derive(Debug)]
 pub(crate) struct CandidateRequest {
+    /// Exact MCP tool name, quoted in plane-guard refusals.
+    pub(crate) tool: &'static str,
+    /// `--allow-plane-owned-writes`: turns a plane-guard refusal into a warning.
+    pub(crate) allow_plane_owned_writes: bool,
     pub(crate) payload: Option<ConfigPayload>,
     pub(crate) rollback_source: Option<u32>,
     pub(crate) mode: CandidateMode,
@@ -161,7 +167,12 @@ impl CandidateBackend for ConfigManager<'_> {
 struct Execution {
     result: Result<CandidateResult, JmcpError>,
     reusable: bool,
+    /// Plane-guard warning from an allowed (flagged) protected change.
+    warning: Option<String>,
 }
+
+/// Read-only command whose output identifies the managing plane.
+const OUTBOUND_SSH_COMMAND: &str = "show configuration system services outbound-ssh";
 
 #[derive(Default)]
 struct CleanupFailures {
@@ -183,7 +194,7 @@ pub(crate) async fn run(
     request: CandidateRequest,
     timeout: Duration,
     ct: &CancellationToken,
-) -> Result<CandidateResult, JmcpError> {
+) -> Result<(CandidateResult, Option<String>), JmcpError> {
     // Check for a prior cleanup failure and warn the caller (#260). Lock
     // acquisition failing later will prove whether the taint was real.
     if let Some(phases) = dm.check_cleanup_taint(router).await {
@@ -195,13 +206,70 @@ pub(crate) async fn run(
         );
     }
 
+    // A declared authority wins; Mist is read-only, so refuse before connecting.
+    let declared = dm.inventory().get(router)?.config_authority.clone();
+    let mut pre_warning = None;
+    if declared == JunosAuthority::Mist {
+        pre_warning = plane_guard::check(
+            request.tool,
+            router,
+            &declared,
+            AuthoritySource::Declared,
+            None,
+            request.allow_plane_owned_writes,
+        )?;
+    }
+
     let deadline = Instant::now() + timeout;
     let mut dev = run_step(deadline, timeout, ct, dm.open(router)).await?;
+
+    // Only an undeclared device is probed. This runs before the session is
+    // tainted so a refusal hands an untouched session back to the pool.
+    let (authority, source) = if declared == JunosAuthority::Unknown {
+        let stanza = match run_step(deadline, timeout, ct, async {
+            dev.cli(OUTBOUND_SSH_COMMAND).await.map_err(JmcpError::from)
+        })
+        .await
+        {
+            Ok(stanza) => stanza,
+            Err(error) => {
+                // A dropped or failed RPC leaves the session in an unknown state.
+                dev.prevent_reuse();
+                return Err(error);
+            }
+        };
+        (
+            plane_guard::detect_authority(&stanza),
+            AuthoritySource::Detected,
+        )
+    } else {
+        (declared, AuthoritySource::Declared)
+    };
+    if authority == JunosAuthority::Mist {
+        pre_warning = plane_guard::check(
+            request.tool,
+            router,
+            &authority,
+            source,
+            None,
+            request.allow_plane_owned_writes,
+        )?;
+    }
     dev.prevent_reuse();
 
     let execution = {
         let mut cfg = dev.config()?;
-        execute(&mut cfg, request, deadline, timeout, cleanup_timeout(), ct).await
+        execute(
+            &mut cfg,
+            router,
+            (&authority, source),
+            request,
+            deadline,
+            timeout,
+            cleanup_timeout(),
+            ct,
+        )
+        .await
     };
 
     if execution.reusable {
@@ -240,11 +308,15 @@ pub(crate) async fn run(
         }
     }
 
-    execution.result
+    let result = execution.result?;
+    Ok((result, pre_warning.or(execution.warning)))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute<B: CandidateBackend>(
     backend: &mut B,
+    device: &str,
+    authority: (&JunosAuthority, AuthoritySource),
     request: CandidateRequest,
     deadline: Instant,
     operation_timeout: Duration,
@@ -258,15 +330,59 @@ async fn execute<B: CandidateBackend>(
     // (equivalent to the CLI `configure; rollback 0; exit`) and opens no
     // private database, so the shared dirty changes are the ones cleared (#176).
     if matches!(request.mode, CandidateMode::Discard) {
+        // Discarding pending edits on a plane-owned device is as much a write as
+        // committing them, and without a lock it cannot be checked atomically.
+        // Early returns here are not reusable: run() would read that as proof
+        // cleanup succeeded and clear a recorded cleanup taint.
+        let mut warning = None;
+        if authority.0.is_plane_owned() {
+            let diff = match run_step(deadline, operation_timeout, ct, backend.diff()).await {
+                Ok(diff) => diff,
+                Err(error) => {
+                    return Execution {
+                        result: Err(error),
+                        reusable: false,
+                        warning: None,
+                    };
+                }
+            };
+            if diff.trim().is_empty() {
+                // Nothing pending: skip the rollback so there is no window to race.
+                return Execution {
+                    result: Ok(CandidateResult::Discarded),
+                    reusable: false,
+                    warning: None,
+                };
+            }
+            match plane_guard::check_discard(
+                request.tool,
+                device,
+                authority.0,
+                authority.1,
+                &diff,
+                request.allow_plane_owned_writes,
+            ) {
+                Ok(found) => warning = found,
+                Err(error) => {
+                    return Execution {
+                        result: Err(error),
+                        reusable: false,
+                        warning: None,
+                    };
+                }
+            }
+        }
         return match run_step(deadline, operation_timeout, ct, backend.rollback()).await {
             Ok(()) => Execution {
                 result: Ok(CandidateResult::Discarded),
                 reusable: true, // clean session: never locked, candidate reverted
+                warning,
             },
             Err(error) => Execution {
                 // Uncertain remote state (or dropped RPC): close the session.
                 result: Err(error),
                 reusable: false,
+                warning: None,
             },
         };
     }
@@ -280,6 +396,7 @@ async fn execute<B: CandidateBackend>(
             return Execution {
                 result: combine(Err(primary), cleanup, None),
                 reusable: false,
+                warning: None,
             };
         }
         return Execution {
@@ -287,17 +404,22 @@ async fn execute<B: CandidateBackend>(
             // Lock errors can include a lost response after the device took
             // the lock. Close this session instead of making that assumption.
             reusable: false,
+            warning: None,
         };
     }
 
     let mut committed = false;
+    let mut warning = None;
     let outcome = primary_operation(
         backend,
+        device,
+        authority,
         request,
         deadline,
         operation_timeout,
         ct,
         &mut committed,
+        &mut warning,
     )
     .await;
     let reported_primary = match &outcome {
@@ -317,16 +439,21 @@ async fn execute<B: CandidateBackend>(
     Execution {
         result: combine(outcome, cleanup, reported_primary),
         reusable,
+        warning,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn primary_operation<B: CandidateBackend>(
     backend: &mut B,
+    device: &str,
+    (authority, source): (&JunosAuthority, AuthoritySource),
     request: CandidateRequest,
     deadline: Instant,
     operation_timeout: Duration,
     ct: &CancellationToken,
     committed: &mut bool,
+    warning: &mut Option<String>,
 ) -> Result<CandidateResult, JmcpError> {
     // Load step: either a rollback archive or a config payload.
     if let Some(version) = request.rollback_source {
@@ -351,6 +478,15 @@ async fn primary_operation<B: CandidateBackend>(
         .await?;
     }
     let diff = run_step(deadline, operation_timeout, ct, backend.diff()).await?;
+    // An Err here skips every commit; execute()'s cleanup reverts and unlocks.
+    *warning = plane_guard::check(
+        request.tool,
+        device,
+        authority,
+        source,
+        Some(&diff),
+        request.allow_plane_owned_writes,
+    )?;
 
     match request.mode {
         CandidateMode::DryRun => Ok(CandidateResult::DryRun { diff }),
@@ -557,6 +693,7 @@ mod tests {
         state: Arc<Mutex<DeviceState>>,
         failures: HashSet<Op>,
         hang: Option<Op>,
+        diff: String,
     }
 
     impl FakeBackend {
@@ -565,7 +702,13 @@ mod tests {
                 state,
                 failures: HashSet::new(),
                 hang: None,
+                diff: "fake diff".into(),
             }
+        }
+
+        fn with_diff(mut self, diff: &str) -> Self {
+            self.diff = diff.into();
+            self
         }
 
         fn failing(mut self, operations: &[Op]) -> Self {
@@ -636,7 +779,7 @@ mod tests {
 
         async fn diff(&mut self) -> Result<String, JmcpError> {
             self.operation(Op::Diff).await?;
-            Ok("fake diff".into())
+            Ok(self.diff.clone())
         }
 
         async fn commit_check(&mut self) -> Result<(), JmcpError> {
@@ -672,6 +815,8 @@ mod tests {
             rollback_source: None,
             mode: CandidateMode::CommitWithComment("test".into()),
             load_action: LoadAction::Set,
+            tool: "load_and_commit_config",
+            allow_plane_owned_writes: false,
         }
     }
 
@@ -681,6 +826,8 @@ mod tests {
             rollback_source: None,
             mode: CandidateMode::CommitCheck,
             load_action: LoadAction::Set,
+            tool: "load_and_commit_config",
+            allow_plane_owned_writes: false,
         }
     }
 
@@ -690,6 +837,8 @@ mod tests {
             rollback_source: None,
             mode: CandidateMode::DryRun,
             load_action: LoadAction::Set,
+            tool: "load_and_commit_config",
+            allow_plane_owned_writes: false,
         }
     }
 
@@ -699,6 +848,8 @@ mod tests {
             rollback_source: None,
             mode: CandidateMode::Discard,
             load_action: LoadAction::Merge,
+            tool: "load_and_commit_config",
+            allow_plane_owned_writes: false,
         }
     }
 
@@ -732,8 +883,29 @@ mod tests {
         cleanup_timeout: Duration,
         ct: &CancellationToken,
     ) -> Execution {
+        run_fake_as(
+            backend,
+            (&JunosAuthority::Local, AuthoritySource::Declared),
+            request,
+            timeout,
+            cleanup_timeout,
+            ct,
+        )
+        .await
+    }
+
+    async fn run_fake_as(
+        backend: &mut FakeBackend,
+        authority: (&JunosAuthority, AuthoritySource),
+        request: CandidateRequest,
+        timeout: Duration,
+        cleanup_timeout: Duration,
+        ct: &CancellationToken,
+    ) -> Execution {
         execute(
             backend,
+            "srx1",
+            authority,
             request,
             Instant::now() + timeout,
             timeout,
@@ -969,6 +1141,94 @@ mod tests {
         assert!(!state.lock().unwrap().dirty);
     }
 
+    async fn run_discard_as(
+        authority: JunosAuthority,
+        diff: &str,
+        allow: bool,
+    ) -> (Execution, Arc<Mutex<DeviceState>>) {
+        let state = Arc::new(Mutex::new(DeviceState {
+            dirty: true,
+            ..Default::default()
+        }));
+        let mut backend = FakeBackend::new(state.clone()).with_diff(diff);
+        let mut request = discard_request();
+        request.allow_plane_owned_writes = allow;
+        let execution = run_fake_as(
+            &mut backend,
+            (&authority, AuthoritySource::Declared),
+            request,
+            Duration::from_secs(1),
+            Duration::from_millis(50),
+            &CancellationToken::new(),
+        )
+        .await;
+        (execution, state)
+    }
+
+    #[tokio::test]
+    async fn sd_discard_of_pending_security_edits_is_refused_untouched() {
+        let (execution, state) =
+            run_discard_as(JunosAuthority::SecurityDirectorCloud, SECURITY_DIFF, false).await;
+        assert!(matches!(
+            execution.result,
+            Err(JmcpError::PlaneManagedConfig { .. })
+        ));
+        assert!(
+            !execution.reusable,
+            "a refusal must not read as cleanup proof"
+        );
+        assert_eq!(state.lock().unwrap().events, vec![Op::Diff]);
+        assert!(state.lock().unwrap().dirty, "pending edits must survive");
+    }
+
+    /// Discard cannot lock, so the diff could change before rollback runs:
+    /// any pending change is refused, not just a protected one.
+    #[tokio::test]
+    async fn sd_discard_of_unprotected_pending_edits_is_refused_untouched() {
+        let (execution, state) =
+            run_discard_as(JunosAuthority::SecurityDirectorCloud, INTERFACE_DIFF, false).await;
+        assert!(matches!(
+            execution.result,
+            Err(JmcpError::PlaneManagedConfig { .. })
+        ));
+        assert!(!execution.reusable);
+        assert_eq!(state.lock().unwrap().events, vec![Op::Diff]);
+        assert!(state.lock().unwrap().dirty);
+    }
+
+    #[tokio::test]
+    async fn sd_discard_of_clean_candidate_skips_rollback() {
+        let (execution, state) =
+            run_discard_as(JunosAuthority::SecurityDirectorCloud, "", false).await;
+        assert!(matches!(execution.result, Ok(CandidateResult::Discarded)));
+        assert!(
+            !execution.reusable,
+            "no cleanup ran, so no taint is cleared"
+        );
+        assert_eq!(state.lock().unwrap().events, vec![Op::Diff]);
+    }
+
+    #[tokio::test]
+    async fn sd_discard_of_unprotected_edits_with_flag_reverts_and_warns() {
+        let (execution, state) =
+            run_discard_as(JunosAuthority::SecurityDirectorCloud, INTERFACE_DIFF, true).await;
+        assert!(matches!(execution.result, Ok(CandidateResult::Discarded)));
+        assert!(
+            execution.warning.is_some(),
+            "the waived refusal must be visible"
+        );
+        assert_eq!(state.lock().unwrap().events, vec![Op::Diff, Op::Rollback]);
+    }
+
+    #[tokio::test]
+    async fn sd_discard_of_security_edits_with_flag_reverts_and_warns() {
+        let (execution, state) =
+            run_discard_as(JunosAuthority::SecurityDirectorOnprem, SECURITY_DIFF, true).await;
+        assert!(matches!(execution.result, Ok(CandidateResult::Discarded)));
+        assert!(execution.warning.is_some());
+        assert!(!state.lock().unwrap().dirty);
+    }
+
     #[tokio::test]
     async fn discard_succeeds_even_when_lock_would_fail() {
         // Regression guard for #176: prove discard works when lock would fail
@@ -1091,6 +1351,8 @@ mod tests {
                 rollback_source: Some(3),
                 mode: CandidateMode::DryRun,
                 load_action: LoadAction::Merge,
+                tool: "rollback_config",
+                allow_plane_owned_writes: false,
             },
             Duration::from_secs(1),
             Duration::from_millis(50),
@@ -1134,6 +1396,8 @@ mod tests {
                 rollback_source: Some(2),
                 mode: CandidateMode::CommitWithComment("rollback to 2".into()),
                 load_action: LoadAction::Merge,
+                tool: "rollback_config",
+                allow_plane_owned_writes: false,
             },
             Duration::from_secs(1),
             Duration::from_millis(50),
@@ -1167,5 +1431,100 @@ mod tests {
 
         // Session is clean; next operation can lock.
         assert_next_operation_can_lock(&mut backend, &execution, state.clone()).await;
+    }
+
+    const SECURITY_DIFF: &str = "[edit security nat source]\n+   rule-set rs1;";
+    const INTERFACE_DIFF: &str = "[edit interfaces ge-0/0/0]\n+   description x;";
+
+    async fn run_commit_as(
+        authority: JunosAuthority,
+        diff: &str,
+        allow: bool,
+    ) -> (Execution, Arc<Mutex<DeviceState>>) {
+        let state = Arc::new(Mutex::new(DeviceState::default()));
+        let mut backend = FakeBackend::new(state.clone()).with_diff(diff);
+        let mut request = commit_request();
+        request.allow_plane_owned_writes = allow;
+        let execution = run_fake_as(
+            &mut backend,
+            (&authority, AuthoritySource::Declared),
+            request,
+            Duration::from_secs(1),
+            Duration::from_millis(50),
+            &CancellationToken::new(),
+        )
+        .await;
+        (execution, state)
+    }
+
+    #[tokio::test]
+    async fn sd_security_diff_is_refused_reverted_and_never_committed() {
+        let (execution, state) =
+            run_commit_as(JunosAuthority::SecurityDirectorCloud, SECURITY_DIFF, false).await;
+        assert!(matches!(
+            execution.result,
+            Err(JmcpError::PlaneManagedConfig { .. })
+        ));
+        assert!(execution.reusable, "cleanup succeeded, session is clean");
+        let events = state.lock().unwrap().events.clone();
+        assert!(!events.contains(&Op::Commit));
+        assert!(events.ends_with(&[Op::Rollback, Op::Unlock]));
+        assert!(!state.lock().unwrap().dirty);
+    }
+
+    #[tokio::test]
+    async fn sd_non_security_diff_commits() {
+        let (execution, state) =
+            run_commit_as(JunosAuthority::SecurityDirectorCloud, INTERFACE_DIFF, false).await;
+        assert!(matches!(
+            execution.result,
+            Ok(CandidateResult::Committed { .. })
+        ));
+        assert!(execution.warning.is_none());
+        assert!(state.lock().unwrap().events.contains(&Op::Commit));
+    }
+
+    #[tokio::test]
+    async fn sd_security_diff_with_flag_commits_and_warns() {
+        let (execution, state) =
+            run_commit_as(JunosAuthority::SecurityDirectorOnprem, SECURITY_DIFF, true).await;
+        assert!(matches!(
+            execution.result,
+            Ok(CandidateResult::Committed { .. })
+        ));
+        assert!(execution.warning.as_deref().unwrap().contains("WARNING"));
+        assert!(state.lock().unwrap().events.contains(&Op::Commit));
+    }
+
+    #[tokio::test]
+    async fn local_security_diff_commits_without_warning() {
+        let (execution, _) = run_commit_as(JunosAuthority::Local, SECURITY_DIFF, false).await;
+        assert!(matches!(
+            execution.result,
+            Ok(CandidateResult::Committed { .. })
+        ));
+        assert!(execution.warning.is_none());
+    }
+
+    #[tokio::test]
+    async fn sd_security_diff_is_refused_in_dry_run_too() {
+        let state = Arc::new(Mutex::new(DeviceState::default()));
+        let mut backend = FakeBackend::new(state.clone()).with_diff(SECURITY_DIFF);
+        let execution = run_fake_as(
+            &mut backend,
+            (
+                &JunosAuthority::SecurityDirectorCloud,
+                AuthoritySource::Detected,
+            ),
+            dry_run_request(),
+            Duration::from_secs(1),
+            Duration::from_millis(50),
+            &CancellationToken::new(),
+        )
+        .await;
+        assert!(matches!(
+            execution.result,
+            Err(JmcpError::PlaneManagedConfig { .. })
+        ));
     }
 }

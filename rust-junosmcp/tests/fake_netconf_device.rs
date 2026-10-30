@@ -92,6 +92,8 @@ fn read_tool_succeeds_against_the_fake() {
 #[test]
 fn refused_lock_is_an_error_and_nothing_is_committed() {
     let (fake, mut server, _dir) = start(script(vec![
+        // An undeclared device is probed for its managing plane before locking.
+        ("outbound-ssh", "<output></output>".to_string()),
         ("<nc:lock>", rpc_error("configuration database locked")),
         ("<nc:unlock", OK.to_string()),
         ("discard", OK.to_string()),

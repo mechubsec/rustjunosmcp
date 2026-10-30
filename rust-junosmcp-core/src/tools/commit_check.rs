@@ -29,8 +29,16 @@ pub async fn handle(
     args: CommitCheckArgs,
     dm: Arc<DeviceManager>,
     policy: Arc<Policy>,
+    allow_plane_owned_writes: bool,
 ) -> Result<Value, JmcpError> {
-    handle_with_cancel(args, dm, policy, CancellationToken::new()).await
+    handle_with_cancel(
+        args,
+        dm,
+        policy,
+        allow_plane_owned_writes,
+        CancellationToken::new(),
+    )
+    .await
 }
 
 /// Cancellable variant of `handle` for use in transport shutdown paths.
@@ -38,6 +46,7 @@ pub async fn handle_with_cancel(
     args: CommitCheckArgs,
     dm: Arc<DeviceManager>,
     policy: Arc<Policy>,
+    allow_plane_owned_writes: bool,
     ct: CancellationToken,
 ) -> Result<Value, JmcpError> {
     validate_input_length("config_text", &args.config_text)?;
@@ -92,7 +101,7 @@ pub async fn handle_with_cancel(
     let payload = build_config_payload(args.config_text, Some(&args.config_format))?;
     let timeout_dur = Duration::from_secs(args.timeout);
 
-    match candidate_transaction::run(
+    let (result, warning) = candidate_transaction::run(
         &dm,
         &args.device,
         CandidateRequest {
@@ -100,13 +109,15 @@ pub async fn handle_with_cancel(
             rollback_source: None,
             mode: CandidateMode::CommitCheck,
             load_action,
+            tool: "commit_check_config",
+            allow_plane_owned_writes,
         },
         timeout_dur,
         &ct,
     )
-    .await?
-    {
-        CandidateResult::CommitCheck { diff, outcome } => Ok(match outcome {
+    .await?;
+    let mut response = match result {
+        CandidateResult::CommitCheck { diff, outcome } => match outcome {
             CheckOutcome::Valid => json!({
                 "success": true, "outcome": "valid", "diff": diff, "checked_only": true
             }),
@@ -117,9 +128,13 @@ pub async fn handle_with_cancel(
                 "success": false, "outcome": "check_failed", "diff": diff, "error": error,
                 "hint": "commit-check could not reach a verdict (for example the known multi-RE reply parsing limitation on chassis clusters). This is NOT a statement that the configuration is invalid, but it is also NOT a validation pass — do not commit until the configuration has been independently validated (e.g. on a standalone RE)."
             }),
-        }),
+        },
         _ => unreachable!("commit-check transaction returned the wrong result kind"),
+    };
+    if let Some(warning) = warning {
+        response["warning"] = json!(warning);
     }
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -157,6 +172,7 @@ mod tests {
             },
             dm,
             pol,
+            false,
         )
         .await;
         assert!(matches!(r, Err(JmcpError::UnknownRouter(_))));
@@ -178,6 +194,7 @@ mod tests {
             },
             dm,
             pol,
+            false,
         )
         .await;
         assert!(matches!(r, Err(JmcpError::BadFormat(ref s)) if s == "yaml"));
@@ -202,6 +219,7 @@ mod tests {
             },
             dm,
             pol,
+            false,
         )
         .await;
         match r {
@@ -231,6 +249,7 @@ mod tests {
             },
             dm,
             pol,
+            false,
         )
         .await;
         match r {
@@ -245,6 +264,33 @@ mod tests {
                 assert_eq!(pattern, "delete *");
             }
             other => panic!("expected Denied, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mist_device_is_refused_before_connect() {
+        let inv = inv_with(
+            r#"{"r1":{"ip":"203.0.113.1","port":1,"username":"u","auth":{"type":"password","password":"x"},"config_authority":"mist"}}"#,
+        );
+        let dm = Arc::new(DeviceManager::new(inv.clone()));
+        let pol = Arc::new(Policy::build(&inv).unwrap());
+        let r = handle(
+            CommitCheckArgs {
+                device: "r1".into(),
+                config_text: "set system host-name x".into(),
+                config_format: "set".into(),
+                timeout: 5,
+            },
+            dm,
+            pol,
+            false,
+        )
+        .await;
+        match r {
+            Err(e @ JmcpError::PlaneManagedConfig { .. }) => {
+                assert_eq!(e.audit_kind(), "blocked");
+            }
+            other => panic!("expected PlaneManagedConfig, got {other:?}"),
         }
     }
 }

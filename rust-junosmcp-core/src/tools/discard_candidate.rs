@@ -20,21 +20,23 @@ use tokio_util::sync::CancellationToken;
 pub async fn handle(
     args: DiscardCandidateArgs,
     dm: Arc<DeviceManager>,
+    allow_plane_owned_writes: bool,
 ) -> Result<Value, JmcpError> {
-    handle_with_cancel(args, dm, CancellationToken::new()).await
+    handle_with_cancel(args, dm, allow_plane_owned_writes, CancellationToken::new()).await
 }
 
 /// Cancellable variant of `handle` for use in transport shutdown paths.
 pub async fn handle_with_cancel(
     args: DiscardCandidateArgs,
     dm: Arc<DeviceManager>,
+    allow_plane_owned_writes: bool,
     ct: CancellationToken,
 ) -> Result<Value, JmcpError> {
     // Confirm the router exists before connecting.
     let _ = dm.inventory().get(&args.device)?;
     let timeout_dur = Duration::from_secs(args.timeout);
 
-    match candidate_transaction::run(
+    let (result, warning) = candidate_transaction::run(
         &dm,
         &args.device,
         CandidateRequest {
@@ -43,18 +45,24 @@ pub async fn handle_with_cancel(
             mode: CandidateMode::Discard,
             // Unused: no payload is loaded on the discard path.
             load_action: rustez::LoadAction::Merge,
+            tool: "discard_candidate",
+            allow_plane_owned_writes,
         },
         timeout_dur,
         &ct,
     )
-    .await?
-    {
-        CandidateResult::Discarded => Ok(json!({
-            "success": true,
-            "message": "candidate configuration discarded (rolled back to running)"
-        })),
-        _ => unreachable!("discard transaction returned the wrong result kind"),
+    .await?;
+    let CandidateResult::Discarded = result else {
+        unreachable!("discard transaction returned the wrong result kind");
+    };
+    let mut response = json!({
+        "success": true,
+        "message": "candidate configuration discarded (rolled back to running)"
+    });
+    if let Some(warning) = warning {
+        response["warning"] = json!(warning);
     }
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -81,8 +89,32 @@ mod tests {
                 timeout: 5,
             },
             dm,
+            false,
         )
         .await;
         assert!(matches!(r, Err(JmcpError::UnknownRouter(_))));
+    }
+
+    #[tokio::test]
+    async fn mist_device_is_refused_before_connect() {
+        let inv = inv_with(
+            r#"{"r1":{"ip":"203.0.113.1","port":1,"username":"u","auth":{"type":"password","password":"x"},"config_authority":"mist"}}"#,
+        );
+        let dm = Arc::new(DeviceManager::new(inv));
+        let r = handle(
+            DiscardCandidateArgs {
+                device: "r1".into(),
+                timeout: 5,
+            },
+            dm,
+            false,
+        )
+        .await;
+        match r {
+            Err(e @ JmcpError::PlaneManagedConfig { .. }) => {
+                assert_eq!(e.audit_kind(), "blocked");
+            }
+            other => panic!("expected PlaneManagedConfig, got {other:?}"),
+        }
     }
 }
