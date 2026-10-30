@@ -3966,7 +3966,8 @@ mod redact_last_mile_tests {
     }
 
     /// XML text nodes (`<output>` CLI text) keep #579 counters and keywords;
-    /// an element whose name contains `session` is still masked.
+    /// a session-named element outside the preserved keywords
+    /// (`session-init`, `session-close`, `limit-session`) is still masked.
     #[test]
     fn redact_body_xml_text_keeps_counters_but_session_named_elements_stay_masked() {
         let text = redact_body(
