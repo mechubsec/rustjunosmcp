@@ -9,12 +9,16 @@
 
 use crate::config_authority::JunosAuthority;
 use crate::error::JmcpError;
+use std::collections::HashSet;
 
 /// Top-level hierarchies Security Director owns on a managed SRX.
 const PROTECTED: [&str; 3] = ["security", "applications", "schedulers"];
 
 /// Containers whose first child is a name and whose body is a full config tree.
 const WRAPPERS: [&str; 3] = ["groups", "logical-systems", "tenants"];
+
+/// Most protected paths quoted in one refusal or warning.
+const MAX_RENDERED_PATHS: usize = 10;
 
 /// How the managing plane was established, quoted in refusals and warnings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +50,11 @@ pub fn detect_authority(outbound_ssh: &str) -> JunosAuthority {
     let mut has_sd_cloud = false;
     let mut has_ems_client = false;
     for line in outbound_ssh.lines() {
+        // Annotations are free text: `/* old client mist */` must not lock a device.
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("/*") || trimmed.starts_with('*') || trimmed.starts_with('#') {
+            continue;
+        }
         let lowered = line.to_ascii_lowercase();
         if lowered.contains("sdcloud.juniperclouds.net") {
             has_sd_cloud = true;
@@ -108,13 +117,26 @@ fn classify(path: &[String]) -> Option<String> {
 }
 
 /// Push the hit for `path` (if any) onto `hits`, keeping first-seen order.
-fn record(hits: &mut Vec<String>, path: &[String]) {
+fn record(hits: &mut Vec<String>, seen: &mut HashSet<String>, path: &[String]) {
     let Some(hit) = classify(path) else {
         return;
     };
-    if !hits.contains(&hit) {
+    if seen.insert(hit.clone()) {
         hits.push(hit);
     }
+}
+
+/// Join `paths` for a message, capped so a diff touching thousands of groups
+/// cannot produce an unbounded error or warning.
+fn render_paths(paths: &[String]) -> String {
+    if paths.len() <= MAX_RENDERED_PATHS {
+        return paths.join(", ");
+    }
+    format!(
+        "{} and {} more",
+        paths[..MAX_RENDERED_PATHS].join(", "),
+        paths.len() - MAX_RENDERED_PATHS
+    )
 }
 
 /// List protected hierarchies touched by a Junos `show | compare` text diff.
@@ -124,6 +146,7 @@ fn record(hits: &mut Vec<String>, path: &[String]) {
 /// Leaf values are never included, since they may be secrets.
 pub fn protected_paths(diff: &str) -> Vec<String> {
     let mut hits = Vec::new();
+    let mut seen = HashSet::new();
     let mut header_path: Vec<String> = Vec::new();
     let mut stack: Vec<Vec<String>> = Vec::new();
     for line in diff.lines() {
@@ -137,7 +160,7 @@ pub fn protected_paths(diff: &str) -> Vec<String> {
                 .map(str::to_owned)
                 .collect();
             stack.clear();
-            record(&mut hits, &header_path);
+            record(&mut hits, &mut seen, &header_path);
             continue;
         }
         let is_changed = line.starts_with(['+', '-', '!']);
@@ -166,7 +189,7 @@ pub fn protected_paths(diff: &str) -> Vec<String> {
         full_path.extend(stack.iter().flatten().cloned());
         full_path.extend(tokens.iter().cloned());
         if is_changed {
-            record(&mut hits, &full_path);
+            record(&mut hits, &mut seen, &full_path);
         }
         if opens_block {
             stack.push(tokens);
@@ -220,7 +243,7 @@ pub fn check(
             if paths.is_empty() {
                 return Ok(None);
             }
-            paths.join(", ")
+            render_paths(&paths)
         }
     };
     let (plane, remedy) = if matches!(authority, JunosAuthority::SecurityDirectorCloud) {
@@ -325,6 +348,13 @@ mod tests {
     fn mist_beats_sd_cloud() {
         let text = format!("client mist {{\n}}\n{SDC_STANZA}");
         assert_eq!(detect_authority(&text), JunosAuthority::Mist);
+    }
+
+    #[test]
+    fn annotations_do_not_detect() {
+        let text = "/* old client mist, retired sdcloud.juniperclouds.net endpoint */\n\
+                    client noc-collector {\n    10.0.0.9 port 2200;\n}\n";
+        assert_eq!(detect_authority(text), JunosAuthority::Unknown);
     }
 
     fn hits(diff: &str) -> Vec<String> {
@@ -523,6 +553,24 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(warning.contains("delete and re-import"));
+    }
+
+    #[test]
+    fn rendered_paths_are_capped() {
+        let diff: String = (0..25)
+            .map(|index| format!("[edit groups G{index} security nat]\n+    pool p;\n"))
+            .collect();
+        assert_eq!(hits(&diff).len(), 25);
+        let err = run(
+            &JunosAuthority::SecurityDirectorCloud,
+            AuthoritySource::Declared,
+            Some(&diff),
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("groups G9 security nat and 15 more"));
+        assert!(!err.contains("groups G10 "));
     }
 
     #[test]
