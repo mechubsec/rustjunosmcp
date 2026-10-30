@@ -1262,8 +1262,8 @@ mod tests {
     }
 
     fn assert_no_probe_secret(text: &str, context: &str) {
-        for secret in ["QQa", "QQB", "QQtok"] {
-            assert!(!text.contains(secret), "{context}: leaks {secret}: {text}");
+        for marker in ["QQa", "QQB", "QQtok"] {
+            assert!(!text.contains(marker), "{context}: leaks {marker}: {text}");
         }
     }
 
@@ -1408,10 +1408,10 @@ mod tests {
                 server_url,
             ] {
                 let json = status_echo_with(&config, echo);
-                for secret in ["QQa", "QQB"] {
+                for marker in ["QQa", "QQB"] {
                     assert!(
-                        !json.contains(secret),
-                        "url {server_url}, echo {echo}: leaks {secret}: {json}"
+                        !json.contains(marker),
+                        "url {server_url}, echo {echo}: leaks {marker}: {json}"
                     );
                 }
             }
