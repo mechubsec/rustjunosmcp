@@ -20,17 +20,11 @@ use std::time::Duration;
 /// requested display `format`.
 ///
 /// `text` and `set` output is line-oriented Junos config syntax, so it goes
-/// through [`junos_text_fallback`], which runs the cross-vendor
-/// [`mecmcp_redact::redact_text`] denylist first and layers the
-/// Junos-specific, whole-word [`mecmcp_redact::junos::redact_log_text`]
-/// vocabulary on top (MEC-2558 re-review of MEC-2519/#526: the Junos-only
-/// pass alone is not a superset of the generic one — it has no entries for
-/// PEM bodies, URL-userinfo passwords, plaintext bearer tokens, or several
-/// generic secret-shaped keys, so using it *instead of* the generic pass
-/// let those shapes through unredacted). A closed set of non-secret Junos
-/// `session` keywords (`session-init`, `limit-session`, ...) is preserved by
-/// [`crate::text_redact::redact_junos_text`]; every other secret shape is
-/// still masked.
+/// through [`junos_text_fallback`], which calls
+/// [`mecmcp_redact::junos::redact_text`]: the generic scan, then the Junos
+/// log vocabulary, preserving vetted non-secret `session` counters and
+/// keywords (`session-init`, `limit-session`, ...) while masking every other
+/// secret shape (#579).
 ///
 /// `xml` and `json` output is parsed and structurally redacted via
 /// [`mecmcp_redact::junos::redact_xml`] / [`mecmcp_redact::junos::redact_json_value`]
@@ -60,10 +54,8 @@ fn redact_config_output(text: &str, format: &str) -> String {
     }
 }
 
-/// See [`redact_config_output`]'s doc comment for why this composition
-/// (generic [`mecmcp_redact::redact_text`] then Junos-specific
-/// [`mecmcp_redact::junos::redact_log_text`]) replaced a bare
-/// `redact_log_text` call.
+/// Text/set redaction: [`mecmcp_redact::junos::redact_text`] via
+/// [`crate::text_redact::redact_junos_text`].
 fn junos_text_fallback(text: &str) -> String {
     crate::text_redact::redact_junos_text(text)
 }

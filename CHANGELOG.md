@@ -50,10 +50,32 @@ All notable user-facing changes are recorded here. Format loosely follows
   longer reaches the audit log. Error kinds and client results are
   unchanged. `collect_jtac_support_bundle` workflow failures and the
   signature-package pre-run checks now settle the audit too.
+- Output redaction no longer blanks ordinary `session` text: counters
+  (`Valid sessions: 12`, `SESSION_OPEN 1234 0`) and `log session-init` /
+  `session-close` keywords now come through, in text and JSON bodies. Real
+  session secrets stay masked. `show security flow session` command echoes
+  survive only when they end in `summary`, `table`, `extensive`, `brief`,
+  `terse` or `count`, or carry a single `destination-prefix`/`source-prefix
+  <addr>` or `destination-port`/`source-port <n>` filter; echoes with a
+  `| match "..."` pipe are still masked. Still masked by design:
+  `Dynamic-address session scan status ...`, the DHCP binding header (cut from
+  `Session` onward, not just the `Session Id` column), and other XML elements
+  whose name contains `session` (for example
+  `<valid-sessions>12</valid-sessions>`, masked by the element-name denylist;
+  `<session-init/>`, `<session-close/>` and a benign `<limit-session>` subtree
+  are preserved). CLI counters and keywords inside XML
+  text nodes (`<output>Valid sessions: 12</output>` from `| display xml`) are
+  preserved like plain text (#579).
+- Security: JSON tool bodies (for example `execute_junos_command_batch`
+  `commands[].value`) and XML text, attributes and comments now also get the
+  Junos-only key vocabulary that text bodies already had (supplied by
+  mecmcp 0.31.1's `junos::redact_json_value`/`redact_xml`), so a Junos-only
+  secret such as `privacy-key` is masked in batch and XML output as it is in
+  `execute_junos_command` output, and XML stays well-formed (#579).
 
 ### Changed
 
-- Those SRX tools now return a coded tool-error result instead of a protocol
+- The SRX workflow tools now return a coded tool-error result instead of a protocol
   error for workflow failures, matching device-open failures: transport
   failures use the Junos mapping (`upstream_unavailable`, `retryable=true` on
   retry-safe tools), invalid input is `invalid_argument`, and device RPC,
@@ -64,7 +86,14 @@ All notable user-facing changes are recorded here. Format loosely follows
   `upstream_unavailable` (retryable; nothing was sent). Tool schemas and
   annotations are unchanged. The signature-package tools still return a
   protocol `invalid_params` error for invalid input.
-
+- Bump the mecmcp crates to v0.31.1 (`junos::redact_text`, linear-time
+  `redact_log_text`; `CallerCtx` gains `token_created_at`/`token_expires_at`).
+  The upstream built-in `whoami` tool is opt-in and is not registered here, so
+  the tool surface and schemas are unchanged. mecmcp 0.31.0's
+  `ScopeSet::allows_tool("whoami")` returns true for every scope, so a
+  restricted token calling `whoami` now gets an unknown-tool error instead of
+  a preflight 403, because the tool is not registered. 0.31.1 adds the Junos
+  vocabulary to `junos::redact_json_value` and `junos::redact_xml` (mecmcp#591).
 - Tool and device scope denial texts no longer start with `token '<name>'`
   (the body redactor blanked them to `token [REDACTED]`). They now read
   `caller is not authorized for tool '<tool>'` / `... for router '<router>'

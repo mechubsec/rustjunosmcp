@@ -113,15 +113,12 @@ pub(super) fn mint_request_id() -> String {
 /// (trimmed, starts with `<`), so plain text falls straight through to
 /// [`junos_log_text_fallback`] unescaped.
 ///
-/// MEC-2519/MEC-2558: this server only ever speaks Junos, so the fallback
-/// layers [`mecmcp_redact::junos::redact_log_text`]'s closed, whole-word
-/// Junos key vocabulary *on top of* [`mecmcp_redact::redact_text`]'s
-/// cross-vendor substring denylist (via [`junos_log_text_fallback`]),
-/// rather than replacing it. A closed set of non-secret Junos `session`
-/// keywords (`session-init`, `session-close`, `limit-session`) is preserved
-/// around the generic pass; all other secret shapes (PEM blocks,
+/// Plain text goes through [`mecmcp_redact::junos::redact_text`] (via
+/// [`junos_log_text_fallback`]): the generic scan, then the Junos log
+/// vocabulary, preserving vetted non-secret `session` counters, keywords and
+/// flow-session command echoes (#579). Everything else (PEM blocks,
 /// URL-userinfo passwords, bearer tokens, `session-id`/`session-token`, ...)
-/// stay masked. See [`rust_junosmcp_core::text_redact`].
+/// stays masked. See [`rust_junosmcp_core::text_redact`].
 pub(super) fn redact_body(s: &str) -> String {
     if let Ok(mut value) = serde_json::from_str::<Value>(s) {
         redact_json_preserving_server_fields(&mut value);
@@ -135,11 +132,7 @@ pub(super) fn redact_body(s: &str) -> String {
     junos_log_text_fallback(s)
 }
 
-/// Run the cross-vendor [`mecmcp_redact::redact_text`] pass first, then the
-/// Junos-specific [`mecmcp_redact::junos::redact_log_text`] pass on top of
-/// its output, so unstructured Junos CLI/config text gets the broader
-/// generic secret coverage plus whole-word Junos-key coverage the generic
-/// pass lacks, while preserving non-secret Junos `session` keywords.
+/// Unstructured Junos CLI/config text redaction; see [`rust_junosmcp_core::text_redact`].
 pub(super) fn junos_log_text_fallback(s: &str) -> String {
     rust_junosmcp_core::text_redact::redact_junos_text(s)
 }
@@ -2853,6 +2846,8 @@ mod scope_tests {
             verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
+            token_created_at: None,
+            token_expires_at: None,
             client_name: None,
             model_id: None,
             session_id: None,
@@ -2885,6 +2880,8 @@ mod scope_tests {
             verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
+            token_created_at: None,
+            token_expires_at: None,
             client_name: None,
             model_id: None,
             session_id: None,
@@ -2917,6 +2914,8 @@ mod scope_tests {
             verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
+            token_created_at: None,
+            token_expires_at: None,
             client_name: None,
             model_id: None,
             session_id: None,
@@ -2989,6 +2988,8 @@ mod scope_tests {
             verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
+            token_created_at: None,
+            token_expires_at: None,
             client_name: None,
             model_id: None,
             session_id: None,
@@ -3016,6 +3017,8 @@ mod scope_tests {
             verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
+            token_created_at: None,
+            token_expires_at: None,
             client_name: None,
             model_id: None,
             session_id: None,
@@ -3045,6 +3048,8 @@ mod scope_tests {
             verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
+            token_created_at: None,
+            token_expires_at: None,
             client_name: None,
             model_id: None,
             session_id: None,
@@ -3077,6 +3082,8 @@ mod scope_tests {
             verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
+            token_created_at: None,
+            token_expires_at: None,
             client_name: None,
             model_id: None,
             session_id: None,
@@ -3106,6 +3113,8 @@ mod scope_tests {
             verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
+            token_created_at: None,
+            token_expires_at: None,
             client_name: None,
             model_id: None,
             session_id: None,
@@ -3136,6 +3145,8 @@ mod scope_tests {
             verified_proposer: None,
             oauth: None,
             token_name: "alice".into(),
+            token_created_at: None,
+            token_expires_at: None,
             client_name: None,
             model_id: None,
             session_id: None,
@@ -3178,6 +3189,8 @@ mod scope_tests {
             verified_proposer: None,
             oauth: None,
             token_name: "t".into(),
+            token_created_at: None,
+            token_expires_at: None,
             client_name: None,
             model_id: None,
             session_id: None,
@@ -3803,6 +3816,133 @@ mod redact_last_mile_tests {
         );
     }
 
+    /// #579: vetted non-secret `session` text inside a JSON tool body (an
+    /// `execute_junos_command_batch` result) survives; session secrets don't.
+    #[test]
+    fn redact_body_keeps_session_counters_and_keywords_in_json_issue_579() {
+        /// Vetted non-secret `session` text from #579 (and the config keywords).
+        const PRESERVED: &[&str] = &[
+            "SESSION_OPEN       1234        0",
+            "SESSION_CLOSE      1233        0",
+            "Valid sessions: 12",
+            "Active sessions: 3",
+            "Total sessions: 5",
+            "Total processed sessions:      42",
+            "Unicast-sessions: 12\nMulticast-sessions: 0\nSessions-in-use: 3\nMaximum-sessions: 524288\nValid sessions: 12\nFailed sessions: 0",
+            "log {\n    session-init;\n    session-close;\n}",
+            "then log session-init",
+        ];
+
+        /// Session-shaped and real secrets that must stay masked.
+        const MASKED: &[(&str, &str)] = &[
+            ("session-id abcdef0123456789", "abcdef0123456789"),
+            ("Session-Key: abcdef0123456789", "abcdef0123456789"), // gitleaks:allow -- fake fixture
+            ("Valid sessions: abcdef0123456789", "abcdef0123456789"),
+            (
+                "set security ike policy p pre-shared-key ascii-text \"hunter2hunter2\"",
+                "hunter2hunter2",
+            ),
+            ("then log session-init; hunter2hunter2", "hunter2hunter2"),
+        ];
+        let batch = |command: &str, value: &str| {
+            serde_json::json!([{"router": "r1", "commands": [
+                {"command": command, "ok": true, "value": value}
+            ]}])
+        };
+        let echo = "show security flow session destination-prefix 10.9.0.2";
+        for case in PRESERVED {
+            let body = batch(echo, case);
+            let redacted: Value =
+                serde_json::from_str(&redact_body(&serde_json::to_string(&body).unwrap())).unwrap();
+            assert_eq!(redacted, body, "over-masked in JSON: {case}");
+        }
+        for (case, secret) in MASKED {
+            let body = batch(echo, case);
+            let redacted = redact_body(&serde_json::to_string(&body).unwrap());
+            assert!(
+                !redacted.contains(secret),
+                "secret survived in JSON: {redacted}"
+            );
+        }
+    }
+
+    /// A batch `value` holding XML (`| display xml`) is masked structurally,
+    /// like the single-command path; a text value beside it keeps #579 text.
+    #[test]
+    fn redact_body_masks_xml_batch_values() {
+        let probe = "Zq9wXv7LmP";
+        let body = serde_json::json!([{"router": "r1", "commands": [
+            {"command": "show configuration | display xml", "ok": true,
+             "value": format!("<configuration><snmp><privacy-key>{probe}</privacy-key></snmp></configuration>")},
+            {"command": "show security flow session summary", "ok": true,
+             "value": "Valid sessions: 12\nthen log session-init"}
+        ]}]);
+        let redacted = redact_body(&body.to_string());
+        assert!(!redacted.contains(probe), "XML secret leaked: {redacted}");
+        assert!(
+            redacted.contains("Valid sessions: 12") && redacted.contains("then log session-init"),
+            "session text lost: {redacted}"
+        );
+    }
+
+    /// CLI text inside a non-secret XML element (`<output>`) gets the Junos
+    /// vocabulary too, in a batch value and on the single-command path.
+    #[test]
+    fn redact_body_masks_cli_text_inside_xml_output() {
+        let probe = "Zq9wXv7LmP";
+        let xml = format!(
+            "<rpc-reply><output>set snmp v3 usm local-engine user u privacy-aes128 privacy-key \"{probe}\"</output></rpc-reply>"
+        );
+        let batch = serde_json::json!([{"router": "r1", "commands": [
+            {"command": "show configuration", "ok": true, "value": xml}
+        ]}]);
+        for body in [batch.to_string(), xml.clone()] {
+            let redacted = redact_body(&body);
+            assert!(!redacted.contains(probe), "leaked: {redacted}");
+        }
+    }
+
+    /// A Junos-only key (`privacy-key`, in `REDACT_LOG_KEYS` but not the
+    /// generic denylist) in a batch `value` is masked, like plain text, while
+    /// #579 session text in the same value survives.
+    #[test]
+    fn redact_body_applies_junos_vocabulary_to_batch_values() {
+        let probe = "Zq9wXv7LmP";
+        let value = format!(
+            "set snmp v3 usm local-engine user u privacy-des privacy-key \"{probe}\"\nValid sessions: 12\nthen log session-init"
+        );
+        let body = serde_json::json!([{"router": "r1", "commands": [
+            {"command": "show configuration", "ok": true, "value": value}
+        ]}]);
+        let redacted = redact_body(&body.to_string());
+        assert!(
+            !redacted.contains(probe),
+            "Junos-only secret leaked: {redacted}"
+        );
+        assert!(
+            redacted.contains("Valid sessions: 12") && redacted.contains("then log session-init"),
+            "session text lost: {redacted}"
+        );
+    }
+
+    /// A top-level XML response (single command) masks an attribute secret and
+    /// CLI text in `<output>`, and the result still parses as XML.
+    #[test]
+    fn redact_body_masks_top_level_xml_attribute_and_output_text() {
+        let marker = "Zq9wXv7LmP";
+        let attr_marker = "hunter2probe";
+        let xml = format!(
+            "<rpc-reply><user password=\"{attr_marker}\"/><output>set snmp v3 privacy-key \"{marker}\"</output></rpc-reply>"
+        );
+        let redacted = redact_body(&xml);
+        assert!(!redacted.contains(marker), "output text leaked: {redacted}");
+        assert!(
+            !redacted.contains(attr_marker),
+            "attribute leaked: {redacted}"
+        );
+        mecmcp_redact::redact_xml_str(&redacted).expect("result must stay well-formed XML");
+    }
+
     /// Same claim, for XML — the format `get_junos_config`/`junos_config_diff`
     /// bodies can already be in by the time they reach a last-mile pass.
     #[test]
@@ -3825,6 +3965,25 @@ mod redact_last_mile_tests {
             .expect("redact_body must return input that still parses as XML");
     }
 
+    /// XML text nodes (`<output>` CLI text) keep #579 counters and keywords;
+    /// a session-named element outside the preserved keywords
+    /// (`session-init`, `session-close`, `limit-session`) is still masked.
+    #[test]
+    fn redact_body_xml_text_keeps_counters_but_session_named_elements_stay_masked() {
+        let text = redact_body(
+            "<rpc-reply><output>Valid sessions: 12\nthen log session-init</output></rpc-reply>",
+        );
+        assert!(
+            text.contains("Valid sessions: 12") && text.contains("then log session-init"),
+            "XML text counters lost: {text}"
+        );
+        let element = redact_body("<rpc-reply><valid-sessions>12</valid-sessions></rpc-reply>");
+        assert!(
+            element.contains("<valid-sessions>[REDACTED]</valid-sessions>"),
+            "session element not masked: {element}"
+        );
+    }
+
     /// Non-secret Junos `session` keywords survive the last-mile pass in
     /// structured XML and JSON bodies, while real session secrets stay masked.
     #[test]
@@ -3841,12 +4000,12 @@ mod redact_last_mile_tests {
         let value: Value = serde_json::from_str(&redacted).unwrap();
         assert_eq!(value, json, "non-secret session keywords were masked");
 
-        let secret = serde_json::json!({
+        let probe = serde_json::json!({
             "session-id": "FAKEsessionvalue",
             "session-token": "FAKEsessiontoken",
             "limit-session": { "password": "FAKEpw" },
         });
-        let redacted = redact_body(&secret.to_string());
+        let redacted = redact_body(&probe.to_string());
         assert!(
             !redacted.contains("FAKEsession") && !redacted.contains("FAKEpw"),
             "session secret leaked"
@@ -3856,7 +4015,7 @@ mod redact_last_mile_tests {
     }
 
     /// Genuinely unstructured input (CLI/`set`-style output, a plain error
-    /// message) falls back to [`mecmcp_redact::junos::redact_log_text`]
+    /// message) falls back to [`mecmcp_redact::junos::redact_text`]
     /// rather than being left unredacted because it did not parse as JSON
     /// or XML.
     #[test]
