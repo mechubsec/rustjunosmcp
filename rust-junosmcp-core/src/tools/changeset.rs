@@ -532,6 +532,12 @@ pub async fn create_change_set(
     .await
 }
 
+/// True for the coordinator's wrapper around a `stage()` error. It reports a
+/// failed bookkeeping write (field `state`) before reaching that wrapper.
+fn is_stage_failure(error: &mecmcp_changeset::CoordinatorError) -> bool {
+    error.field() == "device" && error.message().starts_with("staging failed:")
+}
+
 /// Cancellable variant of `create_change_set` for use in transport shutdown paths.
 ///
 /// `owner_subject` is the owner token's bound IdP identity (`--oidc-subject`
@@ -1210,10 +1216,12 @@ pub async fn apply_change_set_with_cancel(
         )
         .await
         // The coordinator stringifies stage errors; a plane refusal goes back typed
-        // so it is audited as `blocked` with the `unauthorized` code.
+        // so it is audited as `blocked` with the `unauthorized` code. Only the
+        // stage wrapper carries it: a bookkeeping failure must stay visible.
         .map_err(|e| {
-            transaction
-                .take_plane_refusal()
+            is_stage_failure(&e)
+                .then(|| transaction.take_plane_refusal())
+                .flatten()
                 .unwrap_or_else(|| JmcpError::Validation(e.to_string()))
         })?;
 
@@ -3182,6 +3190,23 @@ mod tests {
             allow_plane_owned_writes,
         )
         .await
+    }
+
+    #[test]
+    fn only_the_stage_wrapper_is_retyped() {
+        use mecmcp_changeset::CoordinatorError;
+        assert!(is_stage_failure(&CoordinatorError::new(
+            "device",
+            "staging failed: refused"
+        )));
+        assert!(!is_stage_failure(&CoordinatorError::new(
+            "state",
+            "disk full"
+        )));
+        assert!(!is_stage_failure(&CoordinatorError::new(
+            "device",
+            "device fingerprint changed"
+        )));
     }
 
     /// A declared Mist device is read-only, so a payload plan is refused at

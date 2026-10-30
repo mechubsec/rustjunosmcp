@@ -279,6 +279,13 @@ impl ChangeSetRig {
     /// Fingerprint, create, then apply a one-payload change set. Returns the
     /// create result and the apply result.
     fn create_and_apply(&self) -> ((bool, String), (bool, String)) {
+        self.create_and_apply_actions(
+            json!([{"payload": {"text": "set system host-name x", "format": "set"}}]),
+        )
+    }
+
+    /// Fingerprint, create, then apply a change set with `actions`.
+    fn create_and_apply_actions(&self, actions: Value) -> ((bool, String), (bool, String)) {
         let (_, text) = self.call("get_junos_candidate_fingerprint", json!({"device": "fake"}));
         let fingerprint = serde_json::from_str::<Value>(&text).unwrap()["candidate_fingerprint"]
             .as_str()
@@ -286,8 +293,7 @@ impl ChangeSetRig {
             .to_owned();
         let created = self.call(
             "create_junos_change_set",
-            json!({"device": "fake", "expected_fingerprint": fingerprint,
-                   "actions": [{"payload": {"text": "set system host-name x", "format": "set"}}]}),
+            json!({"device": "fake", "expected_fingerprint": fingerprint, "actions": actions}),
         );
         if created.0 {
             return (created, (false, String::new()));
@@ -368,4 +374,26 @@ fn changeset_detected_mist_is_refused_before_any_load() {
     assert!(!rig.fake.saw("<nc:load-configuration"), "{requests:?}");
     assert!(!rig.fake.saw("<nc:commit"), "{requests:?}");
     assert!(!rig.fake.saw("<commit-configuration"), "{requests:?}");
+}
+
+/// A detected plane gets the same rollback-depth guard as a declared one: the
+/// interface-only diff would pass the plane guard, so only the depth guard can
+/// refuse this.
+#[test]
+fn changeset_detected_sdc_rollback_depth_two_is_refused() {
+    let rig = start_changeset(changeset_script(SDC_STANZA, INTERFACE_DIFF), None, &[]);
+    let (created, (apply_error, apply_text)) =
+        rig.create_and_apply_actions(json!([{"rollback_source": 2}]));
+    assert!(!created.0, "{created:?}");
+    assert!(apply_error, "{apply_text}");
+    assert!(
+        apply_text.contains("would roll back 2 commit(s)"),
+        "{apply_text}"
+    );
+    assert!(!rig.fake.saw("rollback=\"2\""), "{:?}", rig.fake.requests());
+    assert!(
+        !rig.fake.saw("<commit-configuration"),
+        "{:?}",
+        rig.fake.requests()
+    );
 }
