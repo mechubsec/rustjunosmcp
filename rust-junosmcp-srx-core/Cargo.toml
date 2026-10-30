@@ -25,6 +25,17 @@ mecmcp-redact      = { workspace = true }
 # transitively (2.12.x) by the existing dependency graph; taken as a direct
 # dep so address-book resolution gets typed prefixes instead of raw strings.
 ipnet              = { version = "2", features = ["serde"] }
+# Feed URL sanitising for get_srx_feed_status (#528): userinfo, query and
+# fragment are stripped by a real parser, since hand-splitting gets `@`/`?`
+# inside userinfo wrong. Already resolved transitively (2.5.x, via reqwest).
+url                = "2"
+# Credential scrub for get_srx_feed_status (#528): every occurrence of every
+# configured secret, overlaps included, in one linear search. Already in the
+# lock via regex.
+aho-corasick       = "1"
+# Percent-decode URL userinfo exactly as the `url` parser encoded it (#528).
+# Already in the lock via url.
+percent-encoding   = "2"
 time               = { version = "0.3", features = ["serde", "parsing", "formatting", "macros"] }
 tokio              = { workspace = true, features = ["macros", "rt", "time"] }
 uuid               = { version = "1", features = ["v4"] }

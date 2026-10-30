@@ -267,6 +267,41 @@
       }
     }
   },
+  "get_srx_feed_status": {
+    "name": "get_srx_feed_status",
+    "description": "Read-only status of the mecfeedmcp dynamic-address feeds an SRX pulls (`security dynamic-address feed-server` entries whose feed path is `/feeds/junos-dynamic-address/address` or `/prefix`). Per node and per feed returns feed_server, feed_name, address_name, kind (address or prefix), the url (userinfo, query and fragment removed; path kept), entries, next_update, last_update_status and error. Missing or unparsed device fields are null, never guessed. state=not_configured when no such feed is subscribed. Junos does not report the feed ETag; compare `entries` and `last_update_status` with the feed server. Feed user-name and password are used only to scrub device text and are never returned; tls-profile is never read. Output is redacted: config/device values matching known secret patterns are replaced before being returned; structure and non-secret values are preserved.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "required": [
+                "router"
+              ]
+            },
+            {
+              "required": [
+                "router_name"
+              ]
+            }
+          ]
+        }
+      ],
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "router": {
+          "description": "Device name (aliased as router_name).",
+          "type": "string"
+        },
+        "router_name": {
+          "description": "Device name (aliased as router_name).\n\nAlias for `router`; accepted for backward compatibility.",
+          "type": "string"
+        }
+      }
+    }
+  },
   "get_srx_security_services_status": {
     "name": "get_srx_security_services_status",
     "description": "Reports the health and version of up to five SRX security services (IDP, AppID, UTM Anti-Virus, SecIntel, ATP/AAMW) in a single call. Each sub-service is independently classified as active or not_configured. The overall state is not_configured only when all five sub-services are absent. Output is redacted: config/device values matching known secret patterns are replaced before being returned; structure and non-secret values are preserved.",

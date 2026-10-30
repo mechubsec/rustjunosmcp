@@ -1,0 +1,49 @@
+<!--
+  Synthetic: per-feed block layout from the srx-dynamic-ip-feed reference,
+  unverified on a device. mecfeed-address succeeded, mecfeed-prefix has the
+  file-not-changed success status, mecfeed-stray has no block. QQ* strings are
+  credential markers the parser must not read.
+-->
+<output>
+Dynamic-address session scan status            : Disable
+Hold-interval for dynamic-address session scan : 10 seconds
+
+Server Name                                    : MECFEED
+    Hostname/IP                                : https://QQsvc:$QQPW@feeds.example.net:8443
+    Update interval                            : 300
+    Hold interval                              : 86400
+    TLS Profile Name                           : MECFEED-TLS
+    User Name                                  : QQuser
+    Feed Name                                  : mecfeed-address
+        Mapped dynamic address name            : MECFEED-ADDRESS
+        URL                                    : https://QQsvc:$QQPW@feeds.example.net:8443/feeds/junos-dynamic-address/address?token=QQtok#QQfrag
+        Total IPv4 entries                     : 1
+        Total IPv6 entries                     : 1
+        Download errors                        : 0
+        Db errors                              : 0
+        Other errors                           : 0
+        Next update                            : 2026-10-29 14:10:12 UTC
+        Expiration time                        : 2026-10-30 14:05:12 UTC
+        Last update status                     : succeeded
+
+Server Name                                    : MECFEED-PFX
+    Hostname/IP                                : https://QQbearer@feeds.example.net:8443/proxy/feeds/junos-dynamic-address/prefix?sig=QQsig
+    Update interval                            : 300
+    Hold interval                              : 86400
+    TLS Profile Name                           : ---
+    User Name                                  : ---
+    Feed Name                                  : mecfeed-prefix
+        Mapped dynamic address name            : MECFEED-PREFIX
+        URL                                    : https://QQbearer@feeds.example.net:8443/proxy/feeds/junos-dynamic-address/prefix?sig=QQsig
+        Total IPv4 entries                     : 2
+        Total IPv6 entries                     : 0
+        Next update                            : 2026-10-29 14:10:14 UTC
+        Expiration time                        : 2026-10-30 14:05:14 UTC
+        Last update status                     : succeeded&lt;file not changed&gt;
+
+Instance Name                                  : default
+    Total number of IPv4 entries               : 4
+    Total number of IPv4 entries from feed     : 3
+    Total number of IPv6 entries               : 1
+    Total number of IPv6 entries from feed     : 1
+</output>

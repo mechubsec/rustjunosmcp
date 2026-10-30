@@ -55,6 +55,7 @@ fn srx_router_tool_calls() -> Vec<(&'static str, serde_json::Value)> {
             json!({"router":"r1","feature":"idp"}),
         ),
         ("vpn_lifecycle_report", json!({"router":"r1"})),
+        ("get_srx_feed_status", json!({"router":"r1"})),
         (
             "manage_idp_security_package",
             json!({"router":"r1","action":"check_server"}),
@@ -216,15 +217,15 @@ fn lists_all_known_tools() {
         .filter(|name| !rust_junosmcp_auth::PSEUDO_TOOLS.contains(name))
         .collect();
     assert_eq!(names, expected);
-    assert_eq!(tools.len(), 44);
+    assert_eq!(tools.len(), 45);
     // 28 before Phase 5; the change-set tools took it to 33,
     // `confirm_junos_change_set` makes 34 (#239),
     // `list_junos_change_sets` makes 35 (#255), and
     // `cancel_junos_change_set` makes 36 (#293), and execute makes 37.
     // MEC-54's four SRX policy-read tools make 41, and
     // `srx_flow_sessions` + `srx_policy_match` make 43 (MEC-55), and
-    // `confirm_commit` makes 44 (MEC-45).
-    assert_eq!(names.len(), 44);
+    // `confirm_commit` makes 44 (MEC-45), `get_srx_feed_status` makes 45 (#528).
+    assert_eq!(names.len(), 45);
 }
 
 #[test]

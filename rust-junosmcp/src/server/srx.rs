@@ -284,6 +284,7 @@ const SRX_SERVER_TOOLS: &[&str] = &[
     "collect_jtac_support_bundle",
     "srx_flow_sessions",
     "srx_policy_match",
+    "get_srx_feed_status",
 ];
 
 #[cfg(test)]
@@ -293,8 +294,8 @@ mod server_tools_const_tests {
     use std::collections::HashSet;
 
     #[test]
-    fn server_tools_len_is_fifteen() {
-        assert_eq!(SRX_SERVER_TOOLS.len(), 15);
+    fn server_tools_len_is_sixteen() {
+        assert_eq!(SRX_SERVER_TOOLS.len(), 16);
     }
 
     #[test]
@@ -1294,6 +1295,71 @@ impl JmcpHandler {
             })?;
         let result = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing PolicyMatchResult: {e}"), None)
+        });
+        match &result {
+            Ok(body) => {
+                audit.meta("output_bytes", body.len() as u64);
+                audit.succeed();
+            }
+            Err(e) => audit.fail_kind("serialize", e),
+        }
+        result.map(|body| CallToolResult::success(vec![ContentBlock::text(body)]))
+    }
+
+    #[tool(
+        name = "get_srx_feed_status",
+        description = "Read-only status of the mecfeedmcp dynamic-address feeds an SRX pulls \
+                       (`security dynamic-address feed-server` entries whose feed path is \
+                       `/feeds/junos-dynamic-address/address` or `/prefix`). Per node and per \
+                       feed returns feed_server, feed_name, address_name, kind (address or \
+                       prefix), the url (userinfo, query and fragment removed; path kept), entries, next_update, \
+                       last_update_status and error. Missing or unparsed device fields are null, \
+                       never guessed. state=not_configured when no such feed is subscribed. \
+                       Junos does not report the feed ETag; compare `entries` and \
+                       `last_update_status` with the feed server. Feed user-name and password \
+                       are used only to scrub device text and are never returned; tls-profile \
+                       is never read. Output is redacted: config/device values matching known secret patterns are replaced before being returned; structure and non-secret values are preserved."
+    )]
+    async fn get_srx_feed_status(
+        &self,
+        Parameters(args): Parameters<rust_junosmcp_srx_core::FeedStatusArgs>,
+        extensions: Extensions,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let ctx = caller_ctx(&extensions);
+        let mut audit = audit_scope(
+            ctx,
+            "get_srx_feed_status",
+            "read",
+            vec![args.router.clone()],
+        );
+
+        if let Err(e) = self.authorize_call(&extensions, "get_srx_feed_status", Some(&args.router))
+        {
+            audit.deny(match e {
+                ScopeError::MissingCallerContext => "missing_caller_context",
+                ScopeError::RouterNotInScope { .. } => "router_scope",
+                ScopeError::ToolNotInScope { .. } => "tool_scope",
+            });
+            return Self::srx_scope_to_call_result(e);
+        }
+        let mut device = match self.dm.open(&args.router).await {
+            Ok(device) => device,
+            // Coded like the Junos tools, so a refused port is classified.
+            Err(e) => {
+                audit.fail_kind(e.audit_kind(), &e);
+                return Ok(super::coded_error_result(&e));
+            }
+        };
+        let resp = rust_junosmcp_srx_core::workflows::feed_status::run(&mut device, args)
+            .await
+            .map_err(|e| match e {
+                rust_junosmcp_srx_core::SrxError::InvalidInput(_) => {
+                    rmcp::ErrorData::invalid_params(e.to_string(), None)
+                }
+                _ => rmcp::ErrorData::internal_error(e.to_string(), None),
+            })?;
+        let result = serde_json::to_string_pretty(&resp).map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("serializing FeedStatusData: {e}"), None)
         });
         match &result {
             Ok(body) => {

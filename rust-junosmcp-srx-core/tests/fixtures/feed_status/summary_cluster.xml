@@ -1,0 +1,34 @@
+<!--
+  Synthetic chassis-cluster reply: node0 answers with the summary text,
+  node1 with a severity-less rpc-error. Per-feed layout unverified.
+-->
+<multi-routing-engine-results>
+  <multi-routing-engine-item>
+    <re-name>node0</re-name>
+    <output>
+Server Name                                    : MECFEED
+    Feed Name                                  : mecfeed-address
+        Total IPv4 entries                     : 1
+        Total IPv6 entries                     : 1
+        Next update                            : 2026-10-29 14:10:12 UTC
+        Last update status                     : succeeded
+    Feed Name                                  : mecfeed-stray
+        Total IPv4 entries                     : 0
+        Total IPv6 entries                     : 0
+        Last update status                     : succeeded
+Server Name                                    : MECFEED-PFX
+    Feed Name                                  : mecfeed-prefix
+        Total IPv4 entries                     : 2
+        Total IPv6 entries                     : 0
+        Last update status                     : succeeded&lt;file not changed&gt;
+    </output>
+  </multi-routing-engine-item>
+  <multi-routing-engine-item>
+    <re-name>node1</re-name>
+    <rpc-error>
+      <error-type>application</error-type>
+      <error-tag>operation-failed</error-tag>
+      <error-message>dynamic-address daemon not responding on this node</error-message>
+    </rpc-error>
+  </multi-routing-engine-item>
+</multi-routing-engine-results>

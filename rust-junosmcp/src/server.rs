@@ -238,6 +238,7 @@ const RETRY_SAFE_TOOLS: &[&str] = &[
     "get_chassis_cluster_status",
     "get_junos_candidate_fingerprint",
     "get_junos_config",
+    "get_srx_feed_status",
     "get_srx_security_services_status",
     "junos_config_diff",
     "list_staged_files",
@@ -2775,8 +2776,8 @@ mod scope_tests {
         // MEC-54's four SRX policy-read tools (srx_list_policies,
         // srx_resolve_address, srx_resolve_application, srx_list_nat_rules)
         // make 41, and `srx_flow_sessions` + `srx_policy_match` make 43 (MEC-55).
-        // `confirm_commit` makes 44 (MEC-45).
-        assert_eq!(names.len(), 44);
+        // `confirm_commit` makes 44 (MEC-45), `get_srx_feed_status` makes 45 (#528).
+        assert_eq!(names.len(), 45);
     }
 
     #[test]
@@ -3938,6 +3939,30 @@ mod redact_last_mile_tests {
         assert!(
             !redacted.contains(FAKE_JUNOS_HASH),
             "secret leaked (not printed here to avoid echoing it into test output)"
+        );
+    }
+
+    /// `get_srx_feed_status` output keeps its structure through last-mile
+    /// redaction: its field names are not on the key denylist.
+    #[test]
+    fn redact_body_preserves_feed_status_fields() {
+        let body = serde_json::to_string_pretty(&serde_json::json!({
+            "state": "active",
+            "data": {"nodes": [{"re_name": "node0", "feeds": [{
+                "feed_server": "mecfeed", "feed_name": "blocklist",
+                "address_name": "BLOCK", "kind": "address",
+                "url": "https://feeds.example.net/feeds/junos-dynamic-address/address",
+                "entries": 12, "next_update": "2026-10-29 12:00:00",
+                "last_update_status": "succeeded", "error": null,
+            }]}]},
+        }))
+        .unwrap();
+        let redacted = redact_body(&body);
+        let before: Value = serde_json::from_str(&body).unwrap();
+        let after: Value = serde_json::from_str(&redacted).unwrap();
+        assert_eq!(
+            before, after,
+            "feed status fields were redacted: {redacted}"
         );
     }
 
