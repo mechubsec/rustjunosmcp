@@ -1209,11 +1209,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sd_discard_of_unprotected_edits_with_flag_reverts_silently() {
+    async fn sd_discard_of_unprotected_edits_with_flag_reverts_and_warns() {
         let (execution, state) =
             run_discard_as(JunosAuthority::SecurityDirectorCloud, INTERFACE_DIFF, true).await;
         assert!(matches!(execution.result, Ok(CandidateResult::Discarded)));
-        assert!(execution.warning.is_none());
+        assert!(
+            execution.warning.is_some(),
+            "the waived refusal must be visible"
+        );
         assert_eq!(state.lock().unwrap().events, vec![Op::Diff, Op::Rollback]);
     }
 

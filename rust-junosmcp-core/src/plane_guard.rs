@@ -334,32 +334,37 @@ pub fn check_discard(
     diff: &str,
     allow_plane_owned_writes: bool,
 ) -> Result<Option<String>, JmcpError> {
-    let checked = check(
-        tool,
-        device,
-        authority,
-        source,
-        Some(diff),
-        allow_plane_owned_writes,
-    )?;
-    if checked.is_some()
-        || allow_plane_owned_writes
-        || !authority.is_plane_owned()
-        || diff.trim().is_empty()
-    {
-        return Ok(checked);
+    if !authority.is_plane_owned() || diff.trim().is_empty() {
+        return Ok(None);
+    }
+    let plane = match authority {
+        JunosAuthority::Mist => "Juniper Mist",
+        JunosAuthority::SecurityDirectorCloud => "Security Director Cloud",
+        _ => "Security Director On-Prem",
+    };
+    let source_text = source.as_str();
+    let paths = protected_paths(diff);
+    let including = if paths.is_empty() {
+        String::new()
+    } else {
+        format!(", including {}", render_paths(&paths))
+    };
+    if allow_plane_owned_writes {
+        return Ok(Some(format!(
+            "WARNING: '{device}' is managed by {plane} ({source_text}) and its shared candidate had \
+             pending changes{including}. Discarding without a lock may also erase changes another \
+             session added before the rollback ran."
+        )));
     }
     Err(refuse(
         tool,
         device,
         authority,
         format!(
-            "the shared candidate has pending changes, and on this {authority}-managed SRX ({source}) \
-             a discard cannot be checked atomically: another session could add security changes \
-             before it runs. Ask the user to review and discard them in the device CLI \
-             (`configure`, then `rollback 0`).",
-            authority = authority.as_str(),
-            source = source.as_str()
+            "the shared candidate has pending changes{including}, and on this {plane}-managed SRX \
+             ({source_text}) a discard cannot be checked atomically: another session could add \
+             changes before it runs. Ask the user to review and discard them in the device CLI \
+             (`configure`, then `rollback 0`)."
         ),
     ))
 }
@@ -783,14 +788,18 @@ mod tests {
         assert!(unprotected.contains("rollback 0"));
         let protected = discard(&sd, SECURITY_DIFF, false).unwrap_err().to_string();
         assert!(protected.contains("security nat"));
+        assert!(protected.contains("rollback 0"));
+        assert!(!protected.contains("resubmit"), "no payload to resubmit");
     }
 
     #[test]
     fn discard_passes_when_empty_flagged_or_local() {
         let sd = JunosAuthority::SecurityDirectorCloud;
         assert!(matches!(discard(&sd, "", false), Ok(None)));
-        assert!(matches!(discard(&sd, INTERFACE_DIFF, true), Ok(None)));
-        assert!(matches!(discard(&sd, SECURITY_DIFF, true), Ok(Some(_))));
+        let unprotected = discard(&sd, INTERFACE_DIFF, true).unwrap().unwrap();
+        assert!(unprotected.contains("erase changes another session added"));
+        let protected = discard(&sd, SECURITY_DIFF, true).unwrap().unwrap();
+        assert!(protected.contains("including security nat"));
         assert!(matches!(
             discard(&JunosAuthority::Local, SECURITY_DIFF, false),
             Ok(None)
