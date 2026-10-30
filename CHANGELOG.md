@@ -72,14 +72,10 @@ All notable user-facing changes are recorded here. Format loosely follows
   mecmcp 0.31.1's `junos::redact_json_value`/`redact_xml`), so a Junos-only
   secret such as `privacy-key` is masked in batch and XML output as it is in
   `execute_junos_command` output, and XML stays well-formed (#579).
-- `get_device_list` and `get_router_list` now record the `count` audit meta
-  (number of devices returned, including with `include_blocklist`). It was
-  never recorded before, so audit records for these tools gain a `count` field
-  (#587).
 
 ### Changed
 
-- Those SRX tools now return a coded tool-error result instead of a protocol
+- The SRX workflow tools now return a coded tool-error result instead of a protocol
   error for workflow failures, matching device-open failures: transport
   failures use the Junos mapping (`upstream_unavailable`, `retryable=true` on
   retry-safe tools), invalid input is `invalid_argument`, and device RPC,
@@ -90,9 +86,6 @@ All notable user-facing changes are recorded here. Format loosely follows
   `upstream_unavailable` (retryable; nothing was sent). Tool schemas and
   annotations are unchanged. The signature-package tools still return a
   protocol `invalid_params` error for invalid input.
-
-- Bump the mecmcp crates to v0.31.0 (`junos::redact_text`, linear-time `redact_log_text`; `CallerCtx` gains `token_created_at`/`token_expires_at`). The upstream built-in `whoami` tool is opt-in and is not registered here, so the tool surface and schemas are unchanged.
-- Bump the mecmcp crates to v0.31.0 (`junos::redact_text`, linear-time
 - Bump the mecmcp crates to v0.31.1 (`junos::redact_text`, linear-time
   `redact_log_text`; `CallerCtx` gains `token_created_at`/`token_expires_at`).
   The upstream built-in `whoami` tool is opt-in and is not registered here, so
