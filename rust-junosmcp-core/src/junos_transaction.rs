@@ -675,9 +675,12 @@ impl DeviceTransaction for JunosTransaction {
                     let inv = self.device_manager.inventory();
                     inv.get(&self.router).map(|entry| {
                         (
-                            // Fresh per action so a re-tag mid-apply still counts;
-                            // while it stays `unknown`, use the plane detected above.
-                            if entry.config_authority == JunosAuthority::Unknown {
+                            // Only ever tightens: a re-tag to a plane mid-apply
+                            // counts (fresh read), and a reload can never loosen
+                            // the plane resolved for this locked session.
+                            if entry.config_authority.is_plane_owned() {
+                                entry.config_authority.clone()
+                            } else if authority.is_plane_owned() {
                                 authority.clone()
                             } else {
                                 entry.config_authority.clone()
