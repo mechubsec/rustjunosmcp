@@ -1,8 +1,9 @@
 //! Plane guard: refuse config writes that a management plane owns.
 //!
 //! An SRX managed by Juniper Security Director (Cloud or On-Prem) owns its
-//! `security` tree plus top-level `applications` and `schedulers`; a
-//! Mist-managed SRX owns its whole configuration. This module holds the pure
+//! `security` tree plus top-level `applications` and `schedulers`, and its
+//! `system services outbound-ssh` management session; a Mist-managed SRX owns
+//! its whole configuration. This module holds the pure
 //! logic: detecting the managing plane from `system services outbound-ssh`,
 //! finding protected hierarchies in a `show | compare` diff, and deciding
 //! whether a write is refused, warned about, or allowed. It performs no I/O.
@@ -13,6 +14,10 @@ use std::collections::HashSet;
 
 /// Top-level hierarchies Security Director owns on a managed SRX.
 const PROTECTED: [&str; 3] = ["security", "applications", "schedulers"];
+
+/// Security Director's management session; changing it disconnects the SRX
+/// from SD and, on an `unknown` device, would also defeat detection.
+const MANAGEMENT_SESSION: [&str; 3] = ["system", "services", "outbound-ssh"];
 
 /// Containers whose first child is a name and whose body is a full config tree.
 const WRAPPERS: [&str; 3] = ["groups", "logical-systems", "tenants"];
@@ -109,6 +114,13 @@ fn classify(path: &[String]) -> Option<String> {
     recorded.push(keyword);
     // shortcut: conservative, over-refuses top-level apply-groups; --allow-plane-owned-writes overrides
     if keyword == "apply-groups" || keyword == "apply-groups-except" {
+        return Some(recorded.join(" "));
+    }
+    if path
+        .get(start..start + MANAGEMENT_SESSION.len())
+        .is_some_and(|tokens| tokens == MANAGEMENT_SESSION)
+    {
+        recorded.extend(&MANAGEMENT_SESSION[1..]);
         return Some(recorded.join(" "));
     }
     if !PROTECTED.contains(&keyword.as_str()) {
@@ -224,7 +236,7 @@ pub fn check(
     allow_plane_owned_writes: bool,
 ) -> Result<Option<String>, JmcpError> {
     let source_text = source.as_str();
-    let paths = match authority {
+    let (paths, touches_session) = match authority {
         JunosAuthority::Local | JunosAuthority::Unknown => return Ok(None),
         JunosAuthority::Mist => {
             if allow_plane_owned_writes {
@@ -253,7 +265,12 @@ pub fn check(
             if paths.is_empty() {
                 return Ok(None);
             }
-            render_paths(&paths)
+            (
+                render_paths(&paths),
+                paths
+                    .iter()
+                    .any(|path| path.ends_with("system services outbound-ssh")),
+            )
         }
     };
     let (plane, remedy) = if matches!(authority, JunosAuthority::SecurityDirectorCloud) {
@@ -270,10 +287,15 @@ pub fn check(
              Security Director GUI",
         )
     };
+    let session_note = if touches_session {
+        format!(" Changing system services outbound-ssh can disconnect the SRX from {plane}.")
+    } else {
+        String::new()
+    };
     if allow_plane_owned_writes {
         return Ok(Some(format!(
             "WARNING: '{device}' is managed by {plane} ({source_text}) and this change touches {paths}. \
-             This may cause you to have to delete and re-import your security and NAT policy."
+             This may cause you to have to delete and re-import your security and NAT policy.{session_note}"
         )));
     }
     Err(refuse(
@@ -282,9 +304,10 @@ pub fn check(
         authority,
         format!(
             "this change touches {paths}, which {plane} manages on this SRX ({source_text}). \
-             Make security policy, NAT, address/application object and scheduler changes {remedy}. \
-             Interface, routing and system changes are still allowed here; resubmit them without the \
-             security, applications and schedulers changes."
+             Make security policy, NAT, address/application object and scheduler changes {remedy}.{session_note} \
+             If {plane} no longer manages this SRX, set its config_authority to local in devices.json. \
+             Interface, routing and other system changes are still allowed here; resubmit them without the \
+             security, applications, schedulers and outbound-ssh changes."
         ),
     ))
 }
@@ -483,6 +506,8 @@ mod tests {
         include_str!("../tests/fixtures/plane_guard/interfaces_system.diff");
     const REAL_OUTBOUND_SSH_SDC: &str =
         include_str!("../tests/fixtures/plane_guard/outbound_ssh_sdc.txt");
+    const REAL_DELETE_OUTBOUND_SSH: &str =
+        include_str!("../tests/fixtures/plane_guard/delete_outbound_ssh.diff");
 
     #[test]
     fn real_multi_hunk_diff() {
@@ -511,6 +536,35 @@ mod tests {
     fn real_delete_and_unprotected_diffs() {
         assert_eq!(hits(REAL_DELETE_NAT), vec!["security", "security nat"]);
         assert!(hits(REAL_INTERFACES_SYSTEM).is_empty());
+    }
+
+    #[test]
+    fn real_outbound_ssh_delete_hits() {
+        assert_eq!(
+            hits(REAL_DELETE_OUTBOUND_SSH),
+            vec!["system services outbound-ssh"]
+        );
+    }
+
+    #[test]
+    fn outbound_ssh_hits_wherever_it_is_edited() {
+        let cases = [
+            (
+                "[edit system services outbound-ssh client EMS-x]\n-    services netconf;\n",
+                "system services outbound-ssh",
+            ),
+            (
+                "[edit]\n-  system {\n-      services {\n-          outbound-ssh {\n-          }\n-      }\n-  }\n",
+                "system services outbound-ssh",
+            ),
+            (
+                "[edit groups G system services outbound-ssh]\n+   client c;\n",
+                "groups G system services outbound-ssh",
+            ),
+        ];
+        for (diff, expected) in cases {
+            assert_eq!(hits(diff), vec![expected], "for {diff:?}");
+        }
     }
 
     #[test]
@@ -620,6 +674,42 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(warning.contains("delete and re-import"));
+    }
+
+    #[test]
+    fn outbound_ssh_refusal_explains_the_session() {
+        let text = run(
+            &JunosAuthority::SecurityDirectorCloud,
+            AuthoritySource::Detected,
+            Some(REAL_DELETE_OUTBOUND_SSH),
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(text.contains("disconnect the SRX from Security Director Cloud"));
+        assert!(text.contains("set its config_authority to local"));
+        let warning = run(
+            &JunosAuthority::SecurityDirectorCloud,
+            AuthoritySource::Detected,
+            Some(REAL_DELETE_OUTBOUND_SSH),
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(warning.contains("delete and re-import") && warning.contains("disconnect"));
+    }
+
+    #[test]
+    fn security_only_refusal_skips_the_session_note() {
+        let text = run(
+            &JunosAuthority::SecurityDirectorCloud,
+            AuthoritySource::Declared,
+            Some(SECURITY_DIFF),
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(!text.contains("disconnect"));
     }
 
     #[test]
