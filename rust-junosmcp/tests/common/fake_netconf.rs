@@ -116,7 +116,7 @@ struct Conn {
 }
 
 const EOM: &str = "]]>]]>";
-const HELLO: &str = r#"<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><capabilities><capability>urn:ietf:params:netconf:base:1.0</capability><capability>urn:ietf:params:netconf:base:1.1</capability><capability>urn:ietf:params:netconf:capability:candidate:1.0</capability><capability>urn:ietf:params:netconf:capability:confirmed-commit:1.1</capability></capabilities><session-id>1</session-id></hello>"#;
+const HELLO: &str = r#"<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><capabilities><capability>urn:ietf:params:netconf:base:1.0</capability><capability>urn:ietf:params:netconf:base:1.1</capability><capability>urn:ietf:params:netconf:capability:candidate:1.0</capability><capability>urn:ietf:params:netconf:capability:confirmed-commit:1.1</capability><capability>urn:ietf:params:netconf:capability:validate:1.1</capability></capabilities><session-id>1</session-id></hello>"#;
 
 fn chunk(body: &str) -> String {
     format!("\n#{}\n{body}\n##\n", body.len())

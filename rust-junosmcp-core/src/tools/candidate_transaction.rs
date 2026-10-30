@@ -171,9 +171,6 @@ struct Execution {
     warning: Option<String>,
 }
 
-/// Read-only command whose output identifies the managing plane.
-const OUTBOUND_SSH_COMMAND: &str = "show configuration system services outbound-ssh";
-
 #[derive(Default)]
 struct CleanupFailures {
     rollback: Option<String>,
@@ -225,25 +222,17 @@ pub(crate) async fn run(
 
     // Only an undeclared device is probed. This runs before the session is
     // tainted so a refusal hands an untouched session back to the pool.
-    let (authority, source) = if declared == JunosAuthority::Unknown {
-        let stanza = match run_step(deadline, timeout, ct, async {
-            dev.cli(OUTBOUND_SSH_COMMAND).await.map_err(JmcpError::from)
-        })
-        .await
-        {
-            Ok(stanza) => stanza,
-            Err(error) => {
-                // A dropped or failed RPC leaves the session in an unknown state.
-                dev.prevent_reuse();
-                return Err(error);
-            }
-        };
-        (
-            plane_guard::detect_authority(&stanza),
-            AuthoritySource::Detected,
-        )
-    } else {
-        (declared, AuthoritySource::Declared)
+    let (authority, source) = match run_step(deadline, timeout, ct, async {
+        plane_guard::resolve_authority(&mut dev, &declared).await
+    })
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            // A dropped or failed RPC leaves the session in an unknown state.
+            dev.prevent_reuse();
+            return Err(error);
+        }
     };
     if authority == JunosAuthority::Mist {
         pre_warning = plane_guard::check(
