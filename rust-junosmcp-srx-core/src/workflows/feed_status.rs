@@ -1330,8 +1330,9 @@ mod tests {
 
     #[test]
     fn config_parse_error_message_is_scrubbed() {
-        // The stray close tag puts the password into roxmltree's message.
-        let malformed = "<configuration><url>https://QQa:$QQB@feeds.example.net</url></$QQB>";
+        // The mismatched close tag puts the configured username into
+        // roxmltree's message.
+        let malformed = "<configuration><url>https://QQa:$QQB@feeds.example.net</url></QQa>";
         match parse(malformed, Ok("<output/>")) {
             Err(SrxError::Parse(message)) => assert_no_probe_secret(&message, "parse message"),
             other => panic!("expected SrxError::Parse, got {other:?}"),
