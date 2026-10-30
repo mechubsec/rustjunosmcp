@@ -97,29 +97,37 @@ pub fn detect_authority(outbound_ssh: &str) -> JunosAuthority {
 }
 
 /// Decide whether `path` (full hierarchy of a changed line) hits a protected
-/// hierarchy, returning the value-free string to record.
-fn classify(path: &[String]) -> Option<String> {
+/// hierarchy, returning the value-free string to record. `collapsed` marks a
+/// changed `name { ... }` line, whose hidden body may hold a protected tree.
+fn classify(path: &[String], collapsed: bool) -> Option<String> {
     let mut start = 0;
     while path
         .get(start)
         .is_some_and(|token| WRAPPERS.contains(&token.as_str()))
     {
         if path.len() < start + 2 {
-            return None; // bare wrapper container
+            return collapsed.then(|| path.join(" ")); // bare wrapper container
         }
         start += 2;
     }
-    let keyword = path.get(start)?;
+    // A collapsed group, logical system or tenant hides a whole config tree.
+    let Some(keyword) = path.get(start) else {
+        return collapsed.then(|| path.join(" "));
+    };
     let mut recorded: Vec<&str> = path[..start].iter().map(String::as_str).collect();
     recorded.push(keyword);
     // shortcut: conservative, over-refuses top-level apply-groups; --allow-plane-owned-writes overrides
     if keyword == "apply-groups" || keyword == "apply-groups-except" {
         return Some(recorded.join(" "));
     }
-    if path
-        .get(start..start + MANAGEMENT_SESSION.len())
-        .is_some_and(|tokens| tokens == MANAGEMENT_SESSION)
-    {
+    let below = &path[start..];
+    let shared = below
+        .iter()
+        .zip(MANAGEMENT_SESSION)
+        .take_while(|(token, part)| token == part)
+        .count();
+    // A collapsed ancestor (`inactive: services { ... }`) hides the session inside it.
+    if shared == MANAGEMENT_SESSION.len() || (collapsed && shared == below.len()) {
         recorded.extend(&MANAGEMENT_SESSION[1..]);
         return Some(recorded.join(" "));
     }
@@ -134,8 +142,8 @@ fn classify(path: &[String]) -> Option<String> {
 }
 
 /// Push the hit for `path` (if any) onto `hits`, keeping first-seen order.
-fn record(hits: &mut Vec<String>, seen: &mut HashSet<String>, path: &[String]) {
-    let Some(hit) = classify(path) else {
+fn record(hits: &mut Vec<String>, seen: &mut HashSet<String>, path: &[String], collapsed: bool) {
+    let Some(hit) = classify(path, collapsed) else {
         return;
     };
     if seen.insert(hit.clone()) {
@@ -177,7 +185,7 @@ pub fn protected_paths(diff: &str) -> Vec<String> {
                 .map(str::to_owned)
                 .collect();
             stack.clear();
-            record(&mut hits, &mut seen, &header_path);
+            record(&mut hits, &mut seen, &header_path, false);
             continue;
         }
         let is_changed = line.starts_with(['+', '-', '!']);
@@ -211,7 +219,7 @@ pub fn protected_paths(diff: &str) -> Vec<String> {
         full_path.extend(stack.iter().flatten().cloned());
         full_path.extend(tokens.iter().cloned());
         if is_changed {
-            record(&mut hits, &mut seen, &full_path);
+            record(&mut hits, &mut seen, &full_path, rest.ends_with("{ ... }"));
         }
         if opens_block {
             stack.push(tokens);
@@ -508,6 +516,8 @@ mod tests {
         include_str!("../tests/fixtures/plane_guard/outbound_ssh_sdc.txt");
     const REAL_DELETE_OUTBOUND_SSH: &str =
         include_str!("../tests/fixtures/plane_guard/delete_outbound_ssh.diff");
+    const REAL_DEACTIVATE_SYSTEM_SERVICES: &str =
+        include_str!("../tests/fixtures/plane_guard/deactivate_system_services.diff");
 
     #[test]
     fn real_multi_hunk_diff() {
@@ -544,6 +554,37 @@ mod tests {
             hits(REAL_DELETE_OUTBOUND_SSH),
             vec!["system services outbound-ssh"]
         );
+    }
+
+    #[test]
+    fn collapsed_ancestors_hide_protected_trees() {
+        assert_eq!(
+            hits(REAL_DEACTIVATE_SYSTEM_SERVICES),
+            vec!["system services outbound-ssh"]
+        );
+        let cases = [
+            (
+                "[edit]\n!  inactive: system { ... }\n",
+                "system services outbound-ssh",
+            ),
+            ("[edit groups]\n!  inactive: G { ... }\n", "groups G"),
+            ("[edit]\n!  inactive: groups { ... }\n", "groups"),
+            (
+                "[edit logical-systems]\n!  inactive: LS1 { ... }\n",
+                "logical-systems LS1",
+            ),
+        ];
+        for (diff, expected) in cases {
+            assert_eq!(hits(diff), vec![expected], "for {diff:?}");
+        }
+        for diff in [
+            "[edit system]\n!    inactive: syslog { ... }\n",
+            "[edit system services]\n!    inactive: ssh { ... }\n",
+            "[edit interfaces]\n!  inactive: ge-0/0/0 { ... }\n",
+            "[edit groups]\n+  G {\n+      interfaces;\n+  }\n",
+        ] {
+            assert!(hits(diff).is_empty(), "unexpected hit for {diff:?}");
+        }
     }
 
     #[test]
