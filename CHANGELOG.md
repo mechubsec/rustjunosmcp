@@ -32,7 +32,38 @@ All notable user-facing changes are recorded here. Format loosely follows
   result `caller is not authorized for tool 'get_device_list.include_blocklist'`.
   stdio and the plain call are unaffected (#590).
 
+### Fixed
+
+- SRX workflow failures now settle the audit record once with the error's
+  `error_kind` (`timeout`, `rpc`, `parse`, `invalid_input`, ...). Before, 12
+  SRX workflow tools (cluster status, security services status, feature
+  license, VPN lifecycle, policy and NAT listings, address and application
+  resolution, cluster health, flow sessions, policy match, feed status)
+  returned a protocol error before settling, so one failure produced an
+  `unsettled` record plus a `dispatch_rejected` one.
+- `get_device_list` and `get_router_list` now record the `count` audit meta
+  (number of devices returned, including with `include_blocklist`). It was
+  never recorded before, so audit records for these tools gain a `count` field
+  (#587).
+- The audit `error` field is now redacted like client output for all tools
+  (Junos and SRX), so a device `<error-message>` that echoes a credential no
+  longer reaches the audit log. Error kinds and client results are
+  unchanged. `collect_jtac_support_bundle` workflow failures and the
+  signature-package pre-run checks now settle the audit too.
+
 ### Changed
+
+- Those SRX tools now return a coded tool-error result instead of a protocol
+  error for workflow failures, matching device-open failures: transport
+  failures use the Junos mapping (`upstream_unavailable`, `retryable=true` on
+  retry-safe tools), invalid input is `invalid_argument`, and device RPC,
+  parse and schema errors are `outcome_unknown` (never retryable);
+  `resolution_name_not_found` is `not_found`, resolution cycles and depth
+  overruns are `invalid_argument`. `collect_jtac_support_bundle` workflow
+  failures use the same mapping, with per-router contention as
+  `upstream_unavailable` (retryable; nothing was sent). Tool schemas and
+  annotations are unchanged. The signature-package tools still return a
+  protocol `invalid_params` error for invalid input.
 
 - Tool and device scope denial texts no longer start with `token '<name>'`
   (the body redactor blanked them to `token [REDACTED]`). They now read
@@ -58,12 +89,6 @@ All notable user-facing changes are recorded here. Format loosely follows
   source=device)` or `from _blocklist_defaults.config`. `source=` is unchanged
   (#578).
 
-### Fixed
-
-- `get_device_list` and `get_router_list` now record the `count` audit meta
-  (number of devices returned, including with `include_blocklist`). It was
-  never recorded before, so audit records for these tools gain a `count` field
-  (#587).
 
 ## [2.4.0] - 2026-10-26
 
