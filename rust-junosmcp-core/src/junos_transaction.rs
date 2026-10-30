@@ -675,9 +675,13 @@ impl DeviceTransaction for JunosTransaction {
                     let inv = self.device_manager.inventory();
                     inv.get(&self.router).map(|entry| {
                         (
-                            // The authority resolved above: declared, or detected
-                            // for an `unknown` device, so detection is guarded too.
-                            authority.clone(),
+                            // Fresh per action so a re-tag mid-apply still counts;
+                            // while it stays `unknown`, use the plane detected above.
+                            if entry.config_authority == JunosAuthority::Unknown {
+                                authority.clone()
+                            } else {
+                                entry.config_authority.clone()
+                            },
                             entry.plane_commit_logins.clone(),
                             entry.username.clone(),
                         )
