@@ -1,0 +1,5 @@
+[edit system services ssh]
++    connection-limit 9;
+[edit interfaces ge-0/0/0]
+-   description "Acme Corp - Branch WAN";
++   description PG-TEST;

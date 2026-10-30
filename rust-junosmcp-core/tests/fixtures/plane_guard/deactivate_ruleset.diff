@@ -1,0 +1,2 @@
+[edit security nat source]
+!      inactive: rule-set trust-to-untrust { ... }

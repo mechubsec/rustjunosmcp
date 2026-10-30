@@ -1,0 +1,17 @@
+[edit system services]
+-    outbound-ssh {
+-        client EMS-srx.sdcloud.juniperclouds.net {
+-            device-id 00000000-0000-0000-0000-000000000000.JUNOS;
+-            secret [REDACTED]## SECRET-DATA
+-            keep-alive {
+-                retry 12;
+-                timeout 5;
+-            }
+-            services netconf;
+-            srx.sdcloud.juniperclouds.net {
+-                port 7804;
+-                retry 1000;
+-                timeout 60;
+-            }
+-        }
+-    }
