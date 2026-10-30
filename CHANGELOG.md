@@ -41,6 +41,15 @@ All notable user-facing changes are recorded here. Format loosely follows
   resolution, cluster health, flow sessions, policy match, feed status)
   returned a protocol error before settling, so one failure produced an
   `unsettled` record plus a `dispatch_rejected` one.
+- `get_device_list` and `get_router_list` now record the `count` audit meta
+  (number of devices returned, including with `include_blocklist`). It was
+  never recorded before, so audit records for these tools gain a `count` field
+  (#587).
+- The audit `error` field of SRX tools (workflow, device-open and
+  signature-package failures) is now redacted like client output, so a
+  device `<error-message>` that echoes a credential no longer reaches the
+  audit log. `collect_jtac_support_bundle` workflow failures and the
+  signature-package pre-run checks now settle the audit too.
 
 ### Changed
 
@@ -48,8 +57,13 @@ All notable user-facing changes are recorded here. Format loosely follows
   error for workflow failures, matching device-open failures: transport
   failures use the Junos mapping (`upstream_unavailable`, `retryable=true` on
   retry-safe tools), invalid input is `invalid_argument`, and device RPC,
-  parse and schema errors are `outcome_unknown` (never retryable). Tool
-  schemas and annotations are unchanged.
+  parse and schema errors are `outcome_unknown` (never retryable);
+  `resolution_name_not_found` is `not_found`, resolution cycles and depth
+  overruns are `invalid_argument`. `collect_jtac_support_bundle` workflow
+  failures use the same mapping, with per-router contention as
+  `upstream_unavailable` (retryable; nothing was sent). Tool schemas and
+  annotations are unchanged. The signature-package tools still return a
+  protocol `invalid_params` error for invalid input.
 
 - Tool and device scope denial texts no longer start with `token '<name>'`
   (the body redactor blanked them to `token [REDACTED]`). They now read
@@ -75,12 +89,6 @@ All notable user-facing changes are recorded here. Format loosely follows
   source=device)` or `from _blocklist_defaults.config`. `source=` is unchanged
   (#578).
 
-### Fixed
-
-- `get_device_list` and `get_router_list` now record the `count` audit meta
-  (number of devices returned, including with `include_blocklist`). It was
-  never recorded before, so audit records for these tools gain a `count` field
-  (#587).
 
 ## [2.4.0] - 2026-10-26
 

@@ -239,11 +239,20 @@ impl JmcpHandler {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         use mecmcp_server::ToolErrorCode;
         use rust_junosmcp_srx_core::SrxError;
-        audit.fail_kind(e.audit_kind(), &e);
+        fail_redacted(audit, e.audit_kind(), &e);
         Ok(match e {
             SrxError::Transport(inner) => super::coded_error_result(&inner),
-            SrxError::InvalidInput(_) => {
+            SrxError::ResolutionNameNotFound { .. } => {
+                super::coded_error(ToolErrorCode::NotFound, &e.to_string())
+            }
+            SrxError::InvalidInput(_)
+            | SrxError::ResolutionCycle { .. }
+            | SrxError::ResolutionDepthExceeded { .. } => {
                 super::coded_error(ToolErrorCode::InvalidArgument, &e.to_string())
+            }
+            // Nothing was sent; same as a busy device lease.
+            SrxError::BundlePerRouterContention { .. } => {
+                super::coded_error(ToolErrorCode::UpstreamUnavailable, &e.to_string())
             }
             _ => super::coded_error(ToolErrorCode::OutcomeUnknown, &e.to_string()),
         })
@@ -430,7 +439,7 @@ impl JmcpHandler {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -488,7 +497,7 @@ impl JmcpHandler {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -548,7 +557,7 @@ impl JmcpHandler {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -603,7 +612,7 @@ impl JmcpHandler {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -654,7 +663,7 @@ impl JmcpHandler {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -712,7 +721,7 @@ impl JmcpHandler {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -776,7 +785,7 @@ impl JmcpHandler {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -830,7 +839,7 @@ impl JmcpHandler {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -903,7 +912,9 @@ impl JmcpHandler {
         let caller = ctx.map(|c| c.token_name.as_str());
         let request_id = mint_request_id();
         let device_identity = self.device_identity(&args.router).map_err(|e| {
-            rmcp::ErrorData::invalid_params(format!("resolving device identity: {e}"), None)
+            let message = format!("resolving device identity: {e}");
+            fail_redacted(&mut audit, e.audit_kind(), &message);
+            rmcp::ErrorData::invalid_params(message, None)
         })?;
         if args.action != rust_junosmcp_srx_core::IdpAction::CheckServer {
             self.validate_confirmation_request(
@@ -913,14 +924,17 @@ impl JmcpHandler {
                 &args.router,
                 &device_identity,
             )
-            .map_err(Self::signature_error_to_rmcp)?;
+            .map_err(|e| {
+                fail_redacted(&mut audit, e.audit_kind(), &e);
+                Self::signature_error_to_rmcp(e)
+            })?;
         }
 
         let mut device = match self.dm.open(&args.router).await {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -936,7 +950,7 @@ impl JmcpHandler {
         .await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         let resp = result.map_err(Self::signature_error_to_rmcp)?;
         let body = serde_json::to_string_pretty(&resp).map_err(|e| {
@@ -994,7 +1008,9 @@ impl JmcpHandler {
         let caller = ctx.map(|c| c.token_name.as_str());
         let request_id = mint_request_id();
         let device_identity = self.device_identity(&args.router).map_err(|e| {
-            rmcp::ErrorData::invalid_params(format!("resolving device identity: {e}"), None)
+            let message = format!("resolving device identity: {e}");
+            fail_redacted(&mut audit, e.audit_kind(), &message);
+            rmcp::ErrorData::invalid_params(message, None)
         })?;
         if args.action != rust_junosmcp_srx_core::AppidAction::CheckServer {
             self.validate_confirmation_request(
@@ -1004,14 +1020,17 @@ impl JmcpHandler {
                 &args.router,
                 &device_identity,
             )
-            .map_err(Self::signature_error_to_rmcp)?;
+            .map_err(|e| {
+                fail_redacted(&mut audit, e.audit_kind(), &e);
+                Self::signature_error_to_rmcp(e)
+            })?;
         }
 
         let mut device = match self.dm.open(&args.router).await {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -1027,7 +1046,7 @@ impl JmcpHandler {
         .await;
         match &result {
             Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         let resp = result.map_err(Self::signature_error_to_rmcp)?;
         let body = serde_json::to_string_pretty(&resp).map_err(|e| {
@@ -1078,7 +1097,7 @@ impl JmcpHandler {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -1149,13 +1168,16 @@ impl JmcpHandler {
             });
             return Self::srx_scope_to_call_result(e);
         }
-        rust_junosmcp_srx_core::workflows::support_bundle::validate_path_inputs(&args)
-            .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+        if let Err(e) =
+            rust_junosmcp_srx_core::workflows::support_bundle::validate_path_inputs(&args)
+        {
+            return Self::workflow_error_result(e, &mut audit);
+        }
         let mut device = match self.dm.open(&args.router).await {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -1165,19 +1187,13 @@ impl JmcpHandler {
             &self.support_bundle_staging,
         )
         .await;
-        match &result {
-            Ok(_) => audit.succeed(),
-            Err(e) => audit.fail_kind(e.audit_kind(), e),
-        }
-        let resp = result.map_err(|e| match e {
-            rust_junosmcp_srx_core::SrxError::InvalidInput(_) => {
-                rmcp::ErrorData::invalid_params(e.to_string(), None)
+        let resp = match result {
+            Ok(resp) => {
+                audit.succeed();
+                resp
             }
-            rust_junosmcp_srx_core::SrxError::BundlePerRouterContention { .. } => {
-                rmcp::ErrorData::invalid_request(e.to_string(), None)
-            }
-            _ => rmcp::ErrorData::internal_error(e.to_string(), None),
-        })?;
+            Err(e) => return Self::workflow_error_result(e, &mut audit),
+        };
         let body = serde_json::to_string_pretty(&resp).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("serializing SupportBundleData: {e}"), None)
         })?;
@@ -1220,7 +1236,7 @@ impl JmcpHandler {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -1276,7 +1292,7 @@ impl JmcpHandler {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -1338,7 +1354,7 @@ impl JmcpHandler {
             Ok(device) => device,
             // Coded like the Junos tools, so a refused port is classified.
             Err(e) => {
-                audit.fail_kind(e.audit_kind(), &e);
+                fail_redacted(&mut audit, e.audit_kind(), &e);
                 return Ok(super::coded_error_result(&e));
             }
         };
@@ -1359,6 +1375,17 @@ impl JmcpHandler {
         }
         result.map(|body| CallToolResult::success(vec![ContentBlock::text(body)]))
     }
+}
+
+/// Settle `audit` as failed with the error text run through the same
+/// redaction as client output: a device `<error-message>` can echo a credential
+/// and the audit `error` field must stay secret-free.
+fn fail_redacted(
+    audit: &mut mecmcp_audit::AuditScope,
+    kind: &'static str,
+    error: &impl std::fmt::Display,
+) {
+    audit.fail_kind(kind, super::redact_body(&error.to_string()));
 }
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
@@ -1850,5 +1877,64 @@ mod workflow_error_tests {
         assert_eq!(result.is_error, Some(true));
         assert_eq!(body(&result)["code"], "invalid_argument");
         assert_single_settled(&out, "invalid_input");
+    }
+
+    #[test]
+    fn rpc_error_text_is_redacted_in_audit_and_client_body() {
+        let message = "bad: pre-shared-key ascii-text \"FAKEpsk123\"";
+        let (result, out) = settle(SrxError::Rpc {
+            tag: "operation-failed".into(),
+            severity: "error".into(),
+            message: message.into(),
+        });
+        let client = serde_json::to_string(&result).unwrap();
+        assert!(!client.contains("FAKEpsk123"), "client body leaked the key");
+        assert!(!out.contains("FAKEpsk123"), "audit line leaked the key");
+        assert_single_settled(&out, "rpc");
+    }
+
+    #[test]
+    fn resolution_and_contention_errors_have_specific_codes() {
+        let cases = [
+            (
+                SrxError::ResolutionNameNotFound {
+                    router: "r1".into(),
+                    name: "n".into(),
+                    book: "applications".into(),
+                },
+                "not_found",
+                "resolution_name_not_found",
+            ),
+            (
+                SrxError::ResolutionCycle {
+                    router: "r1".into(),
+                    name: "n".into(),
+                    chain: "a -> n".into(),
+                },
+                "invalid_argument",
+                "resolution_cycle",
+            ),
+            (
+                SrxError::ResolutionDepthExceeded {
+                    router: "r1".into(),
+                    name: "n".into(),
+                    max_depth: 8,
+                },
+                "invalid_argument",
+                "resolution_depth_exceeded",
+            ),
+            (
+                SrxError::BundlePerRouterContention {
+                    router: "r1".into(),
+                },
+                "upstream_unavailable",
+                "contention",
+            ),
+        ];
+        for (error, code, kind) in cases {
+            let (result, out) = settle(error);
+            assert_eq!(body(&result)["code"], code);
+            assert_single_settled(&out, kind);
+        }
     }
 }
