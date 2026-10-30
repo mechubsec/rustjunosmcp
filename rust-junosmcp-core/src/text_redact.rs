@@ -15,7 +15,7 @@ mod tests {
     use super::*;
 
     /// Vetted non-secret `session` text from #579 (and the config keywords).
-    pub(crate) const PRESERVED: &[&str] = &[
+    const PRESERVED: &[&str] = &[
         "SESSION_OPEN       1234        0",
         "SESSION_CLOSE      1233        0",
         "Valid sessions: 12",
@@ -29,7 +29,7 @@ mod tests {
     ];
 
     /// Session-shaped and real secrets that must stay masked.
-    pub(crate) const MASKED: &[(&str, &str)] = &[
+    const MASKED: &[(&str, &str)] = &[
         ("session-id abcdef0123456789", "abcdef0123456789"),
         ("Session-Key: abcdef0123456789", "abcdef0123456789"), // gitleaks:allow -- fake fixture
         ("Valid sessions: abcdef0123456789", "abcdef0123456789"),
@@ -55,18 +55,73 @@ mod tests {
         }
     }
 
-    /// DHCP `Session Id` column header stays masked (upstream ruling), and
-    /// the `scan status` line is whatever upstream decides.
+    /// Documented leftovers (upstream rulings): the DHCP `Session Id` header
+    /// and `Dynamic-address session scan status : Disable` stay masked.
     #[test]
-    fn dhcp_header_stays_masked() {
+    fn documented_leftovers_stay_masked() {
         assert!(!redact_junos_text("Session Id").contains("Session Id"));
+        let scan = redact_junos_text("Dynamic-address session scan status            : Disable");
+        assert!(!scan.contains("Disable"), "{scan}");
+    }
+
+    /// Secrets the old local shield pinned; each must stay masked.
+    #[test]
+    fn legacy_still_masked_pins() {
+        let cases = [
+            ("session-token: s3cr3tvalue", "s3cr3tvalue"),
+            (
+                "set system login session-key supersecretvalue",
+                "supersecretvalue",
+            ),
+            ("session abcdef0123456789", "abcdef0123456789"),
+            (
+                "set snmp community s3cr3tcomm authorization read-only",
+                "s3cr3tcomm",
+            ),
+            (
+                "set system root-authentication encrypted-password \"$6$abc$defghijklmnop\"",
+                "$6$abc",
+            ),
+            ("Authorization: Bearer abcdef0123456789", "abcdef0123456789"), // gitleaks:allow -- fake fixture
+            (
+                "ftp://svc:hunter2hunter2@archive.example.net/cfg",
+                "hunter2hunter2",
+            ), // gitleaks:allow -- fake fixture
+            (
+                "session init 0123456789abcdef0123456789abcdef01234567",
+                "0123456789abcdef",
+            ),
+            (
+                "session close id=0123456789abcdef0123456789abcdef01234567",
+                "0123456789abcdef",
+            ),
+            ("limit-session notanumber9f8e7d6c5b4a", "notanumber"),
+            ("session summary token 0123456789abcdef", "0123456789abcdef"), // gitleaks:allow -- fake fixture
+        ];
+        for (case, secret) in cases {
+            let out = redact_junos_text(case);
+            assert!(!out.contains(secret), "secret survived: {case} -> {out}");
+        }
     }
 
     /// Crafted input must not turn the redactor quadratic (fixed upstream).
+    /// The bound is generous: a quadratic pass over 600 KB takes minutes.
     #[test]
     fn crafted_input_is_linear() {
-        let big = "session-init ".repeat(50_000);
-        let _ = redact_junos_text(&big);
-        let _ = redact_junos_text(&format!("JMCPKEEP{} session-init", "X".repeat(200_000)));
+        let inputs = [
+            "session-init ".repeat(50_000),
+            format!("JMCPKEEP{} session-init", "X".repeat(300_000)),
+        ];
+        for input in inputs {
+            assert!(input.len() >= 200_000);
+            let start = std::time::Instant::now();
+            let out = redact_junos_text(&input);
+            assert!(!out.is_empty());
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(10),
+                "redaction too slow: {:?}",
+                start.elapsed()
+            );
+        }
     }
 }

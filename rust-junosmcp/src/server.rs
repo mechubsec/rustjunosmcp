@@ -219,6 +219,20 @@ pub(super) fn redact_json_preserving_server_fields(value: &mut Value) {
     let original = value.clone();
     mecmcp_redact::junos::redact_json_value(value);
     restore_exempt_fields(&original, value);
+    apply_junos_vocabulary(value);
+}
+
+/// Run the Junos-only `redact_log_text` vocabulary over every string value, as
+/// `junos::redact_text` does for plain text. `junos::redact_json_value` runs
+/// only the generic scan, so a Junos-only key (`privacy-key`) in a batch
+/// `commands[].value` would otherwise come back in clear.
+fn apply_junos_vocabulary(value: &mut Value) {
+    match value {
+        Value::String(text) => *text = mecmcp_redact::junos::redact_log_text(text),
+        Value::Array(items) => items.iter_mut().for_each(apply_junos_vocabulary),
+        Value::Object(map) => map.values_mut().for_each(apply_junos_vocabulary),
+        _ => {}
+    }
 }
 
 /// Tools whose every device RPC is a read, so a `Connect` failure during them
@@ -3828,7 +3842,6 @@ mod redact_last_mile_tests {
             "Active sessions: 3",
             "Total sessions: 5",
             "Total processed sessions:      42",
-            "show security flow session destination-prefix 10.9.0.2",
             "Unicast-sessions: 12\nMulticast-sessions: 0\nSessions-in-use: 3\nMaximum-sessions: 524288\nValid sessions: 12\nFailed sessions: 0",
             "log {\n    session-init;\n    session-close;\n}",
             "then log session-init",
@@ -3845,20 +3858,49 @@ mod redact_last_mile_tests {
             ),
             ("then log session-init; hunter2hunter2", "hunter2hunter2"),
         ];
+        let batch = |command: &str, value: &str| {
+            serde_json::json!([{"router": "r1", "commands": [
+                {"command": command, "ok": true, "value": value}
+            ]}])
+        };
+        let echo = "show security flow session destination-prefix 10.9.0.2";
         for case in PRESERVED {
-            let body = serde_json::json!({"results": [{"command": "x", "output": case}]});
+            let body = batch(echo, case);
             let redacted: Value =
                 serde_json::from_str(&redact_body(&serde_json::to_string(&body).unwrap())).unwrap();
             assert_eq!(redacted, body, "over-masked in JSON: {case}");
         }
         for (case, secret) in MASKED {
-            let body = serde_json::json!({"results": [{"command": "x", "output": case}]});
+            let body = batch(echo, case);
             let redacted = redact_body(&serde_json::to_string(&body).unwrap());
             assert!(
                 !redacted.contains(secret),
                 "secret survived in JSON: {redacted}"
             );
         }
+    }
+
+    /// A Junos-only key (`privacy-key`, in `REDACT_LOG_KEYS` but not the
+    /// generic denylist) in a batch `value` is masked, like plain text, while
+    /// #579 session text in the same value survives.
+    #[test]
+    fn redact_body_applies_junos_vocabulary_to_batch_values() {
+        let secret = "Zq9wXv7LmP";
+        let value = format!(
+            "set snmp v3 usm local-engine user u privacy-des privacy-key \"{secret}\"\nValid sessions: 12\nthen log session-init"
+        );
+        let body = serde_json::json!([{"router": "r1", "commands": [
+            {"command": "show configuration", "ok": true, "value": value}
+        ]}]);
+        let redacted = redact_body(&body.to_string());
+        assert!(
+            !redacted.contains(secret),
+            "Junos-only secret leaked: {redacted}"
+        );
+        assert!(
+            redacted.contains("Valid sessions: 12") && redacted.contains("then log session-init"),
+            "session text lost: {redacted}"
+        );
     }
 
     /// Same claim, for XML — the format `get_junos_config`/`junos_config_diff`

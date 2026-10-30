@@ -98,7 +98,9 @@ rustez       = "0.20.0"
 # mecmcp 0.30.0: static-token device_selectors, approve_change_set_within, IdP-verified proposer (mecmcp#400).
 # mecmcp 0.30.1: token list shows device_selectors; upstream fixes only (mecmcp#400).
 # mecmcp 0.31.0: junos::redact_text (session-preserving Junos redactor, mecmcp#583), linear-time
-# redact_log_text (mecmcp#586), built-in whoami tool; CallerCtx gains token_created_at/token_expires_at (mecmcp#580).
+# redact_log_text (mecmcp#586); CallerCtx gains token_created_at/token_expires_at (mecmcp#580).
+# The built-in whoami tool is opt-in and not registered here; allows_tool("whoami") is exempt
+# from scope checks upstream, so a restricted token gets unknown-tool rather than a 403.
 #
 # mecmcp is consumed at an exact pinned tag; all crates must resolve to the
 # same git ref (see the TypeId note above).
