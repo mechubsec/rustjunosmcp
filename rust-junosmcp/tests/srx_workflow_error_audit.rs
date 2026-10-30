@@ -99,6 +99,7 @@ fn run_tool(
     (response, stderr_text)
 }
 
+#[cfg(feature = "srx")]
 #[test]
 fn cluster_status_rpc_error_is_one_settled_record_and_coded() {
     let message = format!("bad config: pre-shared-key ascii-text \"{FAKE_PSK}\"");
