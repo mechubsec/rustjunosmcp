@@ -62,9 +62,11 @@ All notable user-facing changes are recorded here. Format loosely follows
   `Session` onward, not just the `Session Id` column), and counters in XML
   (`| display xml`) bodies (#579).
 - Security: JSON tool bodies (for example `execute_junos_command_batch`
-  `commands[].value`) now also get the Junos-only key vocabulary that text
-  bodies already had, so a Junos-only secret such as `privacy-key` is masked
-  in batch output as it is in `execute_junos_command` output (#579).
+  `commands[].value`) and XML text, attributes and comments now also get the
+  Junos-only key vocabulary that text bodies already had (supplied by
+  mecmcp 0.31.1's `junos::redact_json_value`/`redact_xml`), so a Junos-only
+  secret such as `privacy-key` is masked in batch and XML output as it is in
+  `execute_junos_command` output, and XML stays well-formed (#579).
 - `get_device_list` and `get_router_list` now record the `count` audit meta
   (number of devices returned, including with `include_blocklist`). It was
   never recorded before, so audit records for these tools gain a `count` field
@@ -86,12 +88,14 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 - Bump the mecmcp crates to v0.31.0 (`junos::redact_text`, linear-time `redact_log_text`; `CallerCtx` gains `token_created_at`/`token_expires_at`). The upstream built-in `whoami` tool is opt-in and is not registered here, so the tool surface and schemas are unchanged.
 - Bump the mecmcp crates to v0.31.0 (`junos::redact_text`, linear-time
+- Bump the mecmcp crates to v0.31.1 (`junos::redact_text`, linear-time
   `redact_log_text`; `CallerCtx` gains `token_created_at`/`token_expires_at`).
   The upstream built-in `whoami` tool is opt-in and is not registered here, so
   the tool surface and schemas are unchanged. mecmcp 0.31.0's
   `ScopeSet::allows_tool("whoami")` returns true for every scope, so a
   restricted token calling `whoami` now gets an unknown-tool error instead of
-  a preflight 403, because the tool is not registered.
+  a preflight 403, because the tool is not registered. 0.31.1 adds the Junos
+  vocabulary to `junos::redact_json_value` and `junos::redact_xml` (mecmcp#591).
 - Tool and device scope denial texts no longer start with `token '<name>'`
   (the body redactor blanked them to `token [REDACTED]`). They now read
   `caller is not authorized for tool '<tool>'` / `... for router '<router>'

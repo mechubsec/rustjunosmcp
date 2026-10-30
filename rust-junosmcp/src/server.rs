@@ -124,24 +124,12 @@ pub(super) fn redact_body(s: &str) -> String {
         redact_json_preserving_server_fields(&mut value);
         return serde_json::to_string_pretty(&value).unwrap_or_else(|_| junos_log_text_fallback(s));
     }
-    if s.trim_start().starts_with('<') && mecmcp_redact::junos::redact_xml(s).is_ok() {
-        return redact_junos_markup_and_text(s);
+    if s.trim_start().starts_with('<')
+        && let Ok(redacted) = mecmcp_redact::junos::redact_xml(s)
+    {
+        return redacted;
     }
     junos_log_text_fallback(s)
-}
-
-/// Redact one Junos string: structural XML redaction when it is a document
-/// that parses (trimmed text starts with `<`, so plain text is never
-/// XML-escaped), then always the Junos-only `redact_log_text` vocabulary, which
-/// the XML pass does not apply to CLI text inside a non-secret element
-/// (`<output>set snmp ... privacy-key "x"</output>`).
-fn redact_junos_markup_and_text(s: &str) -> String {
-    let structural = s
-        .trim_start()
-        .starts_with('<')
-        .then(|| mecmcp_redact::junos::redact_xml(s).ok())
-        .flatten();
-    mecmcp_redact::junos::redact_log_text(structural.as_deref().unwrap_or(s))
 }
 
 /// Unstructured Junos CLI/config text redaction; see [`rust_junosmcp_core::text_redact`].
@@ -231,20 +219,6 @@ pub(super) fn redact_json_preserving_server_fields(value: &mut Value) {
     let original = value.clone();
     mecmcp_redact::junos::redact_json_value(value);
     restore_exempt_fields(&original, value);
-    apply_junos_vocabulary(value);
-}
-
-/// Run the Junos-only `redact_log_text` vocabulary over every string value, as
-/// `junos::redact_text` does for plain text. `junos::redact_json_value` runs
-/// only the generic scan, so a Junos-only key (`privacy-key`) in a batch
-/// `commands[].value` would otherwise come back in clear.
-fn apply_junos_vocabulary(value: &mut Value) {
-    match value {
-        Value::String(text) => *text = redact_junos_markup_and_text(text),
-        Value::Array(items) => items.iter_mut().for_each(apply_junos_vocabulary),
-        Value::Object(map) => map.values_mut().for_each(apply_junos_vocabulary),
-        _ => {}
-    }
 }
 
 /// Tools whose every device RPC is a read, so a `Connect` failure during them
@@ -3949,6 +3923,24 @@ mod redact_last_mile_tests {
             redacted.contains("Valid sessions: 12") && redacted.contains("then log session-init"),
             "session text lost: {redacted}"
         );
+    }
+
+    /// A top-level XML response (single command) masks an attribute secret and
+    /// CLI text in `<output>`, and the result still parses as XML.
+    #[test]
+    fn redact_body_masks_top_level_xml_attribute_and_output_text() {
+        let marker = "Zq9wXv7LmP";
+        let attr_marker = "hunter2probe";
+        let xml = format!(
+            "<rpc-reply><user password=\"{attr_marker}\"/><output>set snmp v3 privacy-key \"{marker}\"</output></rpc-reply>"
+        );
+        let redacted = redact_body(&xml);
+        assert!(!redacted.contains(marker), "output text leaked: {redacted}");
+        assert!(
+            !redacted.contains(attr_marker),
+            "attribute leaked: {redacted}"
+        );
+        mecmcp_redact::redact_xml_str(&redacted).expect("result must stay well-formed XML");
     }
 
     /// Same claim, for XML — the format `get_junos_config`/`junos_config_diff`
