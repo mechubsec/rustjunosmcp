@@ -22,8 +22,8 @@ All notable user-facing changes are recorded here. Format loosely follows
   enforces the same rules after staging (the change set ends `failed`), and
   `create_junos_change_set` refuses a payload plan for a device declared `mist`.
   `--allow-plane-owned-writes` downgrades these refusals to warnings; the
-  existing rollback guards stay unconditional and now also apply to a detected
-  plane. An `unknown` device costs one extra read per configuration write for
+  existing rollback guards stay unconditional, and the depth and commit-0
+  attribution guards now also apply to a detected plane at apply time. An `unknown` device costs one extra read per configuration write for
   the probe; a failed probe refuses the write. `upgrade_junos` does not probe and
   uses the declared value only. See README, "Security Director and Mist-managed SRX".
 

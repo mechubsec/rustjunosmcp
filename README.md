@@ -929,13 +929,16 @@ writable. A probe that fails refuses the write (fail closed).
   `rollback 0` instead. An empty candidate is a no-op.
 - `upgrade_junos`, `rollback_config` with `commit=true`, and the change-set
   rollback guards (depth, commit-0 attribution, mixed actions, lab mode) keep
-  their existing plane-owned refusals. A detected plane gets the change-set
-  rollback guards too.
+  their existing plane-owned refusals. A detected plane also gets the depth and
+  commit-0 attribution guards when the change set is applied; the mixed-action
+  and lab-mode checks run at create, before any probe, so they need a declared
+  value.
 
 **`--allow-plane-owned-writes`** turns the plane-guard refusals above (the Mist
 refusal, the protected-diff refusal and the discard refusal) into warnings. It
-does not lift the rollback guards in the previous paragraph, which stay
-unconditional. The warnings:
+also lets `upgrade_junos` run on a device declared plane-owned (with a warning),
+as it did before. It does not lift the rollback guards in the previous
+paragraph, which stay unconditional. The warnings:
 
 - Mist: `WARNING: '<device>' is managed by Juniper Mist (...). This change will be overwritten and erased by the next Mist push.`
 - Security Director: `WARNING: '<device>' is managed by Security Director ... and this change touches <paths>. This may cause you to have to delete and re-import your security and NAT policy.`
