@@ -890,7 +890,7 @@ its next push. Set `config_authority` on the device in `devices.json`:
 | `mist` | Managed by Juniper Mist. Read-only through this server. |
 | `security-director-cloud` | Security Director Cloud owns `security`, `applications` and `schedulers`. |
 | `security-director-onprem` | Security Director On-Prem owns the same trees. |
-| `unknown` | The default. The device is probed before each write. |
+| `unknown` | The default. The device is probed before each configuration write (see below). |
 
 ```json
 {"edge-srx": {"ip": "192.0.2.10", "username": "netconf", "auth": {"type": "ssh_key", "private_key_path": "/etc/jmcp/id_ed25519"}, "config_authority": "security-director-cloud"}}
@@ -898,7 +898,9 @@ its next push. Set `config_authority` on the device in `devices.json`:
 
 **Detection.** A declared value always wins, and declaring `local` turns
 detection off. Only an `unknown` device is probed, with one extra read per write
-(`show configuration system services outbound-ssh`). An `outbound-ssh` client
+(`show configuration system services outbound-ssh`), and only by the
+configuration tools listed below: `upgrade_junos` uses the declared value alone,
+so declare plane-managed devices you upgrade through this server. An `outbound-ssh` client
 named `mist` means Mist; a `sdcloud.juniperclouds.net` address means Security
 Director Cloud; a client named `EMS-...` means Security Director On-Prem. Mist
 takes precedence over Security Director. Anything else stays `unknown` and is
@@ -906,12 +908,16 @@ writable. A probe that fails refuses the write (fail closed).
 
 **What is refused.**
 
-- Mist: every write, refused before the candidate is locked. For a change set
-  that is `apply_junos_change_set`; `create_junos_change_set` also refuses a
-  payload plan for a device declared `mist`.
+- Mist: every write. The direct tools refuse before locking the candidate.
+  `apply_junos_change_set` refuses after taking the lock (the probe runs inside
+  it), then releases it; `create_junos_change_set` already refuses a payload
+  plan for a device declared `mist`.
 - Security Director: only a change whose `show | compare` diff touches
-  `security`, `applications` or `schedulers`. The rest of the config (interfaces,
-  routing, system) stays writable. The refusal reverts the candidate and releases
+  `security`, `applications` or `schedulers`, including through `groups`,
+  `logical-systems` or `tenants`. The rest of the config (interfaces, routing,
+  system) stays writable, with one conservative exception: a top-level
+  `apply-groups` or `apply-groups-except` change is refused too, because the
+  group may carry `security` configuration. The refusal reverts the candidate and releases
   the lock, and names the tool to use instead (for example `prepare_sdc_nat_write`
   or `plan_mist_change`).
 - Tools covered: `load_and_commit_config`, `render_and_apply_j2_template`,
@@ -921,10 +927,15 @@ writable. A probe that fails refuses the write (fail closed).
   so on a plane-owned device it cannot check the pending edits atomically: it
   refuses whenever the candidate has pending changes, and names the CLI
   `rollback 0` instead. An empty candidate is a no-op.
-- `upgrade_junos` and `rollback_config` with `commit=true` keep their existing
-  plane-owned refusals.
+- `upgrade_junos`, `rollback_config` with `commit=true`, and the change-set
+  rollback guards (depth, commit-0 attribution, mixed actions, lab mode) keep
+  their existing plane-owned refusals. A detected plane gets the change-set
+  rollback guards too.
 
-**`--allow-plane-owned-writes`** turns these refusals into warnings (break-glass):
+**`--allow-plane-owned-writes`** turns the plane-guard refusals above (the Mist
+refusal, the protected-diff refusal and the discard refusal) into warnings. It
+does not lift the rollback guards in the previous paragraph, which stay
+unconditional. The warnings:
 
 - Mist: `WARNING: '<device>' is managed by Juniper Mist (...). This change will be overwritten and erased by the next Mist push.`
 - Security Director: `WARNING: '<device>' is managed by Security Director ... and this change touches <paths>. This may cause you to have to delete and re-import your security and NAT policy.`
