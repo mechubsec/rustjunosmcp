@@ -879,6 +879,59 @@ sudo journalctl -u rust-junosmcp -b | grep -i "allow-direct-commit is enabled"
 
 Silence means it is off.
 
+## Security Director and Mist-managed SRX
+
+A device can be configured by a management plane that overwrites local edits at
+its next push. Set `config_authority` on the device in `devices.json`:
+
+| Value | Meaning |
+|-------|---------|
+| `local` | This server owns the config. No plane checks. |
+| `mist` | Managed by Juniper Mist. Read-only through this server. |
+| `security-director-cloud` | Security Director Cloud owns `security`, `applications` and `schedulers`. |
+| `security-director-onprem` | Security Director On-Prem owns the same trees. |
+| `unknown` | The default. The device is probed before each write. |
+
+```json
+{"edge-srx": {"ip": "192.0.2.10", "username": "netconf", "auth": {"type": "ssh_key", "private_key_path": "/etc/jmcp/id_ed25519"}, "config_authority": "security-director-cloud"}}
+```
+
+**Detection.** A declared value always wins, and declaring `local` turns
+detection off. Only an `unknown` device is probed, with one extra read per write
+(`show configuration system services outbound-ssh`). An `outbound-ssh` client
+named `mist` means Mist; a `sdcloud.juniperclouds.net` address means Security
+Director Cloud; a client named `EMS-...` means Security Director On-Prem. Mist
+takes precedence over Security Director. Anything else stays `unknown` and is
+writable. A probe that fails refuses the write (fail closed).
+
+**What is refused.**
+
+- Mist: every write, refused before the candidate is locked. For a change set
+  that is `apply_junos_change_set`; `create_junos_change_set` also refuses a
+  payload plan for a device declared `mist`.
+- Security Director: only a change whose `show | compare` diff touches
+  `security`, `applications` or `schedulers`. The rest of the config (interfaces,
+  routing, system) stays writable. The refusal reverts the candidate and releases
+  the lock, and names the tool to use instead (for example `prepare_sdc_nat_write`
+  or `plan_mist_change`).
+- Tools covered: `load_and_commit_config`, `render_and_apply_j2_template`,
+  `commit_check_config`, `rollback_config`, `discard_candidate` and
+  `apply_junos_change_set`. A refused change set ends `failed`.
+- `discard_candidate` cannot lock (Junos refuses to lock a modified candidate),
+  so on a plane-owned device it cannot check the pending edits atomically: it
+  refuses whenever the candidate has pending changes, and names the CLI
+  `rollback 0` instead. An empty candidate is a no-op.
+- `upgrade_junos` and `rollback_config` with `commit=true` keep their existing
+  plane-owned refusals.
+
+**`--allow-plane-owned-writes`** turns these refusals into warnings (break-glass):
+
+- Mist: `WARNING: '<device>' is managed by Juniper Mist (...). This change will be overwritten and erased by the next Mist push.`
+- Security Director: `WARNING: '<device>' is managed by Security Director ... and this change touches <paths>. This may cause you to have to delete and re-import your security and NAT policy.`
+
+The warning is returned as `warning` (direct tools) or `config_authority_warning`
+(`apply_junos_change_set`).
+
 ## Audit logging
 
 `rust-junosmcp` emits structured audit events for every Junos and SRX tool invocation. Each event records the caller, tool, target routers, authorization decision, outcome, and duration. See [`docs/AUDIT.md`](docs/AUDIT.md) for the full schema and forwarding guidance.
