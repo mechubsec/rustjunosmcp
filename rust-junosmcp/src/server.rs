@@ -124,20 +124,24 @@ pub(super) fn redact_body(s: &str) -> String {
         redact_json_preserving_server_fields(&mut value);
         return serde_json::to_string_pretty(&value).unwrap_or_else(|_| junos_log_text_fallback(s));
     }
-    if let Some(redacted) = redact_xml_document(s) {
-        return redacted;
+    if s.trim_start().starts_with('<') && mecmcp_redact::junos::redact_xml(s).is_ok() {
+        return redact_junos_markup_and_text(s);
     }
     junos_log_text_fallback(s)
 }
 
-/// Structural XML redaction, only for input that looks like a document
-/// (trimmed, starts with `<`) so plain text is never XML-escaped. `None` when
-/// the input is not a document or does not parse.
-fn redact_xml_document(s: &str) -> Option<String> {
-    if !s.trim_start().starts_with('<') {
-        return None;
-    }
-    mecmcp_redact::junos::redact_xml(s).ok()
+/// Redact one Junos string: structural XML redaction when it is a document
+/// that parses (trimmed text starts with `<`, so plain text is never
+/// XML-escaped), then always the Junos-only `redact_log_text` vocabulary, which
+/// the XML pass does not apply to CLI text inside a non-secret element
+/// (`<output>set snmp ... privacy-key "x"</output>`).
+fn redact_junos_markup_and_text(s: &str) -> String {
+    let structural = s
+        .trim_start()
+        .starts_with('<')
+        .then(|| mecmcp_redact::junos::redact_xml(s).ok())
+        .flatten();
+    mecmcp_redact::junos::redact_log_text(structural.as_deref().unwrap_or(s))
 }
 
 /// Unstructured Junos CLI/config text redaction; see [`rust_junosmcp_core::text_redact`].
@@ -236,12 +240,7 @@ pub(super) fn redact_json_preserving_server_fields(value: &mut Value) {
 /// `commands[].value` would otherwise come back in clear.
 fn apply_junos_vocabulary(value: &mut Value) {
     match value {
-        // A batch value can be XML (`| display xml`); `redact_log_text` does not
-        // understand element syntax, so use the same XML path as `redact_body`.
-        Value::String(text) => {
-            *text = redact_xml_document(text)
-                .unwrap_or_else(|| mecmcp_redact::junos::redact_log_text(text));
-        }
+        Value::String(text) => *text = redact_junos_markup_and_text(text),
         Value::Array(items) => items.iter_mut().for_each(apply_junos_vocabulary),
         Value::Object(map) => map.values_mut().for_each(apply_junos_vocabulary),
         _ => {}
@@ -3910,6 +3909,23 @@ mod redact_last_mile_tests {
             redacted.contains("Valid sessions: 12") && redacted.contains("then log session-init"),
             "session text lost: {redacted}"
         );
+    }
+
+    /// CLI text inside a non-secret XML element (`<output>`) gets the Junos
+    /// vocabulary too, in a batch value and on the single-command path.
+    #[test]
+    fn redact_body_masks_cli_text_inside_xml_output() {
+        let secret = "Zq9wXv7LmP";
+        let xml = format!(
+            "<rpc-reply><output>set snmp v3 usm local-engine user u privacy-aes128 privacy-key \"{secret}\"</output></rpc-reply>"
+        );
+        let batch = serde_json::json!([{"router": "r1", "commands": [
+            {"command": "show configuration", "ok": true, "value": xml}
+        ]}]);
+        for body in [batch.to_string(), xml.clone()] {
+            let redacted = redact_body(&body);
+            assert!(!redacted.contains(secret), "leaked: {redacted}");
+        }
     }
 
     /// A Junos-only key (`privacy-key`, in `REDACT_LOG_KEYS` but not the
