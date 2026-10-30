@@ -59,7 +59,12 @@ pub fn detect_authority(outbound_ssh: &str) -> JunosAuthority {
         if lowered.contains("sdcloud.juniperclouds.net") {
             has_sd_cloud = true;
         }
-        let mut tokens = line.split_whitespace();
+        // Split on tag brackets too, so `<output>client mist {` on one line still matches.
+        let mut tokens = line
+            .split(|character: char| {
+                character.is_whitespace() || character == '<' || character == '>'
+            })
+            .filter(|token| !token.is_empty());
         if !tokens.any(|token| token == "client") {
             continue;
         }
@@ -184,7 +189,12 @@ pub fn protected_paths(diff: &str) -> Vec<String> {
         }
         let opens_block = rest.ends_with('{');
         let statement = rest.trim_end_matches('{').trim_end_matches(';');
-        let tokens: Vec<String> = statement.split_whitespace().map(str::to_owned).collect();
+        // Stop at `{`: Junos collapses unchanged or inactive bodies to `name { ... }`.
+        let tokens: Vec<String> = statement
+            .split_whitespace()
+            .take_while(|token| *token != "{")
+            .map(str::to_owned)
+            .collect();
         let mut full_path = header_path.clone();
         full_path.extend(stack.iter().flatten().cloned());
         full_path.extend(tokens.iter().cloned());
@@ -460,6 +470,63 @@ mod tests {
     #[test]
     fn empty_diff_has_no_hits() {
         assert!(hits("").is_empty());
+    }
+
+    // Captured from a vSRX 26.2 with commit_check_config (never committed).
+    const REAL_MULTI_HUNK: &str = include_str!("../tests/fixtures/plane_guard/multi_hunk.diff");
+    const REAL_DEACTIVATE_SECURITY: &str =
+        include_str!("../tests/fixtures/plane_guard/deactivate_security.diff");
+    const REAL_DEACTIVATE_RULESET: &str =
+        include_str!("../tests/fixtures/plane_guard/deactivate_ruleset.diff");
+    const REAL_DELETE_NAT: &str = include_str!("../tests/fixtures/plane_guard/delete_nat.diff");
+    const REAL_INTERFACES_SYSTEM: &str =
+        include_str!("../tests/fixtures/plane_guard/interfaces_system.diff");
+    const REAL_OUTBOUND_SSH_SDC: &str =
+        include_str!("../tests/fixtures/plane_guard/outbound_ssh_sdc.txt");
+
+    #[test]
+    fn real_multi_hunk_diff() {
+        assert_eq!(
+            hits(REAL_MULTI_HUNK),
+            vec![
+                "groups PG-G security",
+                "groups PG-G security policies",
+                "apply-groups",
+                "security nat",
+                "applications",
+                "applications application",
+                "schedulers",
+                "schedulers scheduler",
+            ]
+        );
+    }
+
+    #[test]
+    fn real_collapsed_inactive_block_records_the_keyword_only() {
+        assert_eq!(hits(REAL_DEACTIVATE_SECURITY), vec!["security"]);
+        assert_eq!(hits(REAL_DEACTIVATE_RULESET), vec!["security nat"]);
+    }
+
+    #[test]
+    fn real_delete_and_unprotected_diffs() {
+        assert_eq!(hits(REAL_DELETE_NAT), vec!["security", "security nat"]);
+        assert!(hits(REAL_INTERFACES_SYSTEM).is_empty());
+    }
+
+    #[test]
+    fn real_sdc_stanza_detects_sd_cloud() {
+        assert_eq!(
+            detect_authority(REAL_OUTBOUND_SSH_SDC),
+            JunosAuthority::SecurityDirectorCloud
+        );
+    }
+
+    #[test]
+    fn single_line_tag_wrapped_client_still_detects() {
+        assert_eq!(
+            detect_authority("<output>client mist { services netconf; }</output>"),
+            JunosAuthority::Mist
+        );
     }
 
     const SECURITY_DIFF: &str = "[edit security nat source]\n+    rule-set rs1 {\n+    }\n";

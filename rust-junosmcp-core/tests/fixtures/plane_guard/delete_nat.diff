@@ -1,0 +1,20 @@
+[edit security]
+-   nat {
+-       source {
+-           rule-set trust-to-untrust {
+-               from zone trust;
+-               to zone untrust;
+-               rule src-nat {
+-                   match {
+-                       source-address-name 10.10.10.0/24;
+-                       destination-address 0.0.0.0/0;
+-                   }
+-                   then {
+-                       source-nat {
+-                           interface;
+-                       }
+-                   }
+-               }
+-           }
+-       }
+-   }

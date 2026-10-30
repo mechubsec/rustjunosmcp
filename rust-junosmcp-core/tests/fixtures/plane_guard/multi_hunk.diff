@@ -1,0 +1,63 @@
+[edit]
++ groups {
++     PG-G {
++         security {
++             policies {
++                 global {
++                     policy pg {
++                         match {
++                             source-address any;
++                             destination-address any;
++                             application any;
++                         }
++                         then {
++                             permit;
++                         }
++                     }
++                 }
++             }
++         }
++     }
++ }
++ apply-groups PG-G;
+[edit security nat source]
+      rule-set trust-to-untrust { ... }
++     rule-set PG-TEST {
++         from zone trust;
++         to zone untrust;
++         rule r1 {
++             match {
++                 source-address 192.0.2.0/24;
++             }
++             then {
++                 source-nat {
++                     interface;
++                 }
++             }
++         }
++     }
+[edit interfaces]
++   ge-0/0/9 {
++       description PG-TEST;
++   }
+[edit]
++  class-of-service {
++      schedulers {
++          PG-CS {
++              transmit-rate percent 10;
++          }
++      }
++  }
++  applications {
++      application PG-APP {
++          protocol tcp;
++          destination-port 9999;
++      }
++  }
++  schedulers {
++      scheduler PG-SCHED {
++          daily {
++              start-time 08:00:00 stop-time 17:00:00;
++          }
++      }
++  }
