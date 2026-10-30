@@ -330,11 +330,39 @@ async fn execute<B: CandidateBackend>(
     // (equivalent to the CLI `configure; rollback 0; exit`) and opens no
     // private database, so the shared dirty changes are the ones cleared (#176).
     if matches!(request.mode, CandidateMode::Discard) {
+        // Discarding pending protected edits on a plane-owned device is as much
+        // a write as committing them, so classify the shared candidate first.
+        let mut warning = None;
+        if authority.0.is_plane_owned() {
+            let checked = match run_step(deadline, operation_timeout, ct, backend.diff()).await {
+                Ok(diff) => plane_guard::check(
+                    request.tool,
+                    device,
+                    authority.0,
+                    authority.1,
+                    Some(&diff),
+                    request.allow_plane_owned_writes,
+                ),
+                Err(error) => Err(error),
+            };
+            match checked {
+                Ok(found) => warning = found,
+                Err(error) => {
+                    // Nothing was changed; only a dropped RPC leaves the session uncertain.
+                    let reusable = !matches!(error, JmcpError::Cancelled | JmcpError::Timeout(_));
+                    return Execution {
+                        result: Err(error),
+                        reusable,
+                        warning: None,
+                    };
+                }
+            }
+        }
         return match run_step(deadline, operation_timeout, ct, backend.rollback()).await {
             Ok(()) => Execution {
                 result: Ok(CandidateResult::Discarded),
                 reusable: true, // clean session: never locked, candidate reverted
-                warning: None,
+                warning,
             },
             Err(error) => Execution {
                 // Uncertain remote state (or dropped RPC): close the session.
@@ -1096,6 +1124,61 @@ mod tests {
         assert_eq!(events, vec![Op::Rollback]);
         assert!(!events.contains(&Op::Lock));
         assert!(!events.contains(&Op::Unlock));
+        assert!(!state.lock().unwrap().dirty);
+    }
+
+    async fn run_discard_as(
+        authority: JunosAuthority,
+        diff: &str,
+        allow: bool,
+    ) -> (Execution, Arc<Mutex<DeviceState>>) {
+        let state = Arc::new(Mutex::new(DeviceState {
+            dirty: true,
+            ..Default::default()
+        }));
+        let mut backend = FakeBackend::new(state.clone()).with_diff(diff);
+        let mut request = discard_request();
+        request.allow_plane_owned_writes = allow;
+        let execution = run_fake_as(
+            &mut backend,
+            (&authority, AuthoritySource::Declared),
+            request,
+            Duration::from_secs(1),
+            Duration::from_millis(50),
+            &CancellationToken::new(),
+        )
+        .await;
+        (execution, state)
+    }
+
+    #[tokio::test]
+    async fn sd_discard_of_pending_security_edits_is_refused_untouched() {
+        let (execution, state) =
+            run_discard_as(JunosAuthority::SecurityDirectorCloud, SECURITY_DIFF, false).await;
+        assert!(matches!(
+            execution.result,
+            Err(JmcpError::PlaneManagedConfig { .. })
+        ));
+        assert!(execution.reusable);
+        assert_eq!(state.lock().unwrap().events, vec![Op::Diff]);
+        assert!(state.lock().unwrap().dirty, "pending edits must survive");
+    }
+
+    #[tokio::test]
+    async fn sd_discard_of_unprotected_edits_reverts() {
+        let (execution, state) =
+            run_discard_as(JunosAuthority::SecurityDirectorCloud, INTERFACE_DIFF, false).await;
+        assert!(matches!(execution.result, Ok(CandidateResult::Discarded)));
+        assert!(execution.warning.is_none());
+        assert_eq!(state.lock().unwrap().events, vec![Op::Diff, Op::Rollback]);
+    }
+
+    #[tokio::test]
+    async fn sd_discard_of_security_edits_with_flag_reverts_and_warns() {
+        let (execution, state) =
+            run_discard_as(JunosAuthority::SecurityDirectorOnprem, SECURITY_DIFF, true).await;
+        assert!(matches!(execution.result, Ok(CandidateResult::Discarded)));
+        assert!(execution.warning.is_some());
         assert!(!state.lock().unwrap().dirty);
     }
 
