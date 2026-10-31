@@ -4,6 +4,30 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Documentation restructure. The README is now a short guide to installing the
+  server (LXC or Docker) and choosing a safety mode (two-person change control
+  or `--lab-mode`). The detailed sections moved unchanged to
+  [docs/REFERENCE.md](docs/REFERENCE.md), and the per-version feature history
+  moved to [featurescope.md](featurescope.md), updated through 2.6.0. Section
+  headings and anchors are unchanged, and in-repo pointers (the allowlist
+  migration warning in `policy.rs`, packaging and workflow comments, the threat
+  model, and the Stability and Upgrading links below) now name the new files.
+
+### Fixed
+
+- Docker docs: keep `tokens.json` in the mounted state directory. The documented
+  single-file bind mount kept the old file after a token command replaced it,
+  so a revoked token stayed valid after a reload.
+- Docker docs: the image signature command named a workflow that no longer signs
+  images, so it rejected genuine images. It now names mecmcp's reusable workflow
+  and pins the calling repository.
+- Docker docs: build `state/known_hosts` before starting the server. The
+  documented empty file rejected every device.
+
 ## [2.6.0] - 2026-10-30
 
 ### Added
@@ -29,7 +53,7 @@ All notable user-facing changes are recorded here. Format loosely follows
   existing rollback guards stay unconditional, and the depth and commit-0
   attribution guards now also apply to a detected plane at apply time. An `unknown` device costs one extra read per configuration write for
   the probe; a failed probe refuses the write. `upgrade_junos` does not probe and
-  uses the declared value only. See README, "Security Director and Mist-managed SRX".
+  uses the declared value only. See docs/REFERENCE.md, "Security Director and Mist-managed SRX".
 
 ### Changed
 
@@ -49,7 +73,7 @@ All notable user-facing changes are recorded here. Format loosely follows
   mecfeedmcp path. Junos does not report the feed ETag, so compare `entries`
   and `last_update_status` with the feed server. Feed `user-name` and
   `password` are used only to scrub device text and are never returned;
-  `tls-profile` is never read. No new write tool: subscribe through the change-set flow (README,
+  `tls-profile` is never read. No new write tool: subscribe through the change-set flow (docs/REFERENCE.md,
   "mecfeedmcp feeds on SRX"). Tool count 44 to 45 (SRX 15 to 16).
 
 - `get_device_list` takes an optional `include_blocklist` argument (default
@@ -227,7 +251,7 @@ All notable user-facing changes are recorded here. Format loosely follows
 > **Major release for one narrow break.** mecmcp 0.29 reserves static token names
 > starting with `oauth:` (they would collide with OAuth callers' change-set owner
 > keys), and a `tokens.json` containing such a name now fails to load as a whole.
-> 1.0.0 accepted those names, and the [Stability](README.md#stability) promise
+> 1.0.0 accepted those names, and the [Stability](docs/REFERENCE.md#stability) promise
 > covers the `tokens.json` format, so this is 2.0.0 rather than 1.1.0. Rename any
 > `oauth:*` token before upgrading; nothing else in the stable surface breaks.
 
@@ -287,7 +311,7 @@ All notable user-facing changes are recorded here. Format loosely follows
 ## [1.0.0] - 2026-10-25
 
 **1.0: rust-junosmcp is no longer beta.** The README's new
-[Stability](README.md#stability) section lists the surfaces now covered by
+[Stability](docs/REFERENCE.md#stability) section lists the surfaces now covered by
 semantic versioning: tool names and schemas, tool-error codes, CLI flags,
 environment variables, inventory and token formats, audit fields and metric
 names.
@@ -1881,7 +1905,7 @@ container image is distroless as a direct result.
 
 > **Operators: this release requires action before upgrading.** A wildcard
 > tool scope no longer grants write tools, and the token file must be mode
-> `0600`. See [Upgrading to v0.10](README.md#upgrading-to-v010) for the
+> `0600`. See [Upgrading to v0.10](docs/REFERENCE.md#upgrading-to-v010) for the
 > two-step procedure.
 
 ### Changed

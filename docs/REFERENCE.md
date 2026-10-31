@@ -1,0 +1,1805 @@
+# rust-junosmcp reference
+
+Detailed reference moved out of the README. The [README](../README.md) covers
+installing the server and choosing a safety mode. Per-version history is in
+[featurescope.md](../featurescope.md).
+
+tool registry and endpoint. It is drop-in compatible with
+[Juniper/junos-mcp-server](https://github.com/Juniper/junos-mcp-server) on the
+inventory format and core tool surface, but built on async Rust
+([rustEZ](https://github.com/mechubsec/rustez) +
+[rustnetconf](https://github.com/mechubsec/rustnetconf)) instead of PyEZ.
+
+## Stability
+
+rust-junosmcp is **stable** (no longer beta since 1.0.0). The surfaces below
+change incompatibly only in a new major version, and anything deprecated is
+announced in the [CHANGELOG](../CHANGELOG.md) at least one minor release first.
+
+- **MCP tools:** names, input schemas (required arguments and their types),
+  and the `execute` facade's operation names. Pinned by
+  `tests/stdio_smoke.rs` and `tests/compat_surface_v0_12_0.rs`.
+- **Tool errors:** the structured body's `code` values (`invalid_argument`,
+  `unauthorized`, `not_found`, `rate_limited`, `upstream_unavailable`,
+  `outcome_unknown`) and what `retryable` means, plus the `RJMCP_*` and
+  `[code=...]` tags in error text.
+- **Configuration:** CLI flags, `JMCP_*` and `MCP_TOOL_MODE` environment
+  variables, and the `devices.json` and `tokens.json` formats, including
+  token tool and device scopes.
+- **Operations:** audit record fields and Prometheus metric names (pinned by
+  `tests/prometheus_contract.rs`).
+
+Not covered: the wording of human-readable messages and logs, the shape of
+free-text tool output, and the Rust APIs of the workspace's internal crates.
+Supported platforms are Linux only, in LXC or Docker; see
+[Remote transport + auth](#remote-transport--auth) for the deployment model.
+
+## Beyond Juniper/junos-mcp-server
+
+Drop-in on `devices.json` and the core tools — plus a lot the Python/PyEZ server doesn't have:
+
+- **Safer config** — `commit_check_config` (validate, never commit), confirmed commits with auto-rollback, and `discard_candidate` to unstick a dirty candidate.
+- **Device lifecycle** — staged `upgrade_junos` (image → install → reboot → verify), SCP `transfer_file`/`fetch_file`, PFE commands.
+- **Scale & UX** — parallel session-pooled batch (~1.7× faster), `| last N`/`| count` + `max_lines`/`max_bytes` output caps, `router`/`router_name` aliases, Jinja2 templates.
+- **Transport & auth** — streamable-HTTP with per-token router/tool scopes, TLS, and a `Host` allowlist; upstream is stdio-only.
+- **SRX tools** (enabled by the default `srx` feature) — IDP & Application-ID **signature-package updates** (check/download/install/rollback), chassis-cluster health, license & security-services status, JTAC bundle with secret redaction, read-only security-policy / address-book / application / NAT-rule inspection, and mecfeedmcp dynamic-address feed status.
+
+## Performance
+
+Benchmarked on 2026-10-05 against [Juniper/junos-mcp-server](https://github.com/Juniper/junos-mcp-server)
+1.1.1 and [shigechika/junos-mcp](https://github.com/shigechika/junos-mcp) 0.18.0 / 0.22.0
+with the same read-only workload on a vSRX lab device (Junos 26.2R1.7), 3 runs × 30 calls per operation, 0 failed calls.
+Medians across runs:
+
+| | rust-junosmcp 0.27.2 | Juniper 1.1.1 | shigechika 0.22.0 |
+|---|---|---|---|
+| Cold start | 6 ms | 264 ms | 392 ms |
+| Peak memory (RSS) | 20 MiB | 129 MiB | 98 MiB |
+| SSH connections per run | 1 | 121 | 1 |
+| `show version`, p50 | 216 ms | 878 ms | 228 ms |
+| config RPC (access-denied reply¹), p50 | 11 ms | 776 ms | 21 ms |
+
+¹ the read-only bench login has no configuration view, so this measures a
+round trip with a ~400-byte reply, not a full config fetch. See
+[docs/BENCHMARKS.md](BENCHMARKS.md).
+
+Full results, the mock-target overhead numbers, method and reproduction steps:
+[docs/BENCHMARKS.md](BENCHMARKS.md).
+
+> ## v0.10.0 released — read before upgrading
+>
+> Two **breaking** authorization changes, both requiring operator action:
+> a wildcard tool scope (`"tools": ["*"]`) no longer confers the 15 **write-capable**
+> tools, and `tokens.json` must be mode `0600` or the server refuses to start.
+> The new **`token set-scope`** command changes a token's scopes without
+> reissuing its secret, so you can narrow scopes on the running 0.9.x server
+> before swapping the binary. See
+> [Upgrading to v0.10](#upgrading-to-v010) for the procedure.
+>
+> Security: the auth stack is now `unsafe`-free — `rust-junosmcp-auth` consumes
+> the shared [`mecmcp-auth`](https://github.com/mechubsec/mecmcp) crate,
+> which replaces hand-rolled secret zeroing with `zeroize` and `libc::getuid`
+> with `rustix`. A malformed token entry also no longer takes the whole store
+> offline at load.
+>
+> Current tool surface: 45 tools by default (28 Junos-only with
+> `--no-default-features`). See the
+> [v0.10.0 release notes](https://github.com/mechubsec/rustjunosmcp/releases/tag/v0.10.0)
+> for the authorization changes above.
+
+## Blocklist guardrails (v0.2)
+
+`devices.json` may carry an optional `_blocklist_defaults` block plus an
+optional `blocklist` field on each device entry. Rules use simple globs
+(`*`, `?`) and an `action` of `"deny"` or `"allow"`. Most-specific match
+wins; per-device rules tiebreak top-level defaults. See
+[`devices-template.json`](../devices-template.json) for an example, and
+[`docs/superpowers/specs/2026-05-04-blocklist-guardrails-design.md`](superpowers/specs/2026-05-04-blocklist-guardrails-design.md)
+for the full design.
+
+The `pfe_commands` rule list is independent: a deny on `commands` does not gate `execute_junos_pfe_command` and vice versa. Use it to restrict PFE inputs (e.g. `set *`) without affecting the operational CLI.
+
+The blocklist applies to `execute_junos_command` and `load_and_commit_config`.
+For `load_and_commit_config`, `config_format` must be `set` whenever the
+device has any effective config rules; `text` and `xml` payloads are
+rejected pre-flight in that case.
+
+> **Compat note:** files using `_blocklist_defaults` or per-device
+> `blocklist` are not cross-compatible with Juniper/junos-mcp-server's
+> inventory format. Files without these fields remain drop-in compatible.
+
+### `execute_junos_command` authorization mode: allowlist (default) vs. blocklist
+
+`_blocklist_defaults` (and, going forward, this key only — see the
+per-device restriction below) may carry a `mode` of `"allowlist"` or
+`"blocklist"`. This governs `execute_junos_command`,
+`execute_junos_command_batch`, `execute_junos_pfe_command`, and also
+`get_junos_config` (it runs `show configuration [path] [| display
+<format>]` through the same `commands` allowlist/blocklist — see "Config
+output format and load mode" below); the `config` domain used by
+`load_and_commit_config` stays a fail-open blocklist regardless of `mode`.
+
+- **`allowlist` (fail-closed, the default for new configs)** — a command is
+  denied unless it matches a literal, whitespace-tokenized prefix in
+  `allow` (globs are rejected at load time, not just ignored). Each stage
+  after a `|` in the command must independently match a prefix in
+  `allowed_pipes`, or the whole command is refused; forbidden shell
+  metacharacters (`;`, redirects, backticks, newlines) are refused
+  outright, before any prefix match. `allow`/`allowed_pipes` merge the same
+  way `commands` deny rules do today: `_blocklist_defaults` ∪ the device's
+  own list. A per-device `allow` addition never leaks to other devices —
+  each device gets its own compiled allowlist policy.
+
+  `execute_junos_pfe_command` is gated by its own, independent pair of
+  keys: `pfe_allow`/`pfe_allowed_pipes`. They merge the same way as
+  `allow`/`allowed_pipes` (defaults ∪ device), but an entry in `allow` does
+  not allowlist anything for PFE commands and vice versa — the two domains
+  never share state. A config that sets `allow` but not `pfe_allow` still
+  refuses every PFE command under allowlist mode — that is fail-closed by
+  default for an unconfigured domain, not a bug; add a `pfe_allow` list if
+  you need `execute_junos_pfe_command`.
+- **`blocklist` (fail-open, legacy)** — the pre-MEC-93 behavior: a command
+  is denied only if it matches a `commands` (or `pfe_commands`) deny glob;
+  everything else is allowed.
+
+**Allowed characters (MEC-1337).** In allowlist mode, a command may only
+use printable ASCII characters with the literal ASCII space (`U+0020`) as
+the token separator. Any other character is refused outright
+(`forbidden_metachar`), the same as the existing `;`/redirect/backtick/
+newline check.
+
+**Migration:** a `devices.json` with `commands`/`pfe_commands` deny rules
+but no `mode` key loads as `blocklist` and logs one startup `WARN` that
+blocklist mode is fail-open, with a pointer back to this section. A file
+with no `_blocklist_defaults` at all, or a freshly generated sample
+config, loads as `allowlist`. `mode` is only valid on
+`_blocklist_defaults` — setting it on a per-device `blocklist` is a
+load-time error, since the underlying policy engine picks one command mode
+for the whole file and a per-device override would silently do nothing.
+
+Every refusal — allowlist or blocklist — writes an audit record via the
+existing audit path, tagged with a stable reason code
+(`not_allowlisted`, `pipe_not_allowlisted`, `forbidden_metachar`, or the
+legacy `blocked`).
+
+A minimal read-only starter allowlist:
+
+```json
+"_blocklist_defaults": {
+    "mode": "allowlist",
+    "allow": [
+        "show version",
+        "show interfaces",
+        "show route",
+        "show security policies",
+        "show chassis"
+    ],
+    "pfe_allow": [
+        "show cos"
+    ]
+}
+```
+
+## Config output format and load mode
+
+`get_junos_config` takes an optional `format`: `text` (default, unchanged),
+`set`, `xml`, or `json`. Each is rendered device-side via the matching Junos
+`| display <format>` CLI modifier, so output goes through the same policy
+check, blocklist, and output-cap pipeline as `text` today — there is no
+separate code path for the new formats.
+
+```json
+{ "router_name": "core-1", "config_path": "system services", "format": "set" }
+```
+
+**Under `mode: allowlist`, `get_junos_config` is governed by the
+`commands` allowlist, not a separate rule.** The rendered command is
+`show configuration [config_path] [| display set|xml|json]`, checked the
+same way as any other `execute_junos_command` input: `show configuration`
+must be a prefix in `allow`, and — if a `format` other than the default
+`text` is requested — `display set`/`display xml`/`display json` must be
+a prefix in `allowed_pipes`. The starter allowlist in
+[`devices-template.json`](../devices-template.json) does **not** include
+`show configuration`, so copying it as-is refuses `get_junos_config`
+entirely (fails closed, so it is safe, but easy to miss). Add
+`"show configuration"` to `allow` (and the `display` variants you need to
+`allowed_pipes`) to enable it — and note that doing so exposes the full
+running configuration, including hashed secrets, to the model.
+
+`load_and_commit_config`, `render_and_apply_j2_template`, and
+`create_junos_change_set`'s per-action `payload` all take an optional
+`mode`: `merge` (default, unchanged), `replace`, or `override`.
+
+`override` replaces the *entire* candidate configuration — the highest
+blast-radius operation this server exposes. `load_and_commit_config` and
+`render_and_apply_j2_template` commit directly in the same call with no
+second-principal review, so they refuse `override` outright. It is only
+available through the change-set flow (`create_junos_change_set` →
+`approve_junos_change_set` → `apply_junos_change_set`), which requires a
+second principal to approve the plan before anything commits.
+
+`config_format=set` (a `configuration-set`, i.e. a list of `set`/`delete`
+commands) has no wire-level `override` action in Junos — that combination
+is rejected before any RPC is sent, on every path, including change sets.
+
+## Confirmed commits (v0.3, default-on since v0.12)
+
+`load_and_commit_config`, `rollback_config` (with `commit=true`),
+`render_and_apply_j2_template`, and `apply_junos_change_set` all commit via
+Junos `commit confirmed` **by default** — the router auto-rolls back if
+nothing confirms the change within the window, so a bad push that cuts
+management access reverts itself instead of requiring a truck roll.
+
+The default window is the server's `--commit-confirm-default-mins` flag
+(default 10, same validation as the per-call parameter). A per-call
+`confirm_timeout_mins` overrides it for that one commit:
+
+```json
+{
+  "router_name": "core-1",
+  "config_text": "set interfaces ge-0/0/0 description test",
+  "confirm_timeout_mins": 10,
+  "commit_comment": "safe change with rollback window"
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "diff": "[edit interfaces ge-0/0/0]\n+   description test;",
+  "confirmed": true,
+  "rollback_in_minutes": 10,
+  "rollback_deadline_unix": 1780000600,
+  "message": "Commit confirmed: auto-rollback in 10 minutes unless confirmed. Send another commit to confirm."
+}
+```
+
+`apply_junos_change_set`'s status response reports the same
+`rollback_deadline_unix`.
+
+**Opt out** of commit-confirmed for a single call by passing
+`confirm_timeout_mins: 0`; this issues a plain, unconditional commit and is
+recorded in the audit event as `commit_confirmed=false` so the exception is
+traceable after the fact.
+
+**To confirm** a pending window (cancel the scheduled auto-rollback), call
+the `confirm_commit` tool with the device name — it sends the confirming
+commit the same way `confirm_junos_change_set` does for the change-set
+path. Sending another `load_and_commit_config` (or `rollback_config` /
+`render_and_apply_j2_template`) also confirms, since Junos treats any
+commit against the candidate as confirmation regardless of which tool
+issued it. While a commit-confirmed window is open, `upgrade_junos` refuses
+to proceed (`commit_confirmed_active`) rather than reboot a device that
+might still roll back its configuration underneath the new image.
+
+## File transfers (`transfer_file` / `fetch_file` / `list_staged_files`)
+
+`transfer_file` pushes a host-staged file to `/var/tmp/<basename>` on a Junos
+device using `mecmcp-scp`'s native SCP1 client over the SSH exec channel — the
+same wire protocol OpenSSH's `scp -O` forces, since Junos disables SFTP-over-SSH.
+No external `scp` process is spawned (#212). It is **idempotent on SHA-256**:
+if the remote file already exists with a matching digest the call returns
+`status: "skipped"`. Pass `force: true` to overwrite when digests differ.
+
+`fetch_file` is the mirror operation: it downloads `/var/tmp/<basename>` from a
+Junos device to the host staging dir using the same native SCP1 path. It is
+**idempotent on SHA-256** — if the local file already exists with a matching
+digest the call returns `status: "skipped"`. Per-router serialization and
+post-transfer SHA-256 re-verification apply identically to `transfer_file`.
+
+**Auth:** SSH key only. Devices with `auth.type = "password"` are rejected with
+`[code=unsupported_auth]`. Add an SSH key to the device and reference its path
+via `auth.private_key_path` in `devices.json`.
+
+**On-disk surface:**
+
+| Path                          | Purpose                                       | Default mode | Owner       |
+| ----------------------------- | --------------------------------------------- | ------------ | ----------- |
+| `/var/lib/jmcp/staging/`      | Host-side stage for files awaiting transfer  | `0750`       | `jmcp:jmcp` |
+| `/etc/jmcp/known_hosts`       | SSH `known_hosts` consulted for every push    | `0644`       | `jmcp:jmcp` |
+| `/var/lib/jmcp/device-leases` | Shared Junos/SRX destructive-operation locks | `0700`       | `jmcp:jmcp` |
+
+Override at startup with `--staging-dir <path>`, `--known-hosts-file <path>`,
+and `--device-lease-dir <path>`. Junos and SRX services must use the same
+device lease directory.
+
+**Host-key policy (v0.5.2+):** host-key checking is strict by default —
+unknown device host keys are refused. The `known_hosts` file must
+exist before the first `transfer_file` / `upgrade_junos` call, otherwise the
+tool errors with `[code=known_hosts_missing]`. Pre-populate it with the
+bundled helper:
+
+```bash
+scripts/scan-known-hosts.sh --inventory /etc/jmcp/devices.json \
+                            --known-hosts /etc/jmcp/known_hosts
+```
+
+For lab / first-contact use, pass `--ssh-accept-new-host-keys` to fall back
+to OpenSSH's `accept-new` (TOFU) mode: unknown hosts are pinned to
+`known_hosts` on first contact, and a host presenting a *different* key
+afterward is still refused. This applies identically to `transfer_file` /
+`upgrade_junos` (scp) and NETCONF SSH.
+
+**`--ssh-insecure-accept-any-host-key` (lab-only):** skips
+host-key verification entirely for both NETCONF SSH *and* scp
+(`transfer_file` / `upgrade_junos`) — no known_hosts persistence,
+no mismatch detection, no protection against a man-in-the-middle. Mutually
+exclusive with `--ssh-accept-new-host-keys`. Logged loudly at startup and
+recorded as an audit event. Never use this against production devices; use
+`--ssh-accept-new-host-keys` instead, which gives TOFU semantics safely.
+
+`list_staged_files` returns the contents of the host staging dir. If
+`router_name` is supplied it also runs `file list /var/tmp/ detail` on the
+device and includes those entries under `device_files`.
+
+**Source path safety:** `source_path` must be a basename only (no `/`, no `\`,
+no `..`, no leading dot, ≤ 255 bytes); it is resolved relative to
+`--staging-dir` and never escapes it.
+
+**Pre-flight checks:** before transferring, `transfer_file` runs
+`show system storage no-forwarding` and refuses to push when free space on
+`/var` is below `local_size + 32 MiB`.
+
+**Post-verify:** unless `verify: false` is passed, the device-side checksum is
+re-computed via `file checksum sha-256 /var/tmp/<basename>` and the file is
+deleted on mismatch.
+
+## Long-running operational commands
+
+Each MCP tool exposes a per-call `timeout` parameter (default 360 s). This is
+the **sole user-visible bound** on operation duration; the underlying
+`rustez::Device` is configured with a 1-hour internal RPC timeout at
+connection time, so commands that legitimately take many minutes
+(`request system software add`, `request support information`,
+`request system snapshot`, etc.) will not be silently truncated.
+
+If you need to run an operation that exceeds 1 hour, split it into
+phases or invoke the work fire-and-forget on the device and poll for
+completion separately.
+
+**Caveat:** when a long-running RPC is followed by a device reboot, the
+NETCONF session will of course die. The session pool reconnects cleanly
+on the next call.
+
+## mecfeedmcp feeds on SRX
+
+`get_srx_feed_status` reports, per node and per feed, the mecfeedmcp
+dynamic-address feeds an SRX pulls: `feed_server`, `feed_name`,
+`address_name`, `kind` (`address` or `prefix`), a `url` (userinfo, query and fragment removed; the path is kept),
+`entries`, `next_update`, `last_update_status` and `error`. It is read-only.
+
+Subscribe once through the normal change-set flow:
+
+1. `get_junos_candidate_fingerprint`
+2. `create_junos_change_set` with `actions: [{"payload": {"format": "set", "text": "<lines below>"}}]`
+3. `approve_junos_change_set` (another principal, unless `--lab-mode`)
+4. `apply_junos_change_set` (commit confirmed by default)
+5. `confirm_junos_change_set`
+
+There is no new write tool. Replace `SERVE_HOST` with mecfeed-serve's DNS
+name, which must match its certificate's CN/SAN. As mecfeedmcp documents it,
+there is one feed server per kind, each with the full feed URL
+`https://SERVE_HOST:8443/feeds/junos-dynamic-address/<kind>`:
+
+```
+set security pki ca-profile MECFEED-CA ca-identity MECFEED-CA
+set services ssl initiation profile MECFEED-TLS trusted-ca MECFEED-CA
+set security dynamic-address feed-server MECFEED-ADDRESS url https://SERVE_HOST:8443/feeds/junos-dynamic-address/address
+set security dynamic-address feed-server MECFEED-ADDRESS tls-profile MECFEED-TLS
+set security dynamic-address feed-server MECFEED-ADDRESS validate-certificate-attributes subject-or-subject-alternative-names
+set security dynamic-address feed-server MECFEED-ADDRESS update-interval 300
+set security dynamic-address feed-server MECFEED-ADDRESS hold-interval 86400
+set security dynamic-address feed-server MECFEED-ADDRESS feed-name mecfeed-address
+set security dynamic-address feed-server MECFEED-PREFIX url https://SERVE_HOST:8443/feeds/junos-dynamic-address/prefix
+set security dynamic-address feed-server MECFEED-PREFIX tls-profile MECFEED-TLS
+set security dynamic-address feed-server MECFEED-PREFIX validate-certificate-attributes subject-or-subject-alternative-names
+set security dynamic-address feed-server MECFEED-PREFIX update-interval 300
+set security dynamic-address feed-server MECFEED-PREFIX hold-interval 86400
+set security dynamic-address feed-server MECFEED-PREFIX feed-name mecfeed-prefix
+set security dynamic-address address-name MECFEED-ADDRESS profile feed-name mecfeed-address
+set security dynamic-address address-name MECFEED-PREFIX profile feed-name mecfeed-prefix
+```
+
+The Junos URL/path handling for plain-text feeds is not yet lab-verified;
+tracked in mechubsec/mecfeedmcp#5. `get_srx_feed_status` accepts the full URL
+on the feed server, with or without a `path` on the feed.
+
+Client authentication (mecfeed-serve requires one):
+
+- **mTLS** (preferred, because nothing secret goes through the change set).
+  Load the SRX client certificate out of band
+  (`request security pki local-certificate load certificate-id SRX-MECFEED ...`).
+  Then stage
+  `set services ssl initiation profile MECFEED-TLS client-certificate SRX-MECFEED`.
+  Pin its fingerprint in serve's `clients.json`.
+- **Basic** (Junos 25.2R1+). Do not stage the `password` line: change sets
+  keep the payload text verbatim in server state and in
+  `get_junos_change_set_status` output, so the password would reach the
+  approver and the model. Set the user and password once on the device CLI.
+
+Out of band, load the CA that signed serve's certificate:
+`request security pki ca-certificate load ca-profile MECFEED-CA filename <file>`
+and `... verify`. CRL/OCSP for that CA is an operator decision; add
+`revocation-check disable` only knowingly.
+
+Policy is the operator's: reference `MECFEED-ADDRESS` / `MECFEED-PREFIX` as
+destination (or source) in a `deny` policy placed above broader permits.
+Optionally add `set security dynamic-address session-scan` so new entries cut
+existing sessions.
+
+Do **not** add `feed-server ... routing-table <ri>.inet`. On vSRX 24.4R1.9 a
+saved pin can fail boot validation and drop the box into Recovery Mode. Make
+serve reachable from the default instance instead. On Security
+Director-managed devices, put the feed and the policy match in configuration
+groups; the tool reads inherited config, so it still sees them.
+
+Verify with `get_srx_feed_status`:
+
+- `state=not_configured` means not subscribed.
+- Junos does not report the feed ETag. Compare `entries` and
+  `last_update_status` with the feed server.
+- A field the device did not report is `null`, never guessed.
+- `url` has userinfo, query and fragment removed (the path is kept). Feed
+  `user-name` and `password` are used only to scrub device text and are never
+  returned; `tls-profile` is never read.
+
+## Security warning
+
+This server lets an LLM run commands and push configuration changes against
+your Junos devices. Read [Juniper/junos-mcp-server's security notice](https://github.com/Juniper/junos-mcp-server#important-security-notice)
+before deploying. The same warnings apply.
+
+- Prefer SSH key authentication over passwords.
+- Review configurations before allowing commit tools to run.
+- Restrict network access to the MCP server.
+- Don't deploy to untrusted networks.
+- Set `devices.json` permissions to `0600` — it contains SSH credentials.
+- `get_junos_config`, `junos_config_diff`, and other tools returning device
+  config or command output are redacted before the response reaches the
+  caller: values matching known secret patterns — including Junos
+  `## SECRET-DATA` values (`$9$...`-style strings, which are **reversibly
+  encrypted** with Juniper's proprietary symmetric cipher, not hashed —
+  anyone holding the device's master key/passphrase can recover the
+  plaintext), IKE pre-shared-keys, RADIUS/TACACS secrets, and SNMP
+  communities — are replaced with a marker while structure, hostnames, and
+  non-secret values are preserved. This is a best-effort net (a denylist plus
+  a value-shape catch-all), not a guarantee; still restrict this tool's scope
+  to trusted tokens.
+- `reload_devices` requires `file_name` to be a *relative* path resolving
+  inside the original `--device-mapping` directory (since v0.5.2). Absolute
+  paths, `..` traversal, and symlinks pointing outside the inventory
+  directory are all rejected.
+- Text input fields (`command`, `config_text`, `template_content`,
+  `pfe_command`) are capped at 1 MB. Batch lists are capped at 100
+  routers and 50 commands.
+
+## `--lab-mode`
+
+`--lab-mode` waives the second principal requirement for change sets,
+intended for single-operator lab environments where two-person control is
+impractical. **It is off by default and must not be enabled on servers
+managing production devices.**
+
+What it does and does not change:
+
+- Change sets are approved automatically at creation. There is no separate
+  approval step, and the flow stays plan → apply, identical to production.
+- Planning, the plan digest, drift detection, and apply-time revalidation all
+  still run. Lab mode removes the *second reviewer*, not the change record.
+- **No approver is fabricated.** A waived change set records `approver: null`
+  alongside `approval_waiver: "lab-mode"`. It is cryptographically
+  distinguishable from a genuine two-person approval and cannot be relabelled
+  afterwards — which matters if anyone later has to prove which changes had
+  real separation of duties.
+- The server warns loudly at startup whenever it is enabled.
+
+If you want solo write-testing *without* waiving the control, minting two
+tokens with different names and using one to plan and the other to approve
+is weaker than it looks: both tokens belong to the same human, so
+"two-person" review is really the same operator clicking approve on their
+own plan under a different name. The principal is the token name and
+self-approval is refused, so it exercises the plan→approve→apply API shape
+honestly — but it is not a real second reviewer.
+
+mecmcp 0.27.0 adds a verified human-approver flow (MEC-994/MEC-995) that
+closes that gap by binding the *approver's* identity to a fresh IdP login
+rather than a token name:
+
+- Bind the owner token to an IdP identity at creation time:
+  `token add --oidc-issuer https://idp.example.com --oidc-subject
+  alice@example.com ...`.
+- Start the server with `--oidc-issuer`, `--oidc-audience`, and
+  `--require-verified-approver` (plus `--approval-digest-key-file`, which
+  strict mode requires so the verified-approver fields are tamper-evident).
+- Approve with [`mecmcp-approve`](https://github.com/mechubsec/mecmcp/tree/main/crates/mecmcp-approve),
+  which drives a real OIDC login (PKCE by default) and attaches the
+  resulting assertion as a `Mecmcp-Approver-Assertion` header:
+  `mecmcp-approve --server-url https://junos01.example:8443/mcp
+  --approve-tool approve_junos_change_set --oidc-issuer
+  https://idp.example.com --oidc-client-id mecmcp-approve
+  --arg change_set_id=... --arg device=... --arg expected_digest=...`.
+- In strict mode, the coordinator refuses an approval whose verified subject
+  matches the owner's bound subject — the same human cannot satisfy both
+  sides of the two-person rule, no matter how many token names they hold.
+
+The two-token workaround above still has a place for pure functional
+testing of the plan→approve→apply flow when no IdP is available, but treat
+it as what it is: one operator exercising the API shape, not an approval.
+
+### Verified approver: setup and failure behaviour
+
+Compiled into every build (not a cargo feature) and inert until `--oidc-issuer`
+is set. Setup follows mecmcp's
+[ONBOARDING](https://github.com/mechubsec/mecmcp/blob/v0.30.1/docs/ONBOARDING.md);
+the one difference for this server is the tool name:
+With `--oidc-issuer` set but `--require-verified-approver` off, startup logs a
+warning counting live `human` tokens that have no `oidc_subject` binding.
+
+```fish
+# 1. Bind the approver's token to their IdP identity. Packaged installs keep the
+#    store at /var/lib/jmcp/tokens.json. If yours is still at /etc/jmcp/tokens.json
+#    (pre-0.22), migrate it first as install.sh prints; never create a second one.
+sudo -u jmcp rust-junosmcp token add --tokens-file /var/lib/jmcp/tokens.json --name alice \
+  --actor-type human --tools approve_junos_change_set --devices '*' \
+  --oidc-issuer https://idp.example.com/ --oidc-subject alice@example.com
+
+# 2. Create the approval digest key strict mode requires: at least 32 random
+#    bytes, mode 0600, owned by the service user (`jmcp` on a package install).
+#    Written as jmcp, never as root (/etc/jmcp is service-owned on packaged installs).
+#    `set -C` keeps an existing key, since replacing it orphans pending approvals;
+#    if one exists, confirm it is 0600 jmcp with `stat -c '%a %U' <path>`.
+sudo -u jmcp sh -c 'umask 077; set -C; head -c 48 /dev/urandom | base64 > /etc/jmcp/approval-digest.key'
+
+# 3. Run on the HTTP transport with the token store (assertions apply to
+#    bearer-token callers only) and the verifier configured.
+sudo -u jmcp rust-junosmcp --device-mapping /etc/jmcp/devices.json \
+  --transport streamable-http -H 127.0.0.1 -p 8765 \
+  --tokens-file /var/lib/jmcp/tokens.json \
+  --oidc-issuer https://idp.example.com/ --oidc-audience YOUR_AUDIENCE \
+  --approval-digest-key-file /etc/jmcp/approval-digest.key \
+  --approver-replay-store /var/lib/jmcp/approver-replay.log \
+  --require-verified-approver
+```
+
+`--approver-replay-store` persists used assertion `jti`s across restarts
+(created 0600 by the service user, so `/var/lib/jmcp` is the right place;
+without it an assertion used just before a restart can be replayed once until
+it expires). It requires `--oidc-issuer`.
+
+- With `--require-verified-approver`, an approval with no valid assertion is
+  refused, and so is a proposal from an owner token with no bound subject.
+- **Send `Mecmcp-Approver-Assertion` only on the approve call.** The transport
+  verifies it on *any* request that carries it, whatever the tool: an invalid
+  one (different subject than the token is bound to, expired, replayed, or the
+  IdP's keys unreachable) gets `401`, and a valid one on an earlier read or
+  proposal spends its single-use `jti`, so the later approval is rejected as a
+  replay. Only requests without the header are unaffected by the verifier.
+- A server with no `--oidc-issuer` rejects any request carrying the header
+  with `400`.
+
+### Verified proposer
+
+`--require-verified-proposer` pairs with `--require-verified-approver` so the
+two-person rule compares two IdP-verified subjects rather than a subject an
+operator typed into `token add`. It requires `--oidc-issuer` and
+`--oidc-audience`. With it, `create_junos_change_set` must carry a fresh
+`Mecmcp-Proposer-Assertion` header whose subject equals the proposing token's
+bound `oidc_subject`; an OAuth-authenticated caller counts as verified without
+one. The proposing token needs neither `--actor-type human` nor the approver
+role. The change set records that its owner was verified, and approval, waiver
+and apply refuse one that was not, so a change set proposed before the flag
+was turned on cannot skip it.
+
+Send `Mecmcp-Proposer-Assertion` **only on `create_junos_change_set`**, and
+never `Mecmcp-Approver-Assertion` there: the headers are separate but share one
+single-use `jti` set, so an assertion spent on any other request cannot be
+reused. Off by default. Note that any verified proposer, including every OAuth caller,
+makes the server persist change-set state version 9, which v2.3.0 cannot read:
+snapshot the state file before upgrading, since a rollback needs it restored.
+
+### Enabling it
+
+Add `--lab-mode` to the service unit. On a package install, use a systemd
+drop-in rather than editing the shipped unit, so an upgrade does not silently
+drop it:
+
+```console
+sudo systemctl edit rust-junosmcp
+```
+
+Replacing `ExecStart` means restating it in full, so **copy the shipped
+command and append the flag** rather than writing a shorter one. Dropping
+other arguments would turn off structured auditing or HMAC redaction as a side
+effect of enabling lab mode:
+
+```ini
+[Service]
+# Clear the shipped ExecStart before replacing it; systemd appends otherwise.
+ExecStart=
+ExecStart=/usr/local/bin/rust-junosmcp \
+    --device-mapping /etc/jmcp/devices.json \
+    --transport streamable-http \
+    --host 127.0.0.1 \
+    --port 30030 \
+    --tokens-file /etc/jmcp/tokens.json \
+    --audit-format json \
+    --audit-journald \
+    --audit-redact devices=hmac \
+    --audit-hmac-key-file /etc/jmcp/audit-hmac.key \
+    --lab-mode
+```
+
+Check it against `packaging/systemd/rust-junosmcp.service` before applying it —
+the shipped arguments are the authority, and this snippet is a copy that can
+age.
+
+```console
+sudo systemctl daemon-reload && sudo systemctl restart rust-junosmcp
+```
+
+Confirm it took effect. The startup warning uses `target: "audit"`, so grep
+the journal for the lab-mode text with enough privilege to see a system unit:
+
+```console
+sudo journalctl -u rust-junosmcp -b | grep -i "lab mode"
+```
+
+The expected output includes:
+
+```
+lab mode enabled: change sets are approved on creation with no second principal. Records carry approval_waiver=lab-mode. Do not run this against production devices.
+```
+
+Silence means it is off. An unprivileged `journalctl` can also print nothing
+here for lack of access rather than because the flag is unset, which is why the
+command uses `sudo`.
+
+## `--allow-direct-commit`
+
+Four tools never create a change set at all: `load_and_commit_config`
+unconditionally, and `render_and_apply_j2_template` (when it would actually
+apply), `rollback_config` (with `commit=true`), and `upgrade_junos` (with
+`confirm=true`) once past their read-only preview/pre-flight step. Each stages,
+validates, and commits a device change in one call, so there is no
+second-principal review by construction — there is no change set for a second
+principal to approve. **Off by default**: without this flag, all four are
+refused before the device is ever touched, over stdio exactly as over HTTP
+(stdio carries no caller context at all, so it cannot be treated any more
+leniently than an authenticated session).
+
+**Residual risk.** `--allow-direct-commit` is an escape hatch, not a fix. An
+operator who sets it has decided that, for these specific tools, running with
+no independent review is an acceptable risk for this deployment. That decision
+is:
+
+- **Logged loudly at startup.** A `SECURITY:` warning names the risk every time
+  the process starts with the flag on.
+- **Audited on every call.** Each direct-commit call carries
+  `direct_commit_allowed=true` in its audit record — a refusal is audited too,
+  as `authorization=denied reason=direct_commit_disabled`.
+
+It does not add a second-principal review; it only makes running without one
+visible. Prefer the change-set flow (`create_junos_change_set` →
+`approve_junos_change_set` → `apply_junos_change_set`) wherever your workflow
+can use it, and reserve this flag for the specific tools that cannot.
+
+### Enabling it
+
+Same pattern as `--lab-mode` above: add `--allow-direct-commit` to the service
+unit via a systemd drop-in, copying the shipped `ExecStart` in full rather than
+writing a shorter one.
+
+Confirm it took effect. Unlike the `--lab-mode` banner, this one is
+deliberately **not** tagged `target: "audit"` — that stream has a fixed
+per-call schema, and a startup banner has none of those fields — so grep the
+plain message text instead:
+
+```console
+sudo journalctl -u rust-junosmcp -b | grep -i "allow-direct-commit is enabled"
+```
+
+Silence means it is off.
+
+## Security Director and Mist-managed SRX
+
+A device can be configured by a management plane that overwrites local edits at
+its next push. Set `config_authority` on the device in `devices.json`:
+
+| Value | Meaning |
+|-------|---------|
+| `local` | This server owns the config. No plane checks. |
+| `mist` | Managed by Juniper Mist. Read-only through this server. |
+| `security-director-cloud` | Security Director Cloud owns `security`, `applications`, `schedulers` and its `system services outbound-ssh` session. |
+| `security-director-onprem` | Security Director On-Prem owns the same trees. |
+| `unknown` | The default. The device is probed before each configuration write (see below). |
+
+```json
+{"edge-srx": {"ip": "192.0.2.10", "username": "netconf", "auth": {"type": "ssh_key", "private_key_path": "/etc/jmcp/id_ed25519"}, "config_authority": "security-director-cloud"}}
+```
+
+**Detection.** A declared value always wins, and declaring `local` turns
+detection off. Only an `unknown` device is probed, with one extra read per write
+(`show configuration system services outbound-ssh`), and only by the
+configuration tools listed below: `upgrade_junos` uses the declared value alone,
+so declare plane-managed devices you upgrade through this server. An `outbound-ssh` client
+named `mist` means Mist; a `sdcloud.juniperclouds.net` address means Security
+Director Cloud; a client named `EMS-...` means Security Director On-Prem. Mist
+takes precedence over Security Director. Anything else stays `unknown` and is
+writable. A probe that fails refuses the write (fail closed).
+
+**What is refused.**
+
+- Mist: every write. The direct tools refuse before locking the candidate.
+  `apply_junos_change_set` refuses after taking the lock (the probe runs inside
+  it), then releases it; `create_junos_change_set` already refuses a payload
+  plan for a device declared `mist`.
+- Security Director: only a change whose `show | compare` diff touches
+  `security`, `applications`, `schedulers` or `system services outbound-ssh`,
+  including through `groups`, `logical-systems` or `tenants`. Outbound-ssh is
+  Security Director's connection to the SRX: changing it can disconnect the
+  device, and on an `unknown` device deleting it would also defeat detection.
+  Deactivating `system` or `system services` as a whole counts as touching it,
+  since the diff hides the body.
+  If Security Director no longer manages the device, declare
+  `config_authority: "local"`. The rest of the config (interfaces, routing,
+  the rest of system) stays writable, with two conservative exceptions, because the
+  group may carry `security` configuration: a top-level `apply-groups` or
+  `apply-groups-except` change, and deactivating a whole group, logical system
+  or tenant (the diff hides its body). The refusal reverts the candidate and releases
+  the lock, and names the tool to use instead (for example `prepare_sdc_nat_write`
+  or `plan_mist_change`).
+- Tools covered: `load_and_commit_config`, `render_and_apply_j2_template`,
+  `commit_check_config`, `rollback_config`, `discard_candidate` and
+  `apply_junos_change_set`. A refused change set ends `failed`.
+- `discard_candidate` cannot lock (Junos refuses to lock a modified candidate),
+  so on a plane-owned device it cannot check the pending edits atomically: it
+  refuses whenever the candidate has pending changes, and names the CLI
+  `rollback 0` instead. An empty candidate is a no-op.
+- `upgrade_junos`, `rollback_config` with `commit=true`, and the change-set
+  rollback guards (depth, commit-0 attribution, mixed actions, lab mode) keep
+  their existing plane-owned refusals. A detected plane also gets the depth and
+  commit-0 attribution guards when the change set is applied; the mixed-action
+  and lab-mode checks run at create, before any probe, so they need a declared
+  value.
+
+**`--allow-plane-owned-writes`** turns the plane-guard refusals above (the Mist
+refusal, the protected-diff refusal and the discard refusal) into warnings. It
+also lets `upgrade_junos` run on a device declared plane-owned (with a warning),
+as it did before. It does not lift the rollback guards in the previous
+paragraph, which stay unconditional. The warnings:
+
+- Mist: `WARNING: '<device>' is managed by Juniper Mist (...). This change will be overwritten and erased by the next Mist push.`
+- Security Director: `WARNING: '<device>' is managed by Security Director ... and this change touches <paths>. This may cause you to have to delete and re-import your security and NAT policy.`
+
+The warning is returned as `warning` (direct tools) or `config_authority_warning`
+(`apply_junos_change_set`).
+
+## Audit logging
+
+`rust-junosmcp` emits structured audit events for every Junos and SRX tool invocation. Each event records the caller, tool, target routers, authorization decision, outcome, and duration. See [`docs/AUDIT.md`](AUDIT.md) for the full schema and forwarding guidance.
+
+| Flag | Environment Variable | Default | Description |
+|------|---------------------|---------|-------------|
+| `--audit-format` | `JMCP_AUDIT_FORMAT` | `text` | Output format: `text` or `json`. |
+| `--audit-log-file` | `JMCP_AUDIT_LOG_FILE` | (none) | Optional file path to append JSON events to (in addition to stderr). |
+| `--audit-journald` | `JMCP_AUDIT_JOURNALD` | `false` | Optional native journald fan-out for structured audit fields; fails startup when explicitly enabled but unavailable. |
+
+## Quick start (local)
+
+```bash
+git clone https://github.com/mechubsec/rustjunosmcp.git
+cd RustJunosMCP
+
+# Build the default 45-tool Junos/SRX server with TLS.
+cargo build --release
+
+# Optional: build the 28-tool Junos-only server without TLS.
+cargo build --release --no-default-features
+
+# Optional: build Junos-only with TLS.
+cargo build --release --no-default-features --features tls
+
+# Configure devices.
+cp devices-template.json devices.json
+$EDITOR devices.json   # set ip / username / auth
+
+# Run as MCP stdio server.
+./target/release/rust-junosmcp -f devices.json
+```
+
+Each device may carry an optional `attributes` object, used only by
+`device_selectors` on static tokens (see [Device selectors on static tokens](#device-selectors-on-static-tokens))
+and OAuth scope maps (see [OAuth 2.1 resource-server mode](#oauth-21-resource-server-mode-opt-in-build)):
+
+```json
+"srx-lab-1": {
+  "ip": "10.0.0.1", "username": "admin", "auth": {"type": "password", "password": "..."},
+  "attributes": {"site": "lab-1", "vendor": "junos", "tags": ["pci", "edge"]}
+}
+```
+
+`site` and `vendor` are single values, `tags` a list. Values are 1-64 characters
+of `[A-Za-z0-9._-]`. Devices without `attributes` match no selector. Existing
+`devices.json` files load unchanged: an `attributes` block that is not valid
+selector metadata (an unknown key, a bad value, not an object) is ignored with
+one warning per device at load, and that device matches no selector. Rename
+the key to silence the warning.
+
+## Claude Desktop config
+
+One registration exposes every tool enabled in the built binary (45 with the
+default `srx` feature, or 28 in a Junos-only build):
+
+```json
+{
+  "mcpServers": {
+    "junos": {
+      "command": "/path/to/rust-junosmcp",
+      "args": ["-f", "/path/to/devices.json"]
+    }
+  }
+}
+```
+
+[`examples/`](../examples/) has ready-to-edit configs for Claude Desktop
+(`claude_desktop_config.json`) and VS Code (`vscode-mcp.json`, for
+`.vscode/mcp.json`: stdio, plus streamable HTTP with the bearer token prompted
+rather than stored). Both run as your own user, so they pass per-user
+`--device-lease-dir`, `--state-file`, `--known-hosts-file`, `--staging-dir`
+and `--support-bundle-staging-dir` paths (the defaults under `/var/lib/jmcp`
+and `/etc/jmcp` belong to the service account; drop the last flag in a
+Junos-only build),
+and `devices.json` must be mode `0600`. Add `"--tool-mode", "compact"` to
+`args` to list only `execute` and `get_router_list`. Register one stdio
+instance per state file: a second process on the same file exits.
+
+## Docker
+
+### Run with Docker
+
+The catalog-friendly stdio invocation replaces the image's HTTP CMD with
+`--transport stdio`. The ENTRYPOINT already supplies the inventory, state,
+known-hosts, lease, and token-file paths, so do not repeat those flags here.
+The state mount is a bind mount, so it starts out host-user-owned; it and
+`tokens.json` inside it must be owned by UID/GID `65532:65532` before the
+first start, with `tokens.json` at mode `0600`:
+
+```bash
+mkdir -p jmcp-state
+cat > jmcp-state/tokens.json <<'EOF'
+{
+  "version": 1,
+  "tokens": [
+    {
+      "name": "catalog",
+      "digest": "sha256:REPLACE_WITH_TOKEN_ADD_OUTPUT",
+      "devices": ["r1"],
+      "tools": ["gather_device_facts"],
+      "created_at": "2026-01-01T00:00:00Z"
+    }
+  ]
+}
+EOF
+sudo chown -R 65532:65532 jmcp-state
+sudo chmod 0700 jmcp-state
+sudo chmod 0600 jmcp-state/tokens.json
+sudo chown 65532:65532 devices.json
+sudo chmod 0600 devices.json
+
+docker run --rm -i \
+  -v "$PWD/devices.json:/etc/jmcp/devices.json:ro" \
+  -v "$PWD/keys:/etc/jmcp/keys:ro" \
+  -v "$PWD/jmcp-state:/var/lib/jmcp" \
+  ghcr.io/mechubsec/rustjunosmcp:latest \
+  --transport stdio
+```
+
+On rootless Docker or a userns-remapped host, UID 65532 inside the container
+maps to a different host UID; chown the mounts to whatever that mapped UID
+is instead of `65532` directly.
+
+For example, `devices.json` uses the server's inventory shape (replace the
+placeholder secret before use):
+
+```json
+{
+  "r1": {
+    "ip": "192.0.2.10",
+    "port": 22,
+    "username": "netconf-user",
+    "auth": {
+      "type": "password",
+      "password": "replace-with-device-password"
+    }
+  }
+}
+```
+
+This invocation leaves HTTP and TLS off because replacing the image CMD also
+removes its HTTP bind and TLS-related flags.
+
+The server defaults to port 22, which reaches NETCONF over the device's
+regular SSH service (`set system services ssh`). If you enable the dedicated
+NETCONF listener with `set system services netconf ssh` (port 830 by
+default) and want to use it, set `port` to 830 explicitly.
+
+> Running the two-person and lab-mode pair as containers, including the
+> published-vs-internal port trap that makes the allow-lists reject everything
+> with 421, is written up in
+> [`docs/HOW-TO-SETUP-DOCKER.md`](HOW-TO-SETUP-DOCKER.md).
+
+Prebuilt images are published to GHCR on every version tag. The package is
+public — no `docker login` required. The runtime is `distroless` — no shell,
+`apt`, or OpenSSH client (#201) — and runs as numeric UID/GID `65532:65532`.
+`transfer_file`/`fetch_file` no longer spawn `scp`; they speak the SCP1 wire
+protocol natively via `mecmcp-scp` over the SSH exec channel (#212).
+
+Prepare read-only configuration/key mounts and one persistent writable state
+directory. Private-key paths in `devices.json` must use their in-container
+locations under `/etc/jmcp/keys`.
+
+```bash
+# Pull the prebuilt image (tags: latest, 0.25, 0.26, 0.27).
+docker pull ghcr.io/mechubsec/rustjunosmcp:latest
+
+# Prepare host paths. Review scanned host-key fingerprints against a trusted
+# source before starting the server in strict mode.
+mkdir -p keys jmcp-state/staging jmcp-state/device-leases
+touch jmcp-state/known_hosts
+./scripts/scan-known-hosts.sh \
+  --inventory "$PWD/devices.json" \
+  --known-hosts "$PWD/jmcp-state/known_hosts" \
+  --replace
+
+# The image's non-root process must own its writable state and be able to read
+# the inventory and private keys. Keep all three private from other host users.
+sudo chown -R 65532:65532 devices.json keys jmcp-state
+sudo chmod 0600 devices.json keys/* jmcp-state/known_hosts
+sudo chmod 0700 keys jmcp-state jmcp-state/device-leases
+sudo chmod 0750 jmcp-state/staging
+
+# Run with configuration/keys read-only and state persistent + writable.
+docker run --rm -i \
+  -v "$PWD/devices.json:/etc/jmcp/devices.json:ro" \
+  -v "$PWD/keys:/etc/jmcp/keys:ro" \
+  -v "$PWD/jmcp-state:/var/lib/jmcp" \
+  ghcr.io/mechubsec/rustjunosmcp:latest
+```
+
+**Verifying the image signature:** every image pushed by the `Release image`
+workflow is signed keylessly with [cosign](https://github.com/sigstore/cosign)
+via GitHub Actions OIDC — there is no key pair anywhere. Verification pins the
+signing identity, so a signature from anywhere else (a fork, a different repo,
+a local build) fails:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp '^https://github\.com/mechubsec/mecmcp/\.github/workflows/reusable-release-image\.yml@' \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  --certificate-github-workflow-repository mechubsec/rustjunosmcp \
+  --certificate-github-workflow-trigger push \
+  --certificate-github-workflow-ref refs/tags/v2.6.0 \
+  ghcr.io/mechubsec/rustjunosmcp:2.6.0
+```
+
+`release-image.yml` delegates signing to mecmcp's reusable workflow, so the
+certificate identity is that workflow's path, not this repository's.
+`--certificate-github-workflow-repository` ties the signature to this
+repository, and the trigger and ref flags tie it to the tag push for that exact
+release, so an image built by another workflow or from another ref fails. Change
+the ref and the image tag together when you verify a different release. The
+identity is a regexp because the certificate ends with the commit the reusable
+workflow is pinned to, and that pin moves. Each signature also creates a public entry in the
+[Rekor](https://docs.sigstore.dev/logging/overview/) transparency log; this is
+expected and does not disclose anything beyond what the image push itself
+already made public.
+
+Images published before 2026-09-29 were signed by the workflow under
+`github.com/fastrevmd-lab/RustJunosMCP`, so verifying an older tag needs that
+identity instead.
+
+**Verifying the SBOM attestation:** on release, a CycloneDX SBOM of the Rust
+dependency graph (not the image's distroless runtime base) is attached to the
+GitHub release and also pushed as an in-toto attestation on the image, signed
+keylessly the same way as above. This attestation is signed by the
+`sbom:` job in this repo's own `release-sbom.yml`, which (starting with the
+first release after v0.27.5) delegates the actual attestation to mecmcp's
+reusable `reusable-attest-release-sbom.yml` workflow, so the OIDC certificate
+subject is *that* workflow's path,
+pinned to the exact commit SHA `release-sbom.yml`'s `uses:` line currently
+references — not this repo's own workflow file, and not a branch ref. That
+pin moves whenever `release-sbom.yml` is repinned to a newer mecmcp SHA or
+tag, so don't trust this README's SHA to stay accurate forever; check the
+`uses:` line in `.github/workflows/release-sbom.yml` for the current pin.
+
+Because that reusable workflow lives in a public repo, any GitHub repository
+can call it and get a certificate with the same identity, so the identity
+alone does not prove the attestation came from *this* repo's release.
+`--certificate-github-workflow-repository` and
+`--certificate-github-workflow-trigger` close that gap: they check the
+certificate's calling-repository and triggering-event fields, which must be
+`mechubsec/rustjunosmcp` and `release`. Do not drop them. This is the same
+identity as the release-tarball signature below, a **different identity**
+from the image signature's `release-image.yml` identity above, because it is
+a separate job that runs after the image is already pushed:
+
+```bash
+cosign verify-attestation --type cyclonedx \
+  --certificate-identity-regexp '^https://github\.com/mechubsec/mecmcp/\.github/workflows/reusable-attest-release-sbom\.yml@[0-9a-f]{40}$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-repository mechubsec/rustjunosmcp \
+  --certificate-github-workflow-trigger release \
+  ghcr.io/mechubsec/rustjunosmcp:<version>
+```
+
+The regexp is over the SHA (not an exact `--certificate-identity`) because
+dependabot or a maintainer may repin `release-sbom.yml` to a newer mecmcp
+commit; this only pins the path, not one specific commit. For releases up to
+and including v0.27.5, the attestation was instead signed directly by this
+repo's own `release-sbom.yml` workflow identity:
+
+```bash
+cosign verify-attestation --type cyclonedx \
+  --certificate-identity-regexp '^https://github\.com/mechubsec/rustjunosmcp/\.github/workflows/release-sbom\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/mechubsec/rustjunosmcp:<version>
+```
+
+The state mount holds staged upload/download files, the shared destructive
+operation leases, and `known_hosts`. Do not delete its lease files while a
+server is running. Strict host-key checking is the default. For an isolated lab
+only, append `--ssh-accept-new-host-keys` to the `docker run` command; this lets
+the server add first-seen keys to the writable state file, but does not
+authenticate that first connection out of band.
+
+> **Apple Silicon (M-series):** images are built for `linux/amd64` only, so
+> they run under emulation on Apple Silicon. This works, but if you hit a
+> platform-mismatch warning add `--platform linux/amd64` to both the `pull`
+> and `run` commands.
+
+Prefer to build locally instead:
+
+```bash
+docker build -t rust-junosmcp:local .
+
+docker run --rm -i \
+  -v "$PWD/devices.json:/etc/jmcp/devices.json:ro" \
+  -v "$PWD/keys:/etc/jmcp/keys:ro" \
+  -v "$PWD/jmcp-state:/var/lib/jmcp" \
+  rust-junosmcp:local
+```
+
+## LXC (Proxmox)
+
+> Building a container from nothing — including the two-person and lab-mode
+> pair, the credential modes that must be right before first start, and how to
+> verify the seccomp posture came from the shipped unit — is written up in
+> [`docs/HOW-TO-SETUP-LXC.md`](HOW-TO-SETUP-LXC.md).
+
+```bash
+# Build the tarball and checksum.
+./scripts/package-lxc.sh
+
+# Verify the checksum.
+sha256sum -c dist/rust-junosmcp_0.27.2_amd64.tar.gz.sha256
+
+# Push and install on VM 115. The installer copies the unified binary and unit
+# from its extracted package root.
+#
+# The container MUST be Debian 13 (trixie). This is not a style preference:
+# `package-lxc.sh` builds against the glibc of whatever host runs it, and the
+# current published binary requires GLIBC_2.39. Debian 12 ships 2.36, so the
+# service dies at start with a "GLIBC_2.39 not found" symbol error — after a
+# clean build and a clean install, which is the worst place to discover it.
+# Debian 13 ships 2.41. Check your own tarball with:
+#   objdump -T dist/rust-junosmcp_*/usr/local/bin/rust-junosmcp \
+#     | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu | tail -1
+#
+# Debian 13 also matches docs/PACKAGING.md §2, the container runtime base, and
+# rustpanosmcp — one distro generation to track CVEs against, not three.
+pct push 115 dist/rust-junosmcp_0.27.2_amd64.tar.gz /tmp/jmcp.tar.gz
+pct exec 115 -- bash -c "tar xzf /tmp/jmcp.tar.gz -C /tmp && /tmp/rust-junosmcp_0.27.2_amd64/install.sh"
+```
+
+**Downloading a prebuilt release tarball instead:** each GitHub release also
+publishes the tarball, its `.sha256` checksum, and a keyless cosign signature
+bundle (`.cosign.bundle`) for it, signed by the `Sign release tarball`
+workflow the same way the container image is signed above — no key pair,
+GitHub Actions OIDC only. Check the checksum *and* the signature; the checksum
+alone only proves the download was not corrupted in transit, not that it came
+from this repository's release workflow:
+
+```bash
+version=0.27.2
+base="https://github.com/mechubsec/rustjunosmcp/releases/download/v${version}"
+curl -LO "${base}/rust-junosmcp_${version}_amd64.tar.gz"
+curl -LO "${base}/rust-junosmcp_${version}_amd64.tar.gz.sha256"
+curl -LO "${base}/rust-junosmcp_${version}_amd64.tar.gz.cosign.bundle"
+
+sha256sum -c "rust-junosmcp_${version}_amd64.tar.gz.sha256"
+
+cosign verify-blob \
+  --certificate-identity "https://github.com/mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@f927c820f39369b2601e11e31334cc5b504b1fd1" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  --certificate-github-workflow-repository "mechubsec/rustjunosmcp" \
+  --certificate-github-workflow-trigger "release" \
+  --bundle "rust-junosmcp_${version}_amd64.tar.gz.cosign.bundle" \
+  "rust-junosmcp_${version}_amd64.tar.gz"
+# Backfilled assets (workflow_dispatch of an already-published tag) use
+# --certificate-github-workflow-trigger "workflow_dispatch" instead.
+```
+
+Unlike the image workflow above, the `sign` job in this repo's own
+`release-sign-tarball.yml` delegates the actual signing to mecmcp's reusable
+workflow, so the OIDC certificate subject is *that* workflow's path, pinned
+to the exact commit SHA `release-sign-tarball.yml`'s `sign:` job currently
+references via its `uses:` line — not this repo's own workflow file, and not
+a branch ref. That pin moves whenever the `sign:` job is repinned to a newer
+mecmcp SHA or tag, so don't trust this README's SHA to stay accurate forever;
+check the `uses:` line in `.github/workflows/release-sign-tarball.yml` for
+the current pin.
+
+Because that reusable workflow lives in a public repo, any GitHub repository
+can call it and get a certificate with the same identity, so the identity
+alone does not prove the tarball came from *this* repo's release.
+`--certificate-github-workflow-repository` and
+`--certificate-github-workflow-trigger` close that gap: they check the
+certificate's calling-repository and triggering-event fields, which must be
+`mechubsec/rustjunosmcp` and one of this workflow's two legitimate triggers.
+A normal cut uses `release`; a board `workflow_dispatch` backfill of an
+already-published signed tag uses `workflow_dispatch`. A dispatch is refused
+when that release already has a tarball signature bundle. A release that has
+the tarball but no bundle can still be backfilled. The flag is an exact
+match, so swap it when verifying a backfilled asset. Do not drop either flag.
+
+`cosign verify-blob` exits non-zero on any mismatch — wrong identity, wrong
+issuer, wrong calling repository or trigger, or a tarball that does not match
+the bundle — so a failure here means do not install, not "probably fine."
+
+**Edit the inventory:**
+
+```bash
+# Copy the example and configure your devices.
+pct exec 115 -- cp /etc/jmcp/devices.json.example /etc/jmcp/devices.json
+pct exec 115 -- $EDITOR /etc/jmcp/devices.json  # or edit via another method
+pct exec 115 -- chown jmcp:jmcp /etc/jmcp/devices.json
+pct exec 115 -- chmod 0600 /etc/jmcp/devices.json
+```
+
+**Mint a bearer token:**
+
+```bash
+# A wildcard tool scope grants read-only tools only; write tools must be named
+# explicitly. See "Upgrading to v0.10" and "Tool scopes and write tools" below.
+pct exec 115 -- runuser -u jmcp -- /usr/local/bin/rust-junosmcp token add \
+  --tokens-file /etc/jmcp/tokens.json \
+  --name ops \
+  --routers '*' \
+  --tools get_router_list,gather_device_facts,execute_junos_command,get_junos_config,commit_check_config,load_and_commit_config
+```
+
+**Start the service:**
+
+```bash
+pct exec 115 -- systemctl enable --now rust-junosmcp
+```
+
+The installer is idempotent: rerunning it upgrades binaries and units without
+overwriting `devices.json`, `tokens.json`, or `known_hosts`. It validates the
+complete archive before changing system state. The packaged server exposes all
+enabled Junos and SRX tools at `127.0.0.1:30030/mcp` and requires bearer
+authentication. Use an SSH tunnel or a TLS reverse proxy for remote clients.
+
+> **Clearing a stuck operation:** `state resolve` settles an operation that is
+> stuck in a non-terminal state after a failed apply. One such record blocks
+> every later change on its device, and no tool can clear it — `cancel_junos_
+> change_set` refuses a change set that is already terminal. **Stop the service
+> first**, or the running server will overwrite the file from memory:
+>
+> ```bash
+> systemctl stop rust-junosmcp
+> runuser -u jmcp -- /usr/local/bin/rust-junosmcp state resolve \
+>   --state-file /var/lib/jmcp/changeset-state.json \
+>   --operation-id <64-hex-operation-id> \
+>   --disposition discarded \
+>   --confirmation "RESOLVED <64-hex-operation-id> AS DISCARDED"
+> systemctl start rust-junosmcp
+> ```
+>
+> The confirmation string must match exactly: it is the operator asserting they
+> looked at the device and this is what is true. Use `committed` only when the
+> device's own commit log proves the change landed.
+
+> **Narrowing an existing token:** `token set-scope` changes a token's router or
+> tool scopes **without reissuing its secret**, so clients keep working with the
+> same bearer token. Useful for removing access without reconfiguring every
+> client. See the [token management](#mint-a-token) section for examples.
+
+Upgrading from a split-server release removes the retired `rust-srxmcp`
+executable, unit, and enabled-service link. It deliberately preserves existing
+support bundles under `/var/lib/jmcp/srx-staging/bundles`.
+
+## Remote transport + auth
+
+### Mint a token
+
+```bash
+cargo run -- token add \
+  --tokens-file tokens.json \
+  --name ops \
+  --routers '*' \
+  --tools execute_junos_command,gather_device_facts
+```
+
+`get_router_list` applies the same router scope as device tools. Authenticated
+allowlist tokens receive only the current inventory names in their scope;
+stale scope entries and excluded routers are omitted without counts or errors.
+An empty allowlist or empty intersection returns `[]`. Wildcard tokens, local
+stdio, and explicitly unauthenticated loopback mode retain the full inventory.
+
+> **Note:** See [`tokens-template.json`](../tokens-template.json) for the file
+> shape. Use `token add` rather than editing the file by hand — the `digest`
+> field must be a versioned SHA-256 of the secret, not the plaintext. Fields
+> are canonically `digest` and `devices`; the older `hash` and `routers`
+> spellings are still accepted as aliases, so existing files load unchanged.
+> The CLI flag remains `--routers`.
+
+> **`tokens.json` must be mode `0600`** (v0.10.0+). The server refuses to
+> start on a group- or world-accessible token file, and the error names the
+> file's owner uid, its mode, the calling process's uid, and the `chmod` to
+> run. Every `token` subcommand writes `0600`, and the LXC installer sets it,
+> so this only bites files created or copied by hand.
+
+#### Device selectors on static tokens
+
+`token add --device-selector 'site=lab-*'` (repeatable; entries are ANDed)
+narrows the token's `--devices` to inventory devices whose `attributes` match,
+with the same grammar as the OAuth scope map. Selectors resolve against the
+live inventory on each authentication, so a SIGHUP or `reload_devices` applies
+on the next request; an unlabelled device never matches, and a token whose
+selectors match nothing addresses no devices. Approvals follow the same scope:
+a `site=lab-*` approver cannot approve a change set on a prod device.
+
+```bash
+rust-junosmcp token add --tokens-file tokens.json --name lab-ops \
+  --devices '*' --tools execute_junos_command --device-selector 'site=lab-*'
+```
+
+> **Upgrade every binary that reads or rewrites `tokens.json` first** — every
+> server sharing the store, and the token CLIs. A binary without
+> `device_selectors` support that merely reads the store ignores the field and
+> grants the token its broad `devices` scope immediately; an older CLI also
+> drops it on `token rotate` or `token set-scope`.
+
+### Tool scopes and write tools
+
+A tool scope is either the literal `*` or an explicit list of tool names. The
+two cannot be mixed — `--tools '*',transfer_file` is rejected.
+
+**A wildcard tool scope does not confer write tools** (v0.10.0+). `"tools":
+["*"]` reaches every read-only tool but none of these 15 write-capable tools:
+
+| Write tool | |
+|---|---|
+| `add_device` | `apply_junos_change_set` |
+| `approve_junos_change_set` | `confirm_junos_change_set` |
+| `create_junos_change_set` | `discard_candidate` |
+| `execute` | `load_and_commit_config` |
+| `manage_appid_signature_package` | `manage_idp_security_package` |
+| `reload_devices` | `render_and_apply_j2_template` |
+| `rollback_config` | `transfer_file` |
+| `upgrade_junos` | |
+
+Granting write authority is always an explicit, named decision: a token that
+needs `load_and_commit_config` must list it, alongside every other tool it
+calls. An explicit allowlist behaves exactly as before.
+
+`get_device_list {"include_blocklist": true}` (deny/allow rules of in-scope
+devices) additionally needs the pseudo tool name
+`get_device_list.include_blocklist`. A wildcard token has it; an explicit list
+must name it. Without it the call is rejected over HTTP with the same 403
+`insufficient_scope` as any other out-of-scope tool; the plain
+`get_device_list` call is unaffected.
+
+`execute` is a strict facade over the 40 concrete operations. A token
+using it must explicitly name **both** `execute` and the selected concrete
+operation; wildcard scope does not grant `execute`. The facade passes the
+selected operation's arguments unchanged, so use the concrete operation's
+exact argument names:
+
+```json
+{"operation":"gather_device_facts","arguments":{"device":"vsrx-ci"}}
+```
+
+Direct calls to all 40 concrete tools remain supported.
+
+`tools/list` advertises only what the caller's token can invoke, so the list an
+agent sees matches what it can actually call. A wildcard token is shown the
+read-only tools and not the 15 write-capable tools; a token scoped to nothing is shown
+an empty list.
+
+> **Cached lists go stale.** A client that fetched `tools/list` before you
+> re-scoped its token with `token set-scope` keeps the old view until it
+> reconnects — the server does not currently emit
+> `notifications/tools/list_changed` on SIGHUP reload. Authorization is
+> unaffected: a call to a tool the token no longer has is refused regardless of
+> what the client believes it can see.
+
+Scope checks apply only to authenticated HTTP callers. Local stdio and the
+`--allow-no-auth` loopback escape hatch carry no caller context and are not
+scope-restricted.
+
+> **Run token subcommands as the service user.** When the systemd unit runs
+> the server as a dedicated user (e.g. `User=jmcp` in the packaged unit), the
+> file `token add`/`revoke`/`rotate`/`set-scope` writes inherits the calling
+> user's ownership. If you run them as `root`, the resulting `tokens.json`
+> will be `root:root 0600` and the service user cannot read it — the server
+> then crash-loops on startup with `Permission denied`. Either:
+>
+> ```bash
+> # Preferred: run subcommands as the service user.
+> sudo -u jmcp rust-junosmcp token add --tokens-file /etc/jmcp/tokens.json ...
+>
+> # Or fix ownership after running as root.
+> rust-junosmcp token add --tokens-file /etc/jmcp/tokens.json ...
+> chown jmcp:jmcp /etc/jmcp/tokens.json
+> ```
+>
+> If the server hits this case on startup, the error message now reports the
+> file's uid/mode and the caller's uid so the fix is obvious without trawling
+> journald.
+
+### Run with auth (streamable-http)
+
+```bash
+cargo run -- \
+  --device-mapping devices.json \
+  --transport streamable-http \
+  -H 127.0.0.1 \
+  -p 8765 \
+  --tokens-file tokens.json
+```
+
+### Loopback escape hatch (no auth, local only)
+
+```bash
+cargo run -- --device-mapping devices.json --transport streamable-http \
+  -H 127.0.0.1 -p 8765 --allow-no-auth
+```
+
+`--allow-no-auth` is refused if the bind address is not loopback.
+
+### Non-loopback requires TLS
+
+```bash
+cargo run -- \
+  --device-mapping devices.json \
+  --transport streamable-http \
+  -H 0.0.0.0 \
+  -p 8765 \
+  --tokens-file tokens.json \
+  --tls-cert cert.pem \
+  --tls-key key.pem
+```
+
+To bind off-loopback over plain HTTP (e.g., behind a TLS-terminating proxy on
+the same host), add `--allow-insecure-bind`. This flag overrides the TLS
+requirement and should be used with care — only when you have an external
+guarantee of transport security.
+
+### Host allowlist (DNS-rebinding guard)
+
+The streamable-http transport validates the incoming `Host` header against an
+allowlist (default: loopback only — `localhost`, `127.0.0.1`, `::1`). This
+closes RUSTSEC-2026-0189 (DNS rebinding). Off-loopback clients must be
+allowlisted with `--allowed-host <HOST>` (repeatable) or they are rejected
+with HTTP 403, regardless of auth state:
+
+```bash
+cargo run -- \
+  --device-mapping devices.json \
+  --transport streamable-http \
+  -H 0.0.0.0 \
+  -p 8765 \
+  --tokens-file tokens.json \
+  --tls-cert cert.pem \
+  --tls-key key.pem \
+  --allowed-host jmcp.example.net
+```
+
+There is no way to turn the allowlist off. `--disable-host-check` was removed in
+0.15.3 and is now rejected at startup. The allowlist is the DNS-rebinding guard
+(RUSTSEC-2026-0189), and rebinding targets loopback-bound services specifically —
+a browser resolves an attacker-controlled name to `127.0.0.1` and reaches the
+server with a foreign `Host`. "Off" was therefore most dangerous exactly where it
+looked safest. If a client sends an authority the server does not know, name it
+with `--allowed-host`; the flag is repeatable.
+
+### OAuth 2.1 resource-server mode (opt-in build)
+
+An external authorization server's JWT access tokens can be accepted next to
+the static tokens ([mecmcp#498]). The feature is compiled out of the shipped
+binary: build with `cargo build --release -p rust-junosmcp --features
+oauth-resource`, and a binary built without it has neither the `--oauth-*`
+flags nor the discovery route. Static tokens are tried first, and `--tokens-file`
+is required.
+
+```fish
+rust-junosmcp --transport streamable-http --tokens-file /etc/jmcp/tokens.json \
+  --oauth-issuer https://idp.lab.example/realms/lab \
+  --oauth-resource https://junos.lab.example/mcp \
+  --oauth-scope-map /etc/jmcp/oauth-scopes.json
+```
+
+Add `--oauth-max-token-lifetime-secs <N>` to refuse any access token whose
+`exp - iat` exceeds N seconds, which bounds how long an offboarded user's token
+keeps working (off by default).
+
+To grant by inventory attribute instead of by name, add `device_selectors`
+(`site=`, `vendor=`, `tag=`, `*` glob; entries are ANDed) to a scope-map entry.
+They narrow that entry's `devices` and are resolved against the live inventory
+on each authentication, so a SIGHUP or `reload_devices` takes effect on the next
+request:
+
+```json
+{"version": 1, "scopes": {
+  "junos:lab": {"tools": ["get_junos_config"], "devices": ["*"],
+                "device_selectors": ["site=lab-*"]}}}
+```
+
+Attributes come from the `attributes` object in `devices.json`; a device
+without one matches no selector (fail closed). See mecmcp's
+[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.30.1/docs/OAUTH.md) for
+the full selector grammar.
+
+Upgrading to mecmcp 0.29 reserves the `oauth:` prefix: rename any static token
+with that name first, or the whole token file fails to load. Scope-map format,
+IdP setup, audience rules and rollback notes are in mecmcp's
+[OAUTH.md](https://github.com/mechubsec/mecmcp/blob/v0.30.1/docs/OAUTH.md).
+
+[mecmcp#498]: https://github.com/mechubsec/mecmcp/issues/498
+
+### Hot reload
+
+After revoking or rotating a token, the server reloads the token store without
+restarting. Pass `--server-pid <pid>` to any write subcommand and the SIGHUP
+is sent automatically after the file is written:
+
+```bash
+# Revoke — writes file, then signals the server.
+cargo run -- token revoke --tokens-file tokens.json --name ops --server-pid <pid>
+
+# Rotate (mints a new secret, preserves scopes) — same pattern.
+cargo run -- token rotate --tokens-file tokens.json --name ops --server-pid <pid>
+
+# Add a new token and signal in one step.
+cargo run -- token add \
+  --tokens-file tokens.json \
+  --name ops2 \
+  --routers '*' \
+  --tools execute_junos_command,gather_device_facts \
+  --server-pid <pid>
+```
+
+### Rescope a token without reissuing its secret
+
+`token set-scope` changes an existing token's scopes in place. The digest,
+`created_at`, and envelope version are all preserved, so clients holding the
+secret keep working — this is the difference from `rotate`, which mints a new
+secret and forces every consumer to be updated at once.
+
+```bash
+# Narrow tools; leave the router scope alone.
+cargo run -- token set-scope \
+  --tokens-file tokens.json \
+  --name ops \
+  --tools gather_device_facts,get_junos_config,load_and_commit_config \
+  --server-pid <pid>
+
+# Narrow routers; leave the tool scope alone.
+cargo run -- token set-scope \
+  --tokens-file tokens.json \
+  --name ops \
+  --routers edge-1,edge-2 \
+  --server-pid <pid>
+```
+
+`--routers` and `--tools` are each optional and independent; whichever you
+omit is left unchanged. Supplying neither is an error. The command prints the
+resulting scopes to stderr, and `--server-pid` sends the usual SIGHUP once the
+file is written. Unknown tool names are rejected; unknown device names warn
+but are accepted, since token operations run before the inventory is loaded.
+
+If you need to trigger a reload without a token change (e.g., after editing the
+file by hand), send SIGHUP directly:
+
+```bash
+kill -HUP <pid>
+```
+
+### Refusal matrix
+
+| Flags | Bind address | Result |
+|---|---|---|
+| _(none)_ | any | Refused — `--tokens-file` or `--allow-no-auth` required for streamable-http |
+| `--allow-no-auth` only | non-loopback | Refused — `--allow-no-auth` is loopback-only |
+| `--allow-no-auth` only | loopback | OK — but note: if you also supply `--tls-cert`/`--tls-key`, auth is still disabled; TLS gives confidentiality but any client that can reach the port has full tool access (foot-gun) |
+| `--tokens-file` only | non-loopback, no TLS | Refused — add `--tls-cert`/`--tls-key` or `--allow-insecure-bind` |
+| `--tokens-file --allow-insecure-bind` | non-loopback, no TLS | OK — tokens are checked; you are asserting external transport security |
+| `--tokens-file --tls-cert cert.pem --tls-key key.pem` | any | OK |
+
+### Canonical environment variables
+
+The unified server uses one `JMCP_*` namespace. Command-line values take
+precedence over environment values.
+
+| Purpose | Canonical environment variable |
+|---|---|
+| Listener | `JMCP_HTTP_HOST`, `JMCP_HTTP_PORT` |
+| Inventory and tokens | `JMCP_DEVICES_PATH`, `JMCP_TOKENS_PATH` |
+| TLS | `JMCP_TLS_CERT`, `JMCP_TLS_KEY` |
+| Destructive-operation leases | `JMCP_DEVICE_LEASE_DIR` |
+| Support-bundle staging | `JMCP_SUPPORT_BUNDLE_STAGING_DIR`, `JMCP_SUPPORT_BUNDLE_STAGING_MAX_BYTES` |
+| Audit | `JMCP_AUDIT_FORMAT`, `JMCP_AUDIT_LOG_FILE`, `JMCP_AUDIT_JOURNALD`, `JMCP_AUDIT_REDACT`, `JMCP_AUDIT_HMAC_KEY_FILE` |
+| Metrics | `JMCP_ENABLE_METRICS` |
+
+For migration, legacy `JMCP_SRX_*` aliases are accepted with a warning in
+`0.8.0` only when neither the corresponding command-line option nor canonical
+variable is set. `JMCP_SRX_HTTP_PORT` is always ignored: the retired second
+listener no longer exists. Move deployments to the canonical names now.
+
+## Upgrading to v0.10
+
+Two breaking authorization changes land in v0.10.0. Both are checked at
+runtime by the new binary, so **do the preparation while 0.9.x is still
+running** — otherwise the upgrade either fails to start or silently breaks
+write-capable clients.
+
+### 1. Fix token-file permissions
+
+The new binary refuses to start on a group- or world-accessible
+`tokens.json`. Check and fix before swapping the binary:
+
+```bash
+# On the server host, as the service user.
+stat -c '%a %U:%G %n' /etc/jmcp/tokens.json
+chmod 0600 /etc/jmcp/tokens.json
+```
+
+The LXC installer already sets `0600`, so packaged installs are almost
+certainly fine. Files created by hand, copied between hosts, restored from a
+backup, or written by configuration management are the ones to check. If the
+server does hit this, the startup error names the file's owner uid, its mode,
+the calling process's uid, and the exact `chmod` — it is not a silent failure.
+
+### 2. Re-scope wildcard tokens that need write tools
+
+A wildcard tool scope no longer confers the 15
+[write-capable tools](#tool-scopes-and-write-tools). Any token with `"tools": ["*"]`
+that calls one of them will start getting `ToolNotInScope` refusals after the
+upgrade.
+
+Find the affected tokens:
+
+```bash
+sudo -u jmcp rust-junosmcp token list --tokens-file /etc/jmcp/tokens.json
+```
+
+Every row showing `*` in the `TOOLS` column is a candidate. For each one,
+decide whether it genuinely needs write access:
+
+- **Read-only in practice** — leave it. A wildcard scope still reaches every
+  read-only tool, and it is now safer than it was.
+- **Needs write tools** — replace the wildcard with an explicit list naming
+  every tool it calls, including the read-only ones. Scopes cannot mix `*`
+  with names.
+
+`token set-scope` does this without reissuing the secret, so clients keep
+working across the change:
+
+```bash
+sudo -u jmcp rust-junosmcp token set-scope \
+  --tokens-file /etc/jmcp/tokens.json \
+  --name ops \
+  --tools get_router_list,gather_device_facts,get_junos_config,junos_config_diff,commit_check_config,load_and_commit_config \
+  --server-pid "$(systemctl show -p MainPID --value rust-junosmcp)"
+```
+
+`set-scope` exists in 0.10.0 and later. On 0.9.x, the equivalent is to edit
+`tokens.json` by hand — change only the `tools` array, leave `hash`/`digest`
+and `created_at` untouched — then `systemctl kill -s HUP rust-junosmcp`. Do
+not use `rotate` for this: it mints a new secret and locks out every consumer
+of that token at once.
+
+### 3. Upgrade, then verify
+
+After installing the new release, confirm the store loaded and the scopes are
+what you expect:
+
+```bash
+systemctl status rust-junosmcp
+sudo -u jmcp rust-junosmcp token list --tokens-file /etc/jmcp/tokens.json
+```
+
+Then exercise one write tool through an affected client. A refusal at this
+point means that token's allowlist is missing the tool name.
+
+> **Back up `tokens.json` before upgrading — rollback is not symmetric.**
+> v0.10 *reads* the old `hash`/`routers` spellings, but any v0.10 token write
+> (`add`, `rotate`, `revoke`, `set-scope`) rewrites the whole file in the
+> canonical `digest`/`devices` spelling, and **0.9.x cannot parse that** — it
+> requires `hash` and fails to load the store, so the rolled-back server will
+> not start. Keep a copy:
+>
+> ```bash
+> sudo -u jmcp cp -a /etc/jmcp/tokens.json /etc/jmcp/tokens.json.0.9-backup
+> ```
+>
+> If you have not run a v0.10 token write, the file is byte-identical and
+> rollback is clean. Otherwise restore the backup (secrets and scopes are
+> unchanged by the upgrade itself), or rename the two fields back by hand.
+> On Proxmox, an LXC snapshot of the container before install covers this
+> along with everything else.
+
+## Resource limits (streamable-HTTP)
+
+The unified endpoint enforces configurable DoS guardrails. Most limits are enabled by
+default with generous values; the optional per-token request-rate limiter is
+disabled until both of its knobs are positive. A zero value disables an
+individual limit, subject to the rate/burst pair rule below.
+
+| Flag | Environment variable | Default | Effect |
+|------|-------------------|---------|--------|
+| `--max-request-body-bytes` | `JMCP_MAX_REQUEST_BODY_BYTES` | 10 MiB | Reject larger bodies with **413** before buffering |
+| `--max-inflight-requests` | `JMCP_MAX_INFLIGHT_REQUESTS` | 64 | Global concurrency cap; over-limit → **503** |
+| `--max-inflight-requests-per-token` | `JMCP_MAX_INFLIGHT_REQUESTS_PER_TOKEN` | 16 | Per-token concurrency cap → **503** |
+| `--max-requests-per-second-per-token` | `JMCP_MAX_REQUESTS_PER_SECOND_PER_TOKEN` | 0 | Per-token refill rate; pair with burst (`0/0` disables) |
+| `--max-request-burst-per-token` | `JMCP_MAX_REQUEST_BURST_PER_TOKEN` | 0 | Per-token immediate burst; pair with rate (`0/0` disables) |
+| `--max-inflight-requests-per-router` | `JMCP_MAX_INFLIGHT_REQUESTS_PER_ROUTER` | 4 | Per-router concurrency cap → **503** |
+| `--max-sessions` | `JMCP_MAX_SESSIONS` | 128 | Session count cap → **503** |
+| `--max-sessions-per-token` | `JMCP_MAX_SESSIONS_PER_TOKEN` | 16 | Per-bearer-token session cap → **503** |
+| `--session-idle-timeout-secs` | `JMCP_SESSION_IDLE_TIMEOUT_SECS` | 300 | Idle sessions reaped |
+| `--session-max-lifetime-secs` | `JMCP_SESSION_MAX_LIFETIME_SECS` | 3600 | Old sessions reaped |
+
+The global session cap is enforced atomically during session creation. The
+middleware rejects obvious saturation early, while the shared session manager
+closes any concurrently created session that loses the final slot race before
+returning the same `session_cap` 503 contract. Rejected initialization never
+returns an `Mcp-Session-Id`, and closing or reaping an admitted session returns
+its slot.
+
+Per-token session accounting uses the exact authenticated token name. Successful
+initialization binds the returned `Mcp-Session-Id`; explicit close and idle/lifetime
+reaping return the slot. Saturation returns
+`{"error":"overloaded","limit":"token_session_cap"}`. The cap is skipped in
+explicit no-auth mode because no token identity exists.
+
+Over-limit responses carry `Retry-After: 1`. Concurrency permits are released when
+the response stream ends. A multi-router call holds one router slot for each unique
+top-level `router`, `router_name`, `routers`, or `router_names` target.
+Per-router saturation is identified by the response body
+`{"error":"overloaded","limit":"router_concurrency"}`.
+
+The per-router HTTP permit is acquired before a destructive workflow waits for its
+cross-process device lease. A destructive call counts once while waiting for or
+holding that lease; the HTTP cap bounds both reads and destructive waiters, while the
+lease remains the authority that serializes destructive operations across processes.
+
+Per-token request-rate limiting is an opt-in token bucket keyed by the exact
+authenticated token name. Set both the requests-per-second rate and burst to
+positive values to enable it; leave both at `0` to disable it. Supplying only
+one positive value fails startup. Each authenticated `/mcp` HTTP request costs
+one token. An exhausted bucket returns **429**, `Retry-After: 1`, and
+`{"error":"rate_limited","limit":"token_rate"}` before concurrency or session
+capacity is acquired. Explicit no-auth mode skips this per-token control.
+
+Use the RPS limiter to absorb bursts of many cheap, short calls. Use concurrency
+limits to bound simultaneous expensive NETCONF/SSH work and slow response
+streams. They are independent and can be enabled together; rate checks run
+first, while concurrency/session exhaustion retains the existing **503**
+contract.
+
+Prometheus export is opt-in with `--enable-metrics`
+(`JMCP_ENABLE_METRICS`). It mounts an
+unauthenticated `GET /metrics` beside `/mcp`; protect it with network controls.
+See [Prometheus metrics](METRICS.md) for scrape configuration, metric
+names, labels, and PromQL examples.
+
+## CLI
+
+```
+Junos MCP server (Rust)
+
+Usage: rust-junosmcp [OPTIONS] [COMMAND]
+
+Commands:
+  token  Manage the bearer-token store
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+  -f, --device-mapping <DEVICE_MAPPING>
+          JSON file with device mapping (Juniper junos-mcp-server compatible) [default: devices.json]
+  -t, --transport <TRANSPORT>
+          Transport [default: stdio] [possible values: stdio, streamable-http]
+  -H, --host <HOST>
+          Bind host (streamable-http only) [default: 127.0.0.1]
+  -p, --port <PORT>
+          Bind port (streamable-http only) [default: 30030]
+      --tokens-file <TOKENS_FILE>
+          Bearer-token file. Required for streamable-http unless --allow-no-auth
+      --tls-cert <TLS_CERT>
+          PEM-encoded TLS cert (streamable-http only). Pair with --tls-key
+      --tls-key <TLS_KEY>
+          PEM-encoded TLS key (streamable-http only). Pair with --tls-cert
+      --allow-no-auth
+          Disable bearer-token auth. Refuses to bind off-loopback
+      --allow-insecure-bind
+          Bind off-loopback over plain HTTP. Required for non-127.0.0.1 hosts when TLS is not configured
+      --inventory-readonly
+          Reject add_device and reload_devices unconditionally
+      --allow-password-auth-add
+          Permit add_device to accept auth.type=password (mutually exclusive
+          with --inventory-readonly)
+      --device-lease-dir <DEVICE_LEASE_DIR>
+          Shared directory for cross-process destructive-operation leases
+          [default: /var/lib/jmcp/device-leases]
+      --allowed-host <HOST>
+          Additional Host authorities to accept on the streamable-http
+          endpoint, beyond the loopback defaults (localhost, 127.0.0.1, ::1).
+          Repeatable
+  -h, --help
+          Print help
+  -V, --version
+          Print version
+```
+
+## Testing against a real device
+
+```bash
+JMCP_TEST_HOST=10.0.0.1 \
+JMCP_TEST_USER=admin \
+JMCP_TEST_PASS=secret \
+cargo test -p rust-junosmcp-core --test integration_real_device -- --ignored --nocapture
+```
+
+## Audit forwarding to the event store
+
+The audit trail does not stay on this host. This server follows the family
+standard — [AUDIT-FORWARDING-STANDARD.md](https://github.com/mechubsec/mecmcp/blob/main/docs/AUDIT-FORWARDING-STANDARD.md).
+
+An audit record that only exists on the machine that produced it is not an audit
+trail: it is a log file on a box whose operator is the party the record is about.
+
+### Emission (in effect now)
+
+```
+--audit-format json \
+--audit-log-file /var/lib/jmcp/audit.jsonl
+```
+
+JSON is mandatory. The `text` format is for reading in a terminal and is not a
+parse target. The file is the operator-facing artifact and must be rotated — the
+server never truncates it.
+
+### Transport (specified, not yet implemented)
+
+Records are written directly into SSDF's `ssdf.audit` as **hash-chained** rows,
+per SSDF's merged evidence contract, so that deleting or editing a row is
+detectable. Tracked in [mecmcp#292](https://github.com/mechubsec/mecmcp/issues/292).
+
+A cheaper syslog path was designed and rejected: it works, but the records are
+unchained, and every other link here is tamper-evident by construction — plan
+digests bind approvals, approvals name a distinct principal, and
+`token_verified_fields` separates vouched-for provenance from asserted. An
+unchained final hop would discard that guarantee exactly where an auditor needs
+it. The reasoning is recorded in the standard.
+
+### Reading the result
+
+`token_verified_fields` names the provenance fields the **token** vouched for.
+The rest of that group — `client_name`, `model_id`, `session_id` — is
+client-asserted and authenticated by nothing. Do not read them as equivalent.
+
+`request_id` correlates the transport event, the handler event, and (on Junos)
+the device commit comment.

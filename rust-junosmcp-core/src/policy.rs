@@ -172,7 +172,7 @@ impl Policy {
     ///   `config`, or `pfe_commands` rule list → this is a legacy
     ///   deny-only config; select [`CommandMode::Blocklist`] and log one
     ///   `tracing::warn!` explaining that blocklist mode is fail-open, with
-    ///   a pointer to the README migration docs.
+    ///   a pointer to the migration docs in docs/REFERENCE.md.
     /// - Otherwise (no `_blocklist_defaults` at all, an empty one, or `mode`
     ///   absent with no rules) → [`CommandMode::Allowlist`] (also just
     ///   `CommandMode::default()`).
@@ -220,10 +220,10 @@ impl Policy {
                          loading as legacy blocklist mode. Blocklist mode is fail-open \
                          (anything not explicitly denied is allowed) and is being phased \
                          out in favor of the fail-closed allowlist mode, which is now the \
-                         default for configs that set no rules at all. See README.md, \
-                         sections 'Allowlist mode (default)' and 'Blocklist mode (legacy, \
-                         opt-in)', for how to migrate to an explicit `mode: allowlist` with \
-                         an `allow` list."
+                         default for configs that set no rules at all. See docs/REFERENCE.md, \
+                         section '`execute_junos_command` authorization mode: allowlist \
+                         (default) vs. blocklist', for how to migrate to an explicit \
+                         `mode: allowlist` with an `allow` list."
                     );
                     CommandMode::Blocklist
                 } else {
