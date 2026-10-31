@@ -137,8 +137,8 @@ Obtain the immutable digest for the version you want to run. If the image has no
 been pulled yet, choose one of the published registries and pull it first:
 
 ```bash
-image=ghcr.io/mechubsec/rustjunosmcp:2.6.0
-# Docker Hub equivalent: image=docker.io/mechub/rustjunosmcp:2.6.0
+image=ghcr.io/mechubsec/rustjunosmcp:2.6.1
+# Docker Hub equivalent: image=docker.io/mechub/rustjunosmcp:2.6.1
 docker pull "$image"
 image=$(docker inspect "$image" \
     --format '{{index .RepoDigests 0}}')

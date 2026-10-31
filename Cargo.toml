@@ -54,7 +54,7 @@ async-trait      = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 schemars     = "1.0"
 anyhow       = "1"
-rustez       = "0.20.0"
+rustez       = "0.20.1"
 # `version` is redundant for resolution alongside `tag`, but cargo-deny reads a
 # versionless dependency as a wildcard and rejects it under [bans].
 # All mecmcp crates MUST resolve to the same git ref. Cargo keys a git
@@ -106,20 +106,20 @@ rustez       = "0.20.0"
 #
 # mecmcp is consumed at an exact pinned tag; all crates must resolve to the
 # same git ref (see the TypeId note above).
-mecmcp-audit = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
-mecmcp-auth  = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
-mecmcp-transport = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
-mecmcp-runtime = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
-mecmcp-policy = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
-mecmcp-inventory = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
-mecmcp-device = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
-mecmcp-changeset = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
-mecmcp-scp = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
-mecmcp-secret = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
-mecmcp-redact = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
-mecmcp-oidc = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
-mecmcp-http = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
-mecmcp-server = { version = "0.31.1", git = "https://github.com/mechubsec/mecmcp", tag = "v0.31.1" }
+mecmcp-audit = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-auth  = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-transport = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-runtime = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-policy = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-inventory = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-device = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-changeset = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-scp = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-secret = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-redact = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-oidc = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-http = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-server = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
 globset      = "0.4"
 regex        = "1"
 metrics                     = "0.24.6"
@@ -147,7 +147,7 @@ ureq             = "2"
 minijinja        = { version = "2", default-features = false, features = ["builtins", "loader", "serde"] }
 dashmap          = "6"
 http-body        = "1"
-rustnetconf      = "0.19.0"
+rustnetconf      = "0.19.1"
 rustix           = "1.1"
 
 # Release build profile: LTO + strip for smaller binaries.

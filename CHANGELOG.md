@@ -4,7 +4,17 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.6.1] - 2026-10-30
+
+### Security
+
+- Move to russh 0.65 through rustnetconf 0.19.1, rustez 0.20.1 and mecmcp 0.32.0.
+  This picks up CVE-2026-116794 and the other fixes in that release. The ones
+  that reach this server are client-side and a malicious or compromised device
+  could trigger them: unbounded allocation from repeated `EXT_INFO` packets
+  (GHSA-4p9f-7p9m-5vfg) and a channel stall on a zero maximum packet size
+  (GHSA-fw5c-8223-6h42). CVE-2026-116794 itself is on the SSH agent path, which
+  this server never selects.
 
 ### Changed
 
