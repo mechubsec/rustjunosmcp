@@ -182,6 +182,213 @@ fn allow_flag_turns_the_mist_refusal_into_a_warning() {
     assert!(fake.saw("<nc:commit"), "{:?}", fake.requests());
 }
 
+// ---- upgrade_junos: warns, never refuses ----
+
+/// `get-chassis-cluster-status` on a standalone SRX, as captured from a vSRX.
+const STANDALONE_CLUSTER_REPLY: &str = "<xnm:error xmlns=\"http://xml.juniper.net/xnm/1.1/xnm\" \
+    xmlns:xnm=\"http://xml.juniper.net/xnm/1.1/xnm\">\n<parse/>\n\
+    <source-daemon>jsrpd</source-daemon>\n\
+    <message>error: Chassis cluster is not enabled</message>\n</xnm:error>";
+
+/// `script()` plus the probes `upgrade_junos` preflight runs; the device
+/// reports 24.4R1.9 with 7 GiB free, so a different target reaches the
+/// confirmation prompt.
+fn upgrade_script(outbound_ssh_reply: &str) -> Script {
+    upgrade_script_with_cluster(outbound_ssh_reply, STANDALONE_CLUSTER_REPLY)
+}
+
+fn upgrade_script_with_cluster(outbound_ssh_reply: &str, cluster_reply: &str) -> Script {
+    let mut entries = script(outbound_ssh_reply, INTERFACE_DIFF);
+    entries.push(("get-chassis-cluster-status", cluster_reply.to_string()));
+    let cli_replies = [
+        (
+            "show version | match Junos:",
+            "<output>\nJunos: 24.4R1.9\n</output>",
+        ),
+        (
+            "show system commit",
+            "<output>\n0   2026-05-14 09:12:31 UTC by netconf via netconf\n</output>",
+        ),
+        (
+            "show system storage no-forwarding",
+            "<output>\nFilesystem  Size Used Avail Capacity Mounted on\n/dev/x      10G  2.1G 7.0G  23%      /.mount/var\n</output>",
+        ),
+    ];
+    for (command, reply) in cli_replies {
+        entries.push((command, reply.to_string()));
+    }
+    entries
+}
+
+/// Stage a small image, run the binary, and call `upgrade_junos` with
+/// `confirm=false`; returns the fake, the response and the temp dirs.
+fn preview_upgrade(
+    script: Script,
+    authority: Option<&str>,
+) -> (FakeNetconf, Value, tempfile::TempDir, tempfile::TempDir) {
+    preview_upgrade_repeatedly(script, authority, 1)
+}
+
+fn preview_upgrade_repeatedly(
+    script: Script,
+    authority: Option<&str>,
+    previews: usize,
+) -> (FakeNetconf, Value, tempfile::TempDir, tempfile::TempDir) {
+    let staging = tempfile::tempdir().unwrap();
+    std::fs::write(
+        staging.path().join("junos-25.4R1.12.tgz"),
+        b"not a real image",
+    )
+    .unwrap();
+    let (fake, mut server, dir) = start(
+        script,
+        authority,
+        &["--staging-dir", staging.path().to_str().unwrap()],
+    );
+    let mut resp = Value::Null;
+    for _ in 0..previews {
+        resp = call_tool(
+            &mut server,
+            "upgrade_junos",
+            json!({
+                "device": "fake",
+                "source_path": "junos-25.4R1.12.tgz",
+                "target_version": "25.4R1.12",
+                "confirm": false,
+            }),
+        );
+    }
+    (fake, resp, staging, dir)
+}
+
+/// The upgrade reached its confirmation prompt and changed nothing.
+fn assert_unrefused_preview(fake: &FakeNetconf, text: &str) {
+    assert!(text.contains("confirmation_required"), "{text}");
+    assert!(text.contains("REBOOT"), "{text}");
+    // Junos answers the CLI form with bare text in <rpc-reply>, which the parser rejects.
+    assert!(
+        !fake.saw("show chassis cluster status"),
+        "{:?}",
+        fake.requests()
+    );
+    assert!(!fake.saw("load-configuration"), "{:?}", fake.requests());
+    assert!(!fake.saw("<nc:commit"), "{:?}", fake.requests());
+    assert!(!fake.saw("<commit-configuration"), "{:?}", fake.requests());
+}
+
+#[test]
+fn upgrade_on_detected_mist_warns_and_is_not_refused() {
+    let (fake, resp, _staging, _dir) = preview_upgrade(upgrade_script(MIST_STANZA), None);
+    let text = resp.to_string();
+    assert_unrefused_preview(&fake, &text);
+    assert!(text.contains("config_authority_warning"), "{text}");
+    assert!(text.contains("Juniper Mist"), "{text}");
+    assert!(
+        text.contains("detected from system services outbound-ssh"),
+        "{text}"
+    );
+}
+
+#[test]
+fn upgrade_on_detected_sdc_names_security_director_cloud() {
+    let (fake, resp, _staging, _dir) = preview_upgrade(upgrade_script(SDC_STANZA), None);
+    let text = resp.to_string();
+    assert_unrefused_preview(&fake, &text);
+    assert!(text.contains("Security Director Cloud"), "{text}");
+}
+
+#[test]
+fn upgrade_on_declared_mist_warns_without_probing() {
+    let (fake, resp, _staging, _dir) = preview_upgrade(upgrade_script(NO_STANZA), Some("mist"));
+    let text = resp.to_string();
+    assert_unrefused_preview(&fake, &text);
+    assert!(text.contains("config_authority_warning"), "{text}");
+    assert!(
+        text.contains("declared in devices.json config_authority"),
+        "{text}"
+    );
+    assert!(!fake.saw("outbound-ssh"), "{:?}", fake.requests());
+}
+
+#[test]
+fn upgrade_on_unmanaged_device_has_no_plane_warning() {
+    let (fake, resp, _staging, _dir) = preview_upgrade(upgrade_script(NO_STANZA), None);
+    let text = resp.to_string();
+    assert_unrefused_preview(&fake, &text);
+    assert!(!text.contains("config_authority_warning"), "{text}");
+}
+
+/// Preview against `cluster_reply` and assert the cluster refusal itself, not
+/// just any failure: a reply the parser rejects would also skip the prompt.
+fn assert_refused_as_cluster(cluster_reply: &str) {
+    let (_fake, resp, _staging, _dir) =
+        preview_upgrade(upgrade_script_with_cluster(NO_STANZA, cluster_reply), None);
+    let text = resp.to_string();
+    assert!(!text.contains("confirmation_required"), "{text}");
+    assert!(text.contains("code=cluster_unsupported"), "{text}");
+}
+
+#[test]
+fn upgrade_on_a_chassis_cluster_is_still_refused() {
+    assert_refused_as_cluster(
+        "<chassis-cluster-status><cluster-id>1</cluster-id></chassis-cluster-status>",
+    );
+}
+
+#[test]
+fn upgrade_is_refused_when_the_device_does_not_prove_it_is_standalone() {
+    assert_refused_as_cluster(
+        &STANDALONE_CLUSTER_REPLY.replace("Chassis cluster is not enabled", "HA is not enabled"),
+    );
+}
+
+#[test]
+fn upgrade_on_a_non_srx_router_skips_the_cluster_check() {
+    let unsupported = common::fake_netconf::rpc_error("syntax error");
+    let mut script = upgrade_script_with_cluster(NO_STANZA, &unsupported);
+    script.insert(
+        0,
+        (
+            "get-software-information",
+            "<software-information><host-name>fake</host-name><product-model>mx204</product-model></software-information>".to_string(),
+        ),
+    );
+    let (fake, resp, _staging, _dir) = preview_upgrade(script, None);
+    assert_unrefused_preview(&fake, &resp.to_string());
+    assert!(
+        !fake.saw("get-chassis-cluster-status"),
+        "{:?}",
+        fake.requests()
+    );
+}
+
+#[test]
+fn upgrade_proceeds_without_warning_when_the_plane_probe_fails() {
+    let failing_probe = common::fake_netconf::rpc_error("probe refused");
+    let (fake, resp, _staging, _dir) = preview_upgrade(upgrade_script(&failing_probe), None);
+    let text = resp.to_string();
+    assert_unrefused_preview(&fake, &text);
+    assert!(fake.saw("outbound-ssh"), "{:?}", fake.requests());
+    assert!(!text.contains("config_authority_warning"), "{text}");
+}
+
+#[test]
+fn session_with_a_failed_plane_probe_is_not_reused() {
+    let failing_probe = common::fake_netconf::rpc_error("probe refused");
+    let (fake, _resp, _staging, _dir) =
+        preview_upgrade_repeatedly(upgrade_script(&failing_probe), None, 5);
+    let requests = fake.requests_by_connection();
+    for (index, (connection, rpc)) in requests.iter().enumerate() {
+        if !rpc.contains("outbound-ssh") {
+            continue;
+        }
+        let reused = requests[index + 1..]
+            .iter()
+            .any(|(later, rpc)| later == connection && !rpc.contains("close-session"));
+        assert!(!reused, "connection {connection} reused: {requests:?}");
+    }
+}
+
 // ---- change-set lifecycle (HTTP, lab mode: approval waived, owner applies) ----
 
 const CANDIDATE_CONFIG: &str =

@@ -287,7 +287,7 @@ pub enum JmcpError {
     /// Upgrade attempted on a chassis-cluster device. ISSU is not implemented
     /// in v1; standalone devices only.
     #[error(
-        "cluster device unsupported [code=cluster_unsupported]: router '{router}' is a chassis cluster; upgrade_junos v1 supports standalone devices only (ISSU support deferred to v2)"
+        "cluster device unsupported [code=cluster_unsupported]: router '{router}' is a chassis cluster or did not confirm it is standalone; upgrade_junos v1 supports standalone devices only (ISSU support deferred to v2)"
     )]
     UpgradeClusterUnsupported {
         /// Name of the chassis-cluster device that cannot be upgraded.
@@ -515,26 +515,6 @@ pub enum JmcpError {
         tool: &'static str,
         /// Name of the device the tool call was targeting.
         router: String,
-    },
-
-    /// Destructive operation refused on a plane-owned device.
-    ///
-    /// This device's `config_authority` indicates it is managed by a plane (Mist,
-    /// Security Director), and writes made through this server are overwritten at
-    /// the next push. The operation is refused by default; pass
-    /// `--allow-plane-owned-writes` to permit it with a warning instead.
-    #[error(
-        "refused: {tool} on '{device}' is owned by {authority}. Changes to plane-owned \
-         devices are overwritten at the next push. Use --allow-plane-owned-writes to \
-         permit this operation with a warning."
-    )]
-    PlaneOwnedDevice {
-        /// Name of the MCP tool that was refused.
-        tool: String,
-        /// Name of the device the tool call was targeting.
-        device: String,
-        /// Configuration authority that owns this device (e.g., "mist", "security-director-cloud").
-        authority: String,
     },
 
     /// A config write refused because a management plane (Security Director or Mist) owns the hierarchy it touches.
@@ -917,7 +897,6 @@ impl JmcpError {
             Self::DeniedAllowlist { reason, .. } => reason,
             Self::AllowlistEntryInvalid { .. } => "invalid_input",
             Self::ConfigDomainAllowlistInvariant { .. } => "blocked",
-            Self::PlaneOwnedDevice { .. } => "blocked",
             Self::PlaneManagedConfig { .. } => "blocked",
             Self::PlaneOwnedRollbackDepthRefused { .. } => "blocked",
             Self::PlaneOwnedRollbackOneRefused { .. } => "blocked",

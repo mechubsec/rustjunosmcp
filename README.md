@@ -344,7 +344,7 @@ is the same configuration without the flag.
   read-only here. Security Director devices refuse changes to `security`,
   `applications`, `schedulers` and `system services outbound-ssh`.
   `--allow-plane-owned-writes` turns the refusals into warnings.
-  `upgrade_junos` honours only a declared `config_authority`.
+  `upgrade_junos` is not guarded: it warns that the device is managed and proceeds.
   [Details](docs/REFERENCE.md#security-director-and-mist-managed-srx).
 
 ## 3. Connect a client

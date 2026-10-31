@@ -342,6 +342,26 @@ pub fn check(
     ))
 }
 
+/// Warning for `upgrade_junos` on a plane-managed device, or `None` when no
+/// plane manages it. Upgrades are never refused, so this only words the notice.
+pub fn upgrade_warning(
+    device: &str,
+    authority: &JunosAuthority,
+    source: AuthoritySource,
+) -> Option<String> {
+    let plane = match authority {
+        JunosAuthority::Local | JunosAuthority::Unknown => return None,
+        JunosAuthority::Mist => "Juniper Mist",
+        JunosAuthority::SecurityDirectorCloud => "Security Director Cloud",
+        JunosAuthority::SecurityDirectorOnprem => "Security Director On-Prem",
+    };
+    Some(format!(
+        "WARNING: '{device}' is managed by {plane} ({}). The Junos upgrade is allowed, \
+         but let whoever runs {plane} know.",
+        source.as_str()
+    ))
+}
+
 /// Decide whether `discard_candidate` may revert the shared candidate.
 ///
 /// Discard cannot lock (Junos refuses to lock a modified candidate), so on a
@@ -409,6 +429,34 @@ fn refuse(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upgrade_warning_names_each_plane_and_source() {
+        for (authority, plane) in [
+            (JunosAuthority::Mist, "Juniper Mist"),
+            (
+                JunosAuthority::SecurityDirectorCloud,
+                "Security Director Cloud",
+            ),
+            (
+                JunosAuthority::SecurityDirectorOnprem,
+                "Security Director On-Prem",
+            ),
+        ] {
+            for source in [AuthoritySource::Declared, AuthoritySource::Detected] {
+                let warning = upgrade_warning("edge1", &authority, source).unwrap();
+                assert!(warning.contains("'edge1'"), "got {warning}");
+                assert!(warning.contains(plane), "got {warning}");
+                assert!(warning.contains(source.as_str()), "got {warning}");
+            }
+        }
+        for authority in [JunosAuthority::Local, JunosAuthority::Unknown] {
+            assert_eq!(
+                upgrade_warning("edge1", &authority, AuthoritySource::Detected),
+                None
+            );
+        }
+    }
 
     const SDC_STANZA: &str = "client EMS-srx.sdcloud.juniperclouds.net {\n    device-id abc;\n    services netconf;\n    srx.sdcloud.juniperclouds.net port 7804;\n}\n";
 

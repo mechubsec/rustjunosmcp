@@ -31,7 +31,7 @@ pub type Script = Vec<(&'static str, String)>;
 pub struct FakeNetconf {
     pub port: u16,
     known_hosts_line: String,
-    requests: Arc<Mutex<Vec<String>>>,
+    requests: Arc<Mutex<Vec<(usize, String)>>>,
 }
 
 impl FakeNetconf {
@@ -46,6 +46,7 @@ impl FakeNetconf {
         let mut server = Fake {
             script: Arc::new(script),
             requests: requests.clone(),
+            connections: 0,
         };
         let config = Arc::new(Config {
             keys: vec![host_key],
@@ -76,6 +77,13 @@ impl FakeNetconf {
 
     /// Every RPC received so far, as raw XML.
     pub fn requests(&self) -> Vec<String> {
+        let requests = self.requests.lock().unwrap();
+        requests.iter().map(|(_, rpc)| rpc.clone()).collect()
+    }
+
+    /// Every RPC received so far, with the number of the connection it came in on.
+    #[allow(dead_code)]
+    pub fn requests_by_connection(&self) -> Vec<(usize, String)> {
         self.requests.lock().unwrap().clone()
     }
 
@@ -94,13 +102,16 @@ pub fn client_key_pem() -> String {
 #[derive(Clone)]
 struct Fake {
     script: Arc<Script>,
-    requests: Arc<Mutex<Vec<String>>>,
+    requests: Arc<Mutex<Vec<(usize, String)>>>,
+    connections: usize,
 }
 
 impl Server for Fake {
     type Handler = Conn;
     fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Conn {
+        self.connections += 1;
         Conn {
+            connection: self.connections,
             fake: self.clone(),
             buf: Vec::new(),
             chunked: None,
@@ -109,6 +120,7 @@ impl Server for Fake {
 }
 
 struct Conn {
+    connection: usize,
     fake: Fake,
     buf: Vec<u8>,
     /// `None` until the client's hello arrives; then whether 1.1 chunking was negotiated.
@@ -151,7 +163,8 @@ impl Conn {
     }
 
     fn reply_for(&self, request: &str) -> String {
-        self.fake.requests.lock().unwrap().push(request.to_string());
+        let record = (self.connection, request.to_string());
+        self.fake.requests.lock().unwrap().push(record);
         let message_id = request
             .split("message-id=\"")
             .nth(1)

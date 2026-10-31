@@ -757,9 +757,9 @@ async fn main() -> Result<()> {
         );
     } else {
         tracing::info!(
-            "plane-owned device protection active: load_and_commit_config, rollback_config, \
-             and upgrade_junos refuse operations on devices whose config_authority is not \
-             'local' or 'unknown' (default). Use --allow-plane-owned-writes for break-glass."
+            "plane-owned device protection active: config writes that Mist or Security \
+             Director owns are refused; upgrade_junos warns and proceeds. Use \
+             --allow-plane-owned-writes for break-glass."
         );
     }
 

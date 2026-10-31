@@ -66,7 +66,6 @@ async fn live_upgrade_round_trip() {
         args,
         dm,
         cfg,
-        false,
         CancellationToken::new(),
         "live-upgrade-round-trip".into(),
     )

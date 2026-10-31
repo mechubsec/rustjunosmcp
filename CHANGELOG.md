@@ -4,6 +4,32 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `upgrade_junos` no longer refuses a device declared as managed by Mist or
+  Security Director, and it now warns for detected planes too.
+  `--allow-plane-owned-writes` no longer affects upgrades.
+
+### Fixed
+
+- `upgrade_junos` could not start on a standalone SRX: its first check ran
+  `show chassis cluster status`, and Junos answers that with bare text that the
+  NETCONF parser rejects, so the call failed with `failed to parse RPC response`.
+  It now asks with the `get-chassis-cluster-status` RPC, as
+  `get_chassis_cluster_status` does. The check also fails safe: an upgrade only
+  proceeds when the device says chassis cluster is not enabled, so an unclear
+  reply now refuses instead of counting as standalone. MX, EX, QFX, PTX, ACX, M
+  and T devices skip the check, because they cannot form a chassis cluster.
+
+### Removed
+
+- From the `rust-junosmcp-core` library API: the `allow_plane_owned_writes`
+  argument of `upgrade_junos::handle`, `check_plane_owned_operation` and
+  `JmcpError::PlaneOwnedDevice`. The crate is not published, and only this
+  workspace uses it.
+
 ## [2.6.1] - 2026-10-30
 
 ### Security
