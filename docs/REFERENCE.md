@@ -979,8 +979,8 @@ cosign verify \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   --certificate-github-workflow-repository mechubsec/rustjunosmcp \
   --certificate-github-workflow-trigger push \
-  --certificate-github-workflow-ref refs/tags/v2.6.0 \
-  ghcr.io/mechubsec/rustjunosmcp:2.6.0
+  --certificate-github-workflow-ref refs/tags/v2.6.1 \
+  ghcr.io/mechubsec/rustjunosmcp:2.6.1
 ```
 
 `release-image.yml` delegates signing to mecmcp's reusable workflow, so the
