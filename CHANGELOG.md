@@ -22,6 +22,9 @@ All notable user-facing changes are recorded here. Format loosely follows
   proceeds when the device says chassis cluster is not enabled, so an unclear
   reply now refuses instead of counting as standalone. MX, EX, QFX, PTX, ACX, M
   and T devices skip the check, because they cannot form a chassis cluster.
+- Background session closes now stop at the cleanup budget
+  (`--cleanup-timeout-secs`). A device that kept SSH open but never answered
+  `<close-session>` could hold a task and a socket indefinitely.
 
 ### Removed
 

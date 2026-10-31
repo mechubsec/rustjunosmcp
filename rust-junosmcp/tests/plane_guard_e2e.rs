@@ -6,7 +6,7 @@
 //! still happen.
 mod common;
 
-use common::fake_netconf::{FakeNetconf, OK, Script, client_key_pem};
+use common::fake_netconf::{FakeNetconf, NO_REPLY, OK, Script, client_key_pem};
 use common::{
     Server, StdioChild, call_tool, http_post, initialize, spawn_stdio_server_with_protocol,
     spawn_with_auth_args, write_restricted,
@@ -234,31 +234,48 @@ fn preview_upgrade_repeatedly(
     authority: Option<&str>,
     previews: usize,
 ) -> (FakeNetconf, Value, tempfile::TempDir, tempfile::TempDir) {
+    let (fake, mut server, staging, dir) = start_upgrade(script, authority, &[]);
+    let mut resp = Value::Null;
+    for _ in 0..previews {
+        resp = call_preview(&mut server);
+    }
+    (fake, resp, staging, dir)
+}
+
+/// The binary with a small image staged, ready for `call_preview`.
+fn start_upgrade(
+    script: Script,
+    authority: Option<&str>,
+    extra_args: &[&str],
+) -> (
+    FakeNetconf,
+    StdioChild,
+    tempfile::TempDir,
+    tempfile::TempDir,
+) {
     let staging = tempfile::tempdir().unwrap();
     std::fs::write(
         staging.path().join("junos-25.4R1.12.tgz"),
         b"not a real image",
     )
     .unwrap();
-    let (fake, mut server, dir) = start(
-        script,
-        authority,
-        &["--staging-dir", staging.path().to_str().unwrap()],
-    );
-    let mut resp = Value::Null;
-    for _ in 0..previews {
-        resp = call_tool(
-            &mut server,
-            "upgrade_junos",
-            json!({
-                "device": "fake",
-                "source_path": "junos-25.4R1.12.tgz",
-                "target_version": "25.4R1.12",
-                "confirm": false,
-            }),
-        );
-    }
-    (fake, resp, staging, dir)
+    let mut args = vec!["--staging-dir", staging.path().to_str().unwrap()];
+    args.extend_from_slice(extra_args);
+    let (fake, server, dir) = start(script, authority, &args);
+    (fake, server, staging, dir)
+}
+
+fn call_preview(server: &mut StdioChild) -> Value {
+    call_tool(
+        server,
+        "upgrade_junos",
+        json!({
+            "device": "fake",
+            "source_path": "junos-25.4R1.12.tgz",
+            "target_version": "25.4R1.12",
+            "confirm": false,
+        }),
+    )
 }
 
 /// The upgrade reached its confirmation prompt and changed nothing.
@@ -342,8 +359,8 @@ fn upgrade_is_refused_when_the_device_does_not_prove_it_is_standalone() {
     );
 }
 
-#[test]
-fn upgrade_on_a_non_srx_router_skips_the_cluster_check() {
+/// A standalone MX, which answers the cluster RPC with a syntax error.
+fn mx_script() -> Script {
     let unsupported = common::fake_netconf::rpc_error("syntax error");
     let mut script = upgrade_script_with_cluster(NO_STANZA, &unsupported);
     script.insert(
@@ -353,13 +370,33 @@ fn upgrade_on_a_non_srx_router_skips_the_cluster_check() {
             "<software-information><host-name>fake</host-name><product-model>mx204</product-model></software-information>".to_string(),
         ),
     );
-    let (fake, resp, _staging, _dir) = preview_upgrade(script, None);
+    script
+}
+
+#[test]
+fn upgrade_on_a_non_srx_router_skips_the_cluster_check() {
+    let (fake, resp, _staging, _dir) = preview_upgrade(mx_script(), None);
     assert_unrefused_preview(&fake, &resp.to_string());
     assert!(
         !fake.saw("get-chassis-cluster-status"),
         "{:?}",
         fake.requests()
     );
+}
+
+#[test]
+fn stale_session_on_a_non_srx_router_reconnects() {
+    let (fake, mut server, _staging, _dir) = start_upgrade(mx_script(), Some("local"), &[]);
+    // Connecting sends three facts RPCs, so this is the upgrade's first.
+    fake.hang_up_on_rpc(4);
+    assert_unrefused_preview(&fake, &call_preview(&mut server).to_string());
+    let requests = fake.requests_by_connection();
+    assert!(
+        requests[3].1.contains("<get-software-information/>"),
+        "{requests:?}"
+    );
+    let last_connection = requests.iter().map(|(connection, _)| *connection).max();
+    assert_eq!(last_connection, Some(2), "{requests:?}");
 }
 
 #[test]
@@ -386,6 +423,33 @@ fn session_with_a_failed_plane_probe_is_not_reused() {
             .iter()
             .any(|(later, rpc)| later == connection && !rpc.contains("close-session"));
         assert!(!reused, "connection {connection} reused: {requests:?}");
+    }
+}
+
+#[test]
+fn unanswered_close_is_abandoned_at_the_cleanup_budget() {
+    let failing_probe = common::fake_netconf::rpc_error("probe refused");
+    let mut script = upgrade_script(&failing_probe);
+    script.insert(0, ("close-session", NO_REPLY.to_string()));
+    let (fake, mut server, _staging, _dir) =
+        start_upgrade(script, None, &["--cleanup-timeout-secs", "1"]);
+    call_preview(&mut server);
+    // The probe may open a new connection or reuse the upgrade's, so follow the close.
+    let closed = || {
+        fake.requests_by_connection()
+            .iter()
+            .any(|(connection, rpc)| {
+                rpc.contains("close-session") && fake.connection_closed(*connection)
+            })
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !closed() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "close never gave up: {:?}",
+            fake.requests_by_connection()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 

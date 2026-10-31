@@ -738,6 +738,8 @@ async fn call_cluster_status(
 ) -> Result<String, rustez::RustEzError> {
     // Facts are gathered on connect, so this reads the cache and sends no RPC.
     if never_chassis_clustered(&dev.facts().await?.personality) {
+        // Still a real RPC: `open_validated` catches a stale session on this one.
+        dev.rpc()?.call("get-software-information", &[]).await?;
         return Ok(NO_CHASSIS_CLUSTER_SUPPORT.to_string());
     }
     dev.rpc()?.call("get-chassis-cluster-status", &[]).await

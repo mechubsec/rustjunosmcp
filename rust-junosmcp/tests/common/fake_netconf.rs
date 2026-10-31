@@ -10,10 +10,14 @@
 use russh::keys::{Algorithm, PrivateKey, PublicKeyBase64, key::safe_rng, ssh_key::LineEnding};
 use russh::server::{Auth, Config, Handler, Msg, Server, Session};
 use russh::{Channel, ChannelId};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// `<ok/>` reply body.
 pub const OK: &str = "<ok/>";
+
+/// A script body the device never answers: the RPC is recorded and left hanging.
+pub const NO_REPLY: &str = "fake-netconf: no reply";
 
 /// An `<rpc-error>` reply body with the given message.
 pub fn rpc_error(message: &str) -> String {
@@ -32,6 +36,8 @@ pub struct FakeNetconf {
     pub port: u16,
     known_hosts_line: String,
     requests: Arc<Mutex<Vec<(usize, String)>>>,
+    hang_up_at: Arc<AtomicUsize>,
+    closed: Arc<Mutex<Vec<usize>>>,
 }
 
 impl FakeNetconf {
@@ -40,6 +46,8 @@ impl FakeNetconf {
         let host_key = PrivateKey::random(&mut safe_rng(), Algorithm::Ed25519).unwrap();
         let blob = host_key.public_key().public_key_base64();
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let hang_up_at = Arc::new(AtomicUsize::new(0));
+        let closed = Arc::new(Mutex::new(Vec::new()));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -47,6 +55,8 @@ impl FakeNetconf {
             script: Arc::new(script),
             requests: requests.clone(),
             connections: 0,
+            hang_up_at: hang_up_at.clone(),
+            closed: closed.clone(),
         };
         let config = Arc::new(Config {
             keys: vec![host_key],
@@ -67,6 +77,8 @@ impl FakeNetconf {
             port,
             known_hosts_line: format!("[127.0.0.1]:{port} ssh-ed25519 {blob}\n"),
             requests,
+            hang_up_at,
+            closed,
         }
     }
 
@@ -87,6 +99,19 @@ impl FakeNetconf {
         self.requests.lock().unwrap().clone()
     }
 
+    /// Drop the connection when the `count`th RPC overall arrives: a session
+    /// that died without the client noticing, until it sends something.
+    #[allow(dead_code)]
+    pub fn hang_up_on_rpc(&self, count: usize) {
+        self.hang_up_at.store(count, Ordering::SeqCst);
+    }
+
+    /// Whether this numbered connection has ended, seen from the device.
+    #[allow(dead_code)]
+    pub fn connection_closed(&self, connection: usize) -> bool {
+        self.closed.lock().unwrap().contains(&connection)
+    }
+
     /// True if any received RPC contains `needle`.
     pub fn saw(&self, needle: &str) -> bool {
         self.requests().iter().any(|r| r.contains(needle))
@@ -104,6 +129,8 @@ struct Fake {
     script: Arc<Script>,
     requests: Arc<Mutex<Vec<(usize, String)>>>,
     connections: usize,
+    hang_up_at: Arc<AtomicUsize>,
+    closed: Arc<Mutex<Vec<usize>>>,
 }
 
 impl Server for Fake {
@@ -125,6 +152,12 @@ struct Conn {
     buf: Vec<u8>,
     /// `None` until the client's hello arrives; then whether 1.1 chunking was negotiated.
     chunked: Option<bool>,
+}
+
+impl Drop for Conn {
+    fn drop(&mut self) {
+        self.fake.closed.lock().unwrap().push(self.connection);
+    }
 }
 
 const EOM: &str = "]]>]]>";
@@ -231,6 +264,13 @@ impl Handler for Conn {
                 continue;
             }
             let reply = self.reply_for(&message);
+            let received = self.fake.requests.lock().unwrap().len();
+            if received == self.fake.hang_up_at.load(Ordering::SeqCst) {
+                return Err(russh::Error::Disconnect);
+            }
+            if reply.contains(NO_REPLY) {
+                continue;
+            }
             let framed = if self.chunked == Some(true) {
                 chunk(&reply)
             } else {
