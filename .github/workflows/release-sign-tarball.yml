@@ -102,11 +102,11 @@ jobs:
     name: Build LXC tarball (Debian 13)
     needs: resolve-tag
     runs-on: ubuntu-24.04
-    # The binary is tied to the build host's glibc (see README "The container
+    # The binary is tied to the build host's glibc (see docs/REFERENCE.md, "The container
     # MUST be Debian 13"): whatever glibc the build container ships becomes
     # the floor a deployment host must meet. Building in a `debian:trixie`
     # container makes that floor Debian 13's glibc 2.41 -- the LXC install
-    # target documented in the README -- instead of whatever glibc a GitHub-
+    # target documented in docs/REFERENCE.md -- instead of whatever glibc a GitHub-
     # hosted `ubuntu-24.04` runner happens to ship, which is not a supported
     # install target and could drift independently of this repo.
     #
@@ -162,7 +162,7 @@ jobs:
         run: JMCP_PACKAGE_SKIP_BUILD=1 ./scripts/package-lxc.sh
 
       - name: Verify GLIBC ceiling
-        # Debian 13 ships glibc 2.41 (see README). A binary requiring
+        # Debian 13 ships glibc 2.41 (see docs/REFERENCE.md). A binary requiring
         # anything newer could not have been produced by this container, so
         # exceeding 2.41 here means the container image itself drifted --
         # fail closed rather than ship a tarball that cannot install on the

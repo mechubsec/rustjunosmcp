@@ -36,8 +36,9 @@ passes six arguments:
 So you append only what is left: transport, bind, allow-lists, and
 `--lab-mode` when you want it. Do not repeat the six above: passing one again
 stops startup with `the argument '--tokens-file <TOKENS_FILE>' cannot be used
-multiple times`. Put the token store where the image expects it by mounting it
-at `/var/lib/jmcp/tokens.json`. The audit HMAC key is generated in the state
+multiple times`. Keep the token store in the state directory, which is mounted at
+`/var/lib/jmcp`, so the server finds it at `/var/lib/jmcp/tokens.json`. The audit
+HMAC key is generated in the state
 directory on first start if it is missing.
 
 ## 1. Prepare host paths
@@ -45,7 +46,16 @@ directory on first start if it is missing.
 ```bash
 mkdir -p junos-docker/keys junos-docker/state/device-leases junos-docker/state/staging
 cd junos-docker
-touch state/known_hosts
+```
+
+The server checks host keys strictly, so an empty `state/known_hosts` rejects every
+device. Once `devices.json` exists, build the file from a checkout of this
+repository (it needs `jq` and `ssh-keyscan`) and check the fingerprints against
+a trusted source:
+
+```bash
+/path/to/rustjunosmcp/scripts/scan-known-hosts.sh \
+    --inventory ./devices.json --known-hosts ./state/known_hosts
 ```
 
 `devices.json` — note the **`auth.type`** field. It is required, and omitting it
@@ -82,7 +92,7 @@ cp /path/to/id_ed25519 keys/id_ed25519
 Mint a bearer token. The binary can do this on the host — no container needed:
 
 ```bash
-rust-junosmcp token add --tokens-file ./tokens.json \
+rust-junosmcp token add --tokens-file ./state/tokens.json \
     --name my-client --devices '*' --tools '*' -f ./devices.json
 ```
 
@@ -90,10 +100,14 @@ The secret prints **once** and is stored hashed. `--tools '*'` resolves to
 read-only tools only; write tools must be named explicitly, so a wildcard token
 calling `create_junos_change_set` gets `insufficient_scope`. That is deliberate.
 
+Keep `tokens.json` in the mounted `state` directory. **Do not bind-mount it as a
+single file.** Token commands replace the file, so a single-file mount keeps the
+old copy and a revoked token stays valid after a reload.
+
 Then lock the modes down:
 
 ```bash
-chmod 0600 devices.json keys/id_ed25519 tokens.json
+chmod 0600 devices.json keys/id_ed25519 state/tokens.json
 ```
 
 ## 2. Ownership: two options
@@ -104,7 +118,7 @@ directory.
 **For a real deployment**, give it ownership:
 
 ```bash
-sudo chown -R 65532:65532 devices.json keys tokens.json state
+sudo chown -R 65532:65532 devices.json keys state
 sudo chmod 0700 keys state state/device-leases
 ```
 
@@ -142,7 +156,6 @@ docker run -d --name junos-twoperson \
   -p 127.0.0.1:30030:30030 \
   -v "$PWD/devices.json:/etc/jmcp/devices.json:ro" \
   -v "$PWD/keys:/etc/jmcp/keys:ro" \
-  -v "$PWD/tokens.json:/var/lib/jmcp/tokens.json:ro" \
   -v "$PWD/state:/var/lib/jmcp" \
   "$image" \
   --transport streamable-http --host 0.0.0.0 --port 30030 \
@@ -173,7 +186,6 @@ docker run -d --name junos-labmode \
   -p 127.0.0.1:30040:30030 \
   -v "$PWD/devices.json:/etc/jmcp/devices.json:ro" \
   -v "$PWD/keys:/etc/jmcp/keys:ro" \
-  -v "$PWD/tokens.json:/var/lib/jmcp/tokens.json:ro" \
   -v "$PWD/state:/var/lib/jmcp" \
   "$image" \
   --transport streamable-http --host 0.0.0.0 --port 30030 \

@@ -457,7 +457,7 @@ pub enum CommandModeConfig {
     Allowlist,
     /// Fail-open: the pre-MEC-92/93 behaviour. A command is denied only if it
     /// matches a `deny` glob rule; everything else is allowed. Kept for
-    /// backward compatibility; see README.md for the migration path to
+    /// backward compatibility; see docs/REFERENCE.md for the migration path to
     /// `allowlist`.
     Blocklist,
 }

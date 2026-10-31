@@ -497,12 +497,12 @@ fi
 # is also redundant on its own terms: the operator has already used tar to
 # unpack the release archive that contains this script.
 #
-# `curl` is needed by the verification step in the README, and the Debian 13
+# `curl` is needed by the verification step in docs/HOW-TO-SETUP-LXC.md, and the Debian 13
 # standard template does not ship it (mecmcp#33). Installing an HTTP client on
 # every deploy is deliberate for the LXC path and deliberate *not* for the
 # container image: an LXC already has a shell and a package manager, so curl
 # changes nothing about its attack surface, whereas adding it to a distroless
-# image hands an attacker a pivot tool after an RCE. That said, README
+# image hands an attacker a pivot tool after an RCE. That said, the
 # verification is an operator convenience, not a server runtime requirement,
 # so the curl install is now behind an opt-in flag.
 if [[ "$INSTALL_ROOT" == "/" && "$SKIP_RUNTIME_DEPS" != "1" ]]; then
@@ -523,7 +523,7 @@ if [[ "$INSTALL_ROOT" == "/" && "$SKIP_RUNTIME_DEPS" != "1" ]]; then
             apt-get clean
         else
             echo ">> WARNING: missing ${missing[*]} and no apt-get to install them." >&2
-            echo ">> WARNING: install these if you need the README verification steps." >&2
+            echo ">> WARNING: install these if you need the verification steps in docs/HOW-TO-SETUP-LXC.md." >&2
         fi
     fi
 fi
