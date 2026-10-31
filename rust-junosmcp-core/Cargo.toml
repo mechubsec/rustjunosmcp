@@ -1,6 +1,6 @@
 [package]
 name        = "rust-junosmcp-core"
-version     = "2.6.0"
+version     = "2.6.1"
 edition.workspace     = true
 license.workspace     = true
 repository.workspace  = true
@@ -41,7 +41,7 @@ http         = { workspace = true }
 http-body    = { workspace = true }
 http-body-util = { workspace = true }
 rmcp         = { version = "3", features = ["server", "transport-streamable-http-server"] }
-rust-junosmcp-auth = { version = "2.6.0", path = "../rust-junosmcp-auth" }
+rust-junosmcp-auth = { version = "2.6.1", path = "../rust-junosmcp-auth" }
 mecmcp-auth = { workspace = true }
 mecmcp-transport = { workspace = true }
 mecmcp-policy = { workspace = true }
@@ -70,5 +70,5 @@ uuid         = "1"
 # proves `SshHostKeyMode::AcceptNew` refuses a changed host key end-to-end,
 # not just that it maps to the right enum variant. Same version rustnetconf
 # depends on; never shipped in the server binary.
-russh        = { version = "0.64.1", default-features = false, features = ["ring"] }
+russh        = { version = "0.65.0", default-features = false, features = ["ring"] }
 zeroize      = "1"

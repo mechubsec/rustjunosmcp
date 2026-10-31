@@ -176,7 +176,7 @@ impl Handler for Conn {
     async fn auth_publickey(
         &mut self,
         _: &str,
-        _: &russh::keys::ssh_key::PublicKey,
+        _: russh::server::VerifiedPublicKey<'_>,
     ) -> Result<Auth, Self::Error> {
         Ok(Auth::Accept)
     }
