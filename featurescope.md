@@ -4,7 +4,7 @@ What each release added, oldest first. This is a summary; [CHANGELOG.md](CHANGEL
 is the full record and is authoritative. Detail for the features named here is in
 [docs/REFERENCE.md](docs/REFERENCE.md).
 
-The current version is 2.6.1. The sections up to v0.12 below were written as the
+The current version is 2.7.0. The sections up to v0.12 below were written as the
 roadmap was delivered and are kept as they were, with two corrections: the
 v0.12 items shipped in 0.27.0 and 2.5.0, and cross-references now point into
 docs/REFERENCE.md. From v0.13.0 on, each section is one released tag.
@@ -178,7 +178,7 @@ docs/REFERENCE.md. From v0.13.0 on, each section is one released tag.
 
 Summarised from [CHANGELOG.md](CHANGELOG.md). Routine dependency
 and CI releases are omitted here; the CHANGELOG lists them. Tags that exist:
-v0.13.0 through v0.28.1, v1.0.0, and v2.0.0 through v2.6.1.
+v0.13.0 through v0.28.1, v1.0.0, and v2.0.0 through v2.7.0.
 
 ### v0.13.0 and v0.13.1 (2026-07-29)
 
@@ -338,3 +338,15 @@ v0.13.0 through v0.28.1, v1.0.0, and v2.0.0 through v2.6.1.
 
 Moves to russh 0.65 through rustnetconf 0.19.1, rustez 0.20.1 and mecmcp 0.32.0,
 for CVE-2026-116794 and the client-side fixes in that release. No feature change.
+
+### v2.7.0 (2026-10-31)
+
+- `upgrade_junos` works on a standalone SRX again. Its first check failed on the
+  bare text Junos returns for `show chassis cluster status`, so it could not
+  start. An unclear reply now refuses instead of counting as standalone, and MX,
+  EX, QFX, PTX, ACX, M and T devices skip the check.
+- `upgrade_junos` warns on a device managed by Mist or Security Director and
+  proceeds, for declared and detected planes. Config-write refusals are unchanged.
+- `upgrade_junos` audit records carry `config_authority` and
+  `config_authority_detected`, on success and on failure.
+- Background session closes stop at `--cleanup-timeout-secs`.
