@@ -219,6 +219,10 @@ pub(crate) async fn run(
 
     let deadline = Instant::now() + timeout;
     let mut dev = run_step(deadline, timeout, ct, dm.open(router)).await?;
+    // A reload between the read above and `open` may have retargeted the name.
+    let declared = dm
+        .entry_for_session(router, dev.endpoint())?
+        .config_authority;
 
     // Only an undeclared device is probed. This runs before the session is
     // tainted so a refusal hands an untouched session back to the pool.

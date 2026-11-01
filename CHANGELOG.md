@@ -14,6 +14,13 @@ All notable user-facing changes are recorded here. Format loosely follows
   longer treated as writable. A release that cannot parse the pipe falls back to
   the plain command, which cannot see groups; any other probe failure still
   refuses the write.
+- A `reload_devices` or SIGHUP that pointed a device name at a different
+  address could still be acted on with the old device's session: a change set
+  already holding the candidate lock was judged by the new device's settings
+  (plane authority, rollback guards), and a session in use during the reload
+  went back into the pool and was reused for the new device. Sessions now
+  remember the address they connected to; a write caught by a retarget is
+  refused, with any candidate released, and a stale pooled session is discarded.
 
 ## [2.7.0] - 2026-10-31
 
