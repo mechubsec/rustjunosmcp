@@ -332,7 +332,6 @@ pub(super) fn tool_error_code(error: &rust_junosmcp_core::JmcpError) -> ToolErro
         | E::InventoryReadonly
         | E::OverrideRequiresChangeSet { .. }
         | E::OverrideRequiresHumanApproval { .. }
-        | E::PlaneOwnedDevice { .. }
         | E::PlaneManagedConfig { .. }
         | E::PlaneOwnedRollbackDepthRefused { .. }
         | E::PlaneOwnedRollbackOneRefused { .. }
@@ -1783,9 +1782,9 @@ impl JmcpHandler {
             args,
             self.dm.clone(),
             self.upgrade_cfg.clone(),
-            self.allow_plane_owned_writes,
             ct,
             correlation_id,
+            &mut audit,
         )
         .await;
         match &result {

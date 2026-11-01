@@ -335,62 +335,6 @@ pub fn validate_output_caps(
     Ok(())
 }
 
-/// Check if a destructive operation should be allowed on a plane-owned device.
-///
-/// Returns `Ok(Some(warning))` if the operation is allowed with a warning,
-/// `Ok(None)` if allowed without warning (local/unknown authority),
-/// or `Err(JmcpError::PlaneOwnedDevice)` if refused.
-///
-/// # Arguments
-///
-/// * `tool_name` - Name of the tool for error messages (e.g., "load_and_commit_config")
-/// * `device_name` - Name of the device being operated on
-/// * `authority` - Configuration authority from the device entry
-/// * `allow_plane_owned_writes` - Whether to allow (with warning) or refuse
-///
-/// # Errors
-///
-/// Returns [`JmcpError::PlaneOwnedDevice`] when the device is plane-owned and
-/// `allow_plane_owned_writes` is false.
-pub fn check_plane_owned_operation(
-    tool_name: &str,
-    device_name: &str,
-    authority: &crate::config_authority::JunosAuthority,
-    allow_plane_owned_writes: bool,
-) -> Result<Option<String>, JmcpError> {
-    use crate::config_authority::JunosAuthority;
-
-    match authority {
-        JunosAuthority::Local | JunosAuthority::Unknown => {
-            // Local or unknown authority: allow without warning
-            Ok(None)
-        }
-        _ => {
-            // Plane-owned device
-            let authority_str = serde_json::to_string(authority)
-                .ok()
-                .map(|s| s.trim_matches('"').to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-
-            if allow_plane_owned_writes {
-                // Allow with warning
-                Ok(Some(format!(
-                    "WARNING: this device is owned by {}. Changes may be overwritten \
-                     at the next push from the owning management plane.",
-                    authority_str
-                )))
-            } else {
-                // Refuse
-                Err(JmcpError::PlaneOwnedDevice {
-                    tool: tool_name.to_string(),
-                    device: device_name.to_string(),
-                    authority: authority_str,
-                })
-            }
-        }
-    }
-}
-
 /// Refuse a rollback to depth `depth` on a plane-owned device.
 ///
 /// Defense-in-depth guard for the `RollbackRef::Archive` path only (MEC-1879,

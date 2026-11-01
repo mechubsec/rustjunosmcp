@@ -210,14 +210,15 @@ pub struct Cli {
     #[arg(long = "lab-mode")]
     pub lab_mode: bool,
 
-    /// Allow destructive operations on devices owned by a management plane.
+    /// Allow config writes on devices owned by a management plane.
     ///
-    /// By default, this server refuses `load_and_commit_config`, `rollback_config`,
-    /// and `upgrade_junos` on devices whose `config_authority` is not `local` or
-    /// `unknown`, because writes to plane-owned devices are overwritten at the next
-    /// push from the owning management plane (Mist, Security Director).
+    /// By default, this server refuses config writes (`load_and_commit_config`,
+    /// `rollback_config` and the other candidate-config tools) that a management
+    /// plane owns, because they are overwritten at the next push from the owning
+    /// plane (Mist, Security Director). `upgrade_junos` is not affected: it warns
+    /// that the device is managed and proceeds.
     ///
-    /// Set this flag to permit those operations with a warning instead of refusal.
+    /// Set this flag to permit those config writes with a warning instead of refusal.
     /// The warning and config_authority are recorded in audit events.
     ///
     /// **Break-glass only**: enabling this defeats the durability check that #292

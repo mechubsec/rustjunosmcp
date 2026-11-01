@@ -28,17 +28,15 @@ pub fn parse_junos_version(output: &str) -> Option<String> {
     None
 }
 
-/// Detect whether `show chassis cluster status` reports an active
-/// chassis cluster. The standalone vSRX response is either an error
-/// line (`error: Chassis cluster is not enabled.`) or absent entirely;
-/// the active-cluster response contains a `Cluster ID:` line and per-
-/// node rows (`node0`, `node1`). We treat the presence of `Cluster ID:`
-/// as the canonical signal.
-pub fn detect_cluster_active(output: &str) -> bool {
-    output.lines().any(|line| {
-        let t = line.trim();
-        t.starts_with("Cluster ID:")
-    })
+/// Detect a chassis cluster from a `get-chassis-cluster-status` reply.
+/// A clustered SRX answers with `<chassis-cluster-status>`; a standalone one
+/// with an `<xnm:error>` saying `Chassis cluster is not enabled`. Upgrades are
+/// refused on a cluster, so anything else counts as one: an upgrade only
+/// proceeds on that exact message, which is what real devices send. A looser
+/// match would accept unrelated errors such as `error: HA is not enabled`.
+pub fn detect_cluster_active(reply_xml: &str) -> bool {
+    reply_xml.contains("<chassis-cluster-status")
+        || !reply_xml.contains("Chassis cluster is not enabled")
 }
 
 /// Detect an active commit-confirmed rollback window from
@@ -94,25 +92,19 @@ fn parse_rollback_duration(token: &str) -> Option<u64> {
 mod cluster_tests {
     use super::*;
 
-    const STANDALONE_NOT_CONFIGURED: &str = "\
-error: Chassis cluster is not enabled.";
+    /// Captured from a standalone vSRX (24.4R1.9 and 26.2R1.7 agree).
+    const STANDALONE: &str = "<xnm:error xmlns=\"http://xml.juniper.net/xnm/1.1/xnm\" \
+        xmlns:xnm=\"http://xml.juniper.net/xnm/1.1/xnm\">\n<parse/>\n\
+        <source-daemon>jsrpd</source-daemon>\n\
+        <message>error: Chassis cluster is not enabled</message>\n</xnm:error>";
 
-    const ACTIVE_CLUSTER: &str = "\
-Monitor Failure codes:
-    CS  Cold Sync monitoring        FL  Fabric Connection monitoring
-    GR  GRES monitoring             HW  Hardware monitoring
-
-Cluster ID: 1
-Node                  Priority Status         Preempt Manual   Monitor-failures
-
-Redundancy group: 0 , Failover count: 1
-node0                 100      primary        no      no       None
-node1                 1        secondary      no      no       None
-";
+    const ACTIVE_CLUSTER: &str = "<chassis-cluster-status>\n<cluster-id>1</cluster-id>\n\
+        <redundancy-group>\n<redundancy-group-id>0</redundancy-group-id>\n\
+        </redundancy-group>\n</chassis-cluster-status>";
 
     #[test]
-    fn not_configured_is_standalone() {
-        assert!(!detect_cluster_active(STANDALONE_NOT_CONFIGURED));
+    fn not_enabled_error_is_standalone() {
+        assert!(!detect_cluster_active(STANDALONE));
     }
 
     #[test]
@@ -121,15 +113,52 @@ node1                 1        secondary      no      no       None
     }
 
     #[test]
-    fn empty_output_is_standalone() {
-        assert!(!detect_cluster_active(""));
+    fn cluster_reply_wins_over_not_enabled_text_in_a_field() {
+        let reply = "<chassis-cluster-status><monitor-failures>Chassis cluster is not enabled\
+            </monitor-failures></chassis-cluster-status>";
+        assert!(detect_cluster_active(reply));
     }
 
     #[test]
-    fn unrelated_output_is_standalone() {
-        assert!(!detect_cluster_active(
-            "Hostname: vsrx-test18\nJunos: 25.4R1.12"
-        ));
+    fn only_known_non_srx_platforms_skip_the_cluster_check() {
+        use rustez::Personality as Platform;
+        for platform in [
+            Platform::Mx,
+            Platform::Vmx,
+            Platform::Ex,
+            Platform::Qfx,
+            Platform::Ptx,
+            Platform::Acx,
+            Platform::M,
+            Platform::T,
+        ] {
+            assert!(never_chassis_clustered(&platform), "{platform:?}");
+        }
+        for platform in [
+            Platform::Srx,
+            Platform::Vsrx,
+            Platform::Csrx,
+            Platform::Nfx,
+            Platform::Olive,
+            Platform::Jdm,
+            Platform::Unknown("future-model".into()),
+        ] {
+            assert!(!never_chassis_clustered(&platform), "{platform:?}");
+        }
+        assert!(!detect_cluster_active(NO_CHASSIS_CLUSTER_SUPPORT));
+    }
+
+    #[test]
+    fn anything_unproven_is_treated_as_a_cluster() {
+        for reply in [
+            "",
+            "<xnm:error><message>error: permission denied</message></xnm:error>",
+            "<xnm:error><message>error: HA is not enabled</message></xnm:error>",
+            "<xnm:error><message>user is not configured for this RPC</message></xnm:error>",
+            "Hostname: vsrx-test18\nJunos: 25.4R1.12",
+        ] {
+            assert!(detect_cluster_active(reply), "{reply:?}");
+        }
     }
 }
 
@@ -363,7 +392,7 @@ pub const ESTIMATED_OUTAGE_SECONDS: u64 = 420;
 /// boundary between "talk to the world" and "decide what to do".
 #[derive(Debug, Clone)]
 pub struct PreflightFacts {
-    /// Output of `show chassis cluster status`.
+    /// Reply to `get-chassis-cluster-status`.
     pub cluster_status_output: String,
     /// Output of `show version | match Junos:`.
     pub version_output: String,
@@ -484,7 +513,9 @@ mod preflight_tests {
 
     fn baseline_facts() -> PreflightFacts {
         PreflightFacts {
-            cluster_status_output: "error: Chassis cluster is not enabled.".into(),
+            cluster_status_output:
+                "<xnm:error><message>error: Chassis cluster is not enabled</message></xnm:error>"
+                    .into(),
             version_output: "Junos: 24.4R1.9".into(),
             commit_output: "0   2026-05-14 ...\n".into(),
             storage_output: "\
@@ -501,7 +532,8 @@ Filesystem  Size Used Avail Capacity Mounted on
     #[test]
     fn refuses_cluster_device() {
         let mut f = baseline_facts();
-        f.cluster_status_output = "Cluster ID: 1\nnode0 primary".into();
+        f.cluster_status_output =
+            "<chassis-cluster-status><cluster-id>1</cluster-id></chassis-cluster-status>".into();
         let d = evaluate_preflight(&f, &args());
         assert!(matches!(d, PreflightDecision::ClusterUnsupported));
     }
@@ -564,6 +596,23 @@ Filesystem  Size Used Avail Capacity Mounted on
     }
 
     #[test]
+    fn confirmation_carries_plane_warning_only_when_given() {
+        let decision = || evaluate_preflight(&baseline_facts(), &args());
+        for (warning, expected) in [(Some("managed by Mist"), true), (None, false)] {
+            let Err(JmcpError::ConfirmationRequired { payload }) =
+                finish_preflight(decision(), &args(), warning)
+            else {
+                panic!("expected ConfirmationRequired");
+            };
+            assert_eq!(payload.get("config_authority_warning").is_some(), expected);
+            if let Some(text) = warning {
+                assert_eq!(payload["config_authority_warning"], text);
+            }
+            assert!(payload["warning"].as_str().unwrap().contains("REBOOT"));
+        }
+    }
+
+    #[test]
     fn returns_proceed_when_confirm_true_and_everything_ok() {
         let f = baseline_facts();
         let mut a = args();
@@ -583,7 +632,8 @@ Filesystem  Size Used Avail Capacity Mounted on
     #[test]
     fn check_order_cluster_before_already_at_target() {
         let mut f = baseline_facts();
-        f.cluster_status_output = "Cluster ID: 1\n".into();
+        f.cluster_status_output =
+            "<chassis-cluster-status><cluster-id>1</cluster-id></chassis-cluster-status>".into();
         f.version_output = "Junos: 25.4R1.12".into();
         let d = evaluate_preflight(&f, &args());
         assert!(matches!(d, PreflightDecision::ClusterUnsupported));
@@ -591,14 +641,17 @@ Filesystem  Size Used Avail Capacity Mounted on
 }
 
 use crate::cancel::{select_cancel, select_cancel_raw};
+use crate::config_authority::JunosAuthority;
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
 use crate::inventory::AuthConfig;
+use crate::plane_guard::{AuthoritySource, resolve_authority, upgrade_warning};
 use crate::tools::UpgradeJunosArgs;
 use crate::tools::transfer_file::{
     TransferConfig, sha256_file_cancellable, validate_source_basename,
 };
 use crate::{DeviceLeaseManager, DeviceLock};
+use mecmcp_audit::AuditScope;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -627,14 +680,8 @@ async fn gather_facts(
     // so it's where a stale pooled session surfaces (#83). open_validated
     // reconnects fresh and retries once if so; later probes reuse the now-
     // proven-live session.
-    let (mut dev, cluster_status_output) = open_validated(
-        router,
-        dm.clone(),
-        "show chassis cluster status",
-        "cluster_probe",
-        ct,
-    )
-    .await?;
+    let (mut dev, cluster_status_output) =
+        open_validated(router, dm.clone(), "cluster_probe", ct).await?;
 
     let version_output =
         run_probe(&mut dev, "show version | match Junos:", "version_probe", ct).await?;
@@ -672,7 +719,34 @@ async fn run_probe(
         })
 }
 
-/// Open a (possibly pooled) session and run `command` as the session's
+/// Stands in for the cluster reply on a platform with no chassis clusters;
+/// `detect_cluster_active` reads it as standalone.
+const NO_CHASSIS_CLUSTER_SUPPORT: &str = "Chassis cluster is not enabled on this platform";
+
+/// Platforms known never to form a chassis cluster, an SRX feature, so there is
+/// no cluster RPC to ask them. Anything else, including an unrecognised model,
+/// is asked and has to prove it is standalone.
+fn never_chassis_clustered(personality: &rustez::Personality) -> bool {
+    use rustez::Personality::{Acx, Ex, M, Mx, Ptx, Qfx, T, Vmx};
+    matches!(personality, Acx | Ex | M | Mx | Ptx | Qfx | T | Vmx)
+}
+
+/// The cluster probe, as a structured RPC. Not the CLI `show chassis cluster
+/// status`: on a standalone SRX, Junos answers that with bare text directly
+/// inside `<rpc-reply>`, which the NETCONF parser rejects as malformed.
+async fn call_cluster_status(
+    dev: &mut crate::device_manager::PooledDevice,
+) -> Result<String, rustez::RustEzError> {
+    // Facts are gathered on connect, so this reads the cache and sends no RPC.
+    if never_chassis_clustered(&dev.facts().await?.personality) {
+        // Still a real RPC: `open_validated` catches a stale session on this one.
+        dev.rpc()?.call("get-software-information", &[]).await?;
+        return Ok(NO_CHASSIS_CLUSTER_SUPPORT.to_string());
+    }
+    dev.rpc()?.call("get-chassis-cluster-status", &[]).await
+}
+
+/// Open a (possibly pooled) session and run the cluster probe as the session's
 /// first RPC. If that RPC fails with a stale-session error (issue #83) —
 /// e.g. the pooled session died across a reboot or a transient blip left a
 /// dead entry in the pool — drop it, reconnect with a guaranteed-fresh
@@ -686,12 +760,11 @@ async fn run_probe(
 async fn open_validated(
     router: &str,
     dm: Arc<DeviceManager>,
-    command: &str,
     phase: &'static str,
     ct: &CancellationToken,
 ) -> Result<(crate::device_manager::PooledDevice, String), JmcpError> {
     let mut dev = select_cancel(ct, dm.open(router)).await?;
-    match select_cancel_raw::<_, _, JmcpError>(ct, dev.cli(command)).await? {
+    match select_cancel_raw::<_, _, JmcpError>(ct, call_cluster_status(&mut dev)).await? {
         Ok(out) => Ok((dev, out)),
         Err(e) if error_indicates_stale_session(&e.to_string()) => {
             tracing::warn!(
@@ -702,7 +775,12 @@ async fn open_validated(
             );
             drop(dev);
             let mut fresh = select_cancel(ct, dm.open_fresh(router)).await?;
-            let out = run_probe(&mut fresh, command, phase, ct).await?;
+            let out = select_cancel_raw::<_, _, JmcpError>(ct, call_cluster_status(&mut fresh))
+                .await?
+                .map_err(|e| JmcpError::DeviceProbeFailed {
+                    phase: phase.into(),
+                    message: e.to_string(),
+                })?;
             Ok((fresh, out))
         }
         Err(e) => Err(JmcpError::DeviceProbeFailed {
@@ -712,31 +790,86 @@ async fn open_validated(
     }
 }
 
+/// How long `resolve_plane` may probe. Pooled RPCs allow an hour, so a hung read
+/// would otherwise spend the upgrade's own timeout on a warning.
+const PLANE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The device's authority, or `None` if a probe could not establish it. A plane
+/// never stops an upgrade, so the only error returned here is cancellation.
+async fn resolve_plane(
+    router: &str,
+    declared: &JunosAuthority,
+    dm: Arc<DeviceManager>,
+    ct: &CancellationToken,
+) -> Result<Option<(JunosAuthority, AuthoritySource)>, JmcpError> {
+    if *declared != JunosAuthority::Unknown {
+        return Ok(Some((declared.clone(), AuthoritySource::Declared)));
+    }
+    let probe = async {
+        let mut dev = dm.open(router).await?;
+        // A probe that fails or is dropped mid-RPC leaves the session in an unknown state.
+        dev.prevent_reuse();
+        let resolved = resolve_authority(&mut dev, declared).await?;
+        dev.allow_reuse();
+        Ok::<_, JmcpError>(resolved)
+    };
+    bounded_plane_probe(router, probe, PLANE_PROBE_TIMEOUT, ct).await
+}
+
+/// Run a plane probe within `limit`. A failed or slow probe costs only the
+/// warning and never stops the upgrade.
+async fn bounded_plane_probe(
+    router: &str,
+    probe: impl Future<Output = Result<(JunosAuthority, AuthoritySource), JmcpError>>,
+    limit: std::time::Duration,
+    ct: &CancellationToken,
+) -> Result<Option<(JunosAuthority, AuthoritySource)>, JmcpError> {
+    let bounded_probe = tokio::time::timeout(limit, probe);
+    let failure = match select_cancel_raw::<_, _, JmcpError>(ct, bounded_probe).await? {
+        Ok(Ok(resolved)) => return Ok(Some(resolved)),
+        Ok(Err(error)) => error.to_string(),
+        Err(_) => format!("no reply within {limit:?}"),
+    };
+    tracing::warn!(
+        router = %router,
+        error = %failure,
+        "upgrade_junos.plane_probe_failed: upgrading without a plane warning"
+    );
+    Ok(None)
+}
+
+/// Record the plane as soon as it is known. The warning only reaches the client,
+/// and a failed or timed-out upgrade has no result to read it from.
+fn audit_plane(audit: &mut AuditScope, authority: &JunosAuthority, source: AuthoritySource) {
+    audit.meta("config_authority", authority.as_str());
+    audit.meta(
+        "config_authority_detected",
+        source == AuthoritySource::Detected,
+    );
+}
+
 /// Tool handler for `upgrade_junos`: standalone Junos software upgrade with install + reboot + verification.
 pub async fn handle(
     args: UpgradeJunosArgs,
     dm: Arc<DeviceManager>,
     cfg: UpgradeConfig,
-    allow_plane_owned_writes: bool,
     ct: CancellationToken,
     correlation_id: String,
+    audit: &mut AuditScope,
 ) -> Result<serde_json::Value, JmcpError> {
     let timeout = std::time::Duration::from_secs(args.timeout);
-    tokio::time::timeout(
-        timeout,
-        run(args, dm, cfg, allow_plane_owned_writes, ct, correlation_id),
-    )
-    .await
-    .map_err(|_| JmcpError::UpgradeOuterTimeout(timeout))?
+    tokio::time::timeout(timeout, run(args, dm, cfg, ct, correlation_id, audit))
+        .await
+        .map_err(|_| JmcpError::UpgradeOuterTimeout(timeout))?
 }
 
 async fn run(
     args: UpgradeJunosArgs,
     dm: Arc<DeviceManager>,
     cfg: UpgradeConfig,
-    allow_plane_owned_writes: bool,
     ct: CancellationToken,
     correlation_id: String,
+    audit: &mut AuditScope,
 ) -> Result<serde_json::Value, JmcpError> {
     // Issue #44 Half A: short-circuit if already cancelled before entry.
     if ct.is_cancelled() {
@@ -745,11 +878,14 @@ async fn run(
     // 1. Basename validation (same allowlist as transfer_file).
     validate_source_basename(&args.source_path)?;
 
-    // 2. Inventory lookup + auth + config_authority checks up front. We snapshot what we
+    // 2. Inventory lookup + auth check up front. We snapshot what we
     //    need so the borrow drops before any await on dm.open().
-    let authority_warning = {
+    let declared_authority = {
         let inv = dm.inventory();
         let entry = inv.get(&args.device)?;
+        if entry.config_authority != JunosAuthority::Unknown {
+            audit_plane(audit, &entry.config_authority, AuthoritySource::Declared);
+        }
         match &entry.auth {
             AuthConfig::Password { .. } | AuthConfig::PasswordEnv { .. } => {
                 return Err(JmcpError::UnsupportedAuth(args.device.clone()));
@@ -757,13 +893,8 @@ async fn run(
             AuthConfig::SshKey { .. } => {}
         }
 
-        // Check config_authority: refuse if plane-owned and not explicitly allowed.
-        crate::helpers::check_plane_owned_operation(
-            "upgrade_junos",
-            &args.device,
-            &entry.config_authority,
-            allow_plane_owned_writes,
-        )?
+        // A managing plane never refuses an upgrade; it only adds a warning (see `resolve_plane`).
+        entry.config_authority.clone()
     };
 
     // 3. Staged file checks (mirror transfer_file pre-flight).
@@ -813,7 +944,14 @@ async fn run(
     )
     .await?;
 
-    // 7. Pure preflight decision.
+    // 7. Warn if a plane manages the device, then take the pure preflight decision.
+    let plane = resolve_plane(&args.device, &declared_authority, dm.clone(), &ct).await?;
+    let authority_warning = plane.and_then(|(authority, source)| {
+        if source == AuthoritySource::Detected {
+            audit_plane(audit, &authority, source);
+        }
+        upgrade_warning(&args.device, &authority, source)
+    });
     dispatch_preflight(
         &args,
         &facts,
@@ -839,7 +977,7 @@ async fn dispatch_preflight(
 ) -> Result<serde_json::Value, JmcpError> {
     let initial_decision = evaluate_preflight(facts, args);
     if !matches!(initial_decision, PreflightDecision::Proceed) {
-        return finish_preflight(initial_decision, args);
+        return finish_preflight(initial_decision, args, authority_warning.as_deref());
     }
 
     let _lease = cfg
@@ -861,7 +999,7 @@ async fn dispatch_preflight(
     .await?;
     let locked_decision = evaluate_preflight(&locked_facts, args);
     if !matches!(locked_decision, PreflightDecision::Proceed) {
-        return finish_preflight(locked_decision, args);
+        return finish_preflight(locked_decision, args, authority_warning.as_deref());
     }
 
     run_destructive(
@@ -879,6 +1017,7 @@ async fn dispatch_preflight(
 fn finish_preflight(
     decision: PreflightDecision,
     args: &UpgradeJunosArgs,
+    authority_warning: Option<&str>,
 ) -> Result<serde_json::Value, JmcpError> {
     match decision {
         PreflightDecision::ClusterUnsupported => Err(JmcpError::UpgradeClusterUnsupported {
@@ -915,7 +1054,11 @@ fn finish_preflight(
                 ),
             })
         }
-        PreflightDecision::ConfirmationRequired(payload) => {
+        PreflightDecision::ConfirmationRequired(mut payload) => {
+            // Not "warning": that key already holds the destructive reboot text.
+            if let Some(warning) = authority_warning {
+                payload["config_authority_warning"] = warning.into();
+            }
             Err(JmcpError::ConfirmationRequired { payload })
         }
         PreflightDecision::Proceed => unreachable!("Proceed is handled while holding the lease"),
@@ -1262,9 +1405,9 @@ mod handle_early_exit_tests {
             args("r1", "../etc/passwd"),
             dm,
             cfg(dir.path()),
-            false,
             CancellationToken::new(),
             "test-rejects-bad-basename".into(),
+            &mut test_audit(),
         )
         .await;
         assert!(matches!(r, Err(crate::error::JmcpError::BadSourcePath(_))));
@@ -1283,9 +1426,9 @@ mod handle_early_exit_tests {
             args("nope", "img.tgz"),
             dm,
             cfg(dir.path()),
-            false,
             CancellationToken::new(),
             "test-unknown-router".into(),
+            &mut test_audit(),
         )
         .await;
         assert!(matches!(r, Err(crate::error::JmcpError::UnknownRouter(_))));
@@ -1304,9 +1447,9 @@ mod handle_early_exit_tests {
             args("r1", "img.tgz"),
             dm,
             cfg(dir.path()),
-            false,
             CancellationToken::new(),
             "test-password-auth".into(),
+            &mut test_audit(),
         )
         .await;
         assert!(matches!(r, Err(crate::error::JmcpError::UnsupportedAuth(ref s)) if s == "r1"));
@@ -1324,12 +1467,96 @@ mod handle_early_exit_tests {
             args("r1", "missing.tgz"),
             dm,
             cfg(dir.path()),
-            false,
             CancellationToken::new(),
             "test-missing-file".into(),
+            &mut test_audit(),
         )
         .await;
         assert!(matches!(r, Err(crate::error::JmcpError::BadSourcePath(_))));
+    }
+
+    /// A declared managing plane no longer stops `upgrade_junos`: the call gets
+    /// past the inventory check and fails on the missing staged file instead.
+    #[tokio::test]
+    async fn declared_plane_does_not_refuse_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = build_inv(
+            r#"{"r1":{"ip":"127.0.0.1","username":"u","config_authority":"mist",
+                     "auth":{"type":"ssh_key","private_key_path":"__KEY__"}}}"#,
+        );
+        let dm = Arc::new(DeviceManager::new(env.inv.clone()));
+        let r = handle(
+            args("r1", "missing.tgz"),
+            dm,
+            cfg(dir.path()),
+            CancellationToken::new(),
+            "test-declared-plane".into(),
+            &mut test_audit(),
+        )
+        .await;
+        assert!(matches!(r, Err(crate::error::JmcpError::BadSourcePath(_))));
+    }
+
+    fn test_audit() -> AuditScope {
+        AuditScope::stdio("upgrade_junos", "upgrade", vec![])
+    }
+
+    /// No router here is in the inventory, so opening a session always fails.
+    fn dm_with_no_devices() -> Arc<DeviceManager> {
+        Arc::new(DeviceManager::new(build_inv("{}").inv.clone()))
+    }
+
+    #[tokio::test]
+    async fn declared_plane_resolves_without_opening_a_session() {
+        let plane = resolve_plane(
+            "not-in-inventory",
+            &JunosAuthority::Mist,
+            dm_with_no_devices(),
+            &CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(
+            plane.unwrap(),
+            Some((JunosAuthority::Mist, AuthoritySource::Declared))
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_open_costs_only_the_plane_warning() {
+        let plane = resolve_plane(
+            "not-in-inventory",
+            &JunosAuthority::Unknown,
+            dm_with_no_devices(),
+            &CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(plane.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn hung_plane_probe_costs_only_the_plane_warning() {
+        let plane = bounded_plane_probe(
+            "r1",
+            std::future::pending(),
+            std::time::Duration::from_millis(10),
+            &CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(plane.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_plane_probe_still_cancels_the_upgrade() {
+        let ct = CancellationToken::new();
+        ct.cancel();
+        let plane = bounded_plane_probe(
+            "r1",
+            std::future::pending(),
+            std::time::Duration::from_secs(60),
+            &ct,
+        )
+        .await;
+        assert!(matches!(plane, Err(JmcpError::Cancelled)));
     }
 
     /// T5 (issue #44 Half A): a token cancelled before `upgrade_junos::handle`
@@ -1354,9 +1581,9 @@ mod handle_early_exit_tests {
                 args("r1", "missing.tgz"),
                 dm,
                 cfg(dir.path()),
-                false,
                 ct,
                 "test-pre-cancelled".into(),
+                &mut test_audit(),
             ),
         )
         .await

@@ -176,10 +176,7 @@ impl SessionPool {
             .collect();
         for key in expired {
             if let Some(entry) = slots.remove(&key) {
-                tokio::spawn(async move {
-                    let mut d = entry.device;
-                    let _ = d.close().await;
-                });
+                tokio::spawn(close_within_budget(entry.device));
             }
         }
 
@@ -200,17 +197,11 @@ impl SessionPool {
         let entry = slots.remove(name)?;
         let now = Instant::now();
         if now.duration_since(entry.returned_at) > self.idle_timeout {
-            tokio::spawn(async move {
-                let mut d = entry.device;
-                let _ = d.close().await;
-            });
+            tokio::spawn(close_within_budget(entry.device));
             return None;
         }
         if !entry.device.session_alive() {
-            tokio::spawn(async move {
-                let mut d = entry.device;
-                let _ = d.close().await;
-            });
+            tokio::spawn(close_within_budget(entry.device));
             return None;
         }
         Some(entry.device)
@@ -218,8 +209,7 @@ impl SessionPool {
 
     async fn return_session(&self, name: String, dev: Device) {
         if !dev.session_alive() {
-            let mut d = dev;
-            let _ = d.close().await;
+            close_within_budget(dev).await;
             return;
         }
         let mut slots = self.slots.lock().await;
@@ -230,10 +220,7 @@ impl SessionPool {
                 returned_at: Instant::now(),
             },
         ) {
-            tokio::spawn(async move {
-                let mut d = old.device;
-                let _ = d.close().await;
-            });
+            tokio::spawn(close_within_budget(old.device));
         }
     }
 
@@ -241,10 +228,7 @@ impl SessionPool {
         let mut slots = self.slots.lock().await;
         for name in names {
             if let Some(entry) = slots.remove(name) {
-                tokio::spawn(async move {
-                    let mut d = entry.device;
-                    let _ = d.close().await;
-                });
+                tokio::spawn(close_within_budget(entry.device));
             }
         }
     }
@@ -329,6 +313,15 @@ pub(crate) enum LockRelease {
 ///   candidate dirty, and those must close under the lock rather than pool.
 fn should_pool(reuse_allowed: bool, config_db_open: bool, touched_candidate: bool) -> bool {
     reuse_allowed && !config_db_open && !touched_candidate
+}
+
+/// Close a session the pool has given up on. `Device::close` has no deadline of
+/// its own, so a peer that keeps SSH open and never answers would otherwise hold
+/// this task and its socket forever. Timing out drops the close, and the client
+/// it owns, which tears down the transport.
+async fn close_within_budget(mut dev: Device) {
+    let budget = crate::tools::candidate_transaction::cleanup_timeout();
+    let _ = tokio::time::timeout(budget, dev.close()).await;
 }
 
 impl PooledDevice {
@@ -472,10 +465,7 @@ impl Drop for PooledDevice {
                          bounded by the lock that made it safe (#316)"
                     );
                 }
-                handle.spawn(async move {
-                    let mut d = dev;
-                    let _ = d.close().await;
-                });
+                handle.spawn(close_within_budget(dev));
             } else {
                 // Return to pool for reuse.
                 let pool = self.pool.clone();

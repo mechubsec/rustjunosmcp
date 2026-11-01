@@ -721,12 +721,12 @@ its next push. Set `config_authority` on the device in `devices.json`:
 **Detection.** A declared value always wins, and declaring `local` turns
 detection off. Only an `unknown` device is probed, with one extra read per write
 (`show configuration system services outbound-ssh`), and only by the
-configuration tools listed below: `upgrade_junos` uses the declared value alone,
-so declare plane-managed devices you upgrade through this server. An `outbound-ssh` client
-named `mist` means Mist; a `sdcloud.juniperclouds.net` address means Security
-Director Cloud; a client named `EMS-...` means Security Director On-Prem. Mist
-takes precedence over Security Director. Anything else stays `unknown` and is
-writable. A probe that fails refuses the write (fail closed).
+configuration tools listed below. `upgrade_junos` also probes once, only to
+word its warning. An `outbound-ssh` client named `mist` means Mist; a
+`sdcloud.juniperclouds.net` address means Security Director Cloud; a client
+named `EMS-...` means Security Director On-Prem. Mist takes precedence over
+Security Director. Anything else stays `unknown` and is writable. A probe that
+fails refuses the write (fail closed).
 
 **What is refused.**
 
@@ -752,11 +752,16 @@ writable. A probe that fails refuses the write (fail closed).
 - Tools covered: `load_and_commit_config`, `render_and_apply_j2_template`,
   `commit_check_config`, `rollback_config`, `discard_candidate` and
   `apply_junos_change_set`. A refused change set ends `failed`.
+- `upgrade_junos` is never refused for a managing plane, because neither Mist nor
+  Security Director objects to a Junos version change. It warns and proceeds, for a
+  declared or detected plane. The warning is `config_authority_warning` in the
+  `confirm=false` preview and `warning` in the final result. If the probe fails
+  or takes more than 30 seconds, the upgrade still runs, without the warning.
 - `discard_candidate` cannot lock (Junos refuses to lock a modified candidate),
   so on a plane-owned device it cannot check the pending edits atomically: it
   refuses whenever the candidate has pending changes, and names the CLI
   `rollback 0` instead. An empty candidate is a no-op.
-- `upgrade_junos`, `rollback_config` with `commit=true`, and the change-set
+- `rollback_config` with `commit=true` and the change-set
   rollback guards (depth, commit-0 attribution, mixed actions, lab mode) keep
   their existing plane-owned refusals. A detected plane also gets the depth and
   commit-0 attribution guards when the change set is applied; the mixed-action
@@ -765,8 +770,7 @@ writable. A probe that fails refuses the write (fail closed).
 
 **`--allow-plane-owned-writes`** turns the plane-guard refusals above (the Mist
 refusal, the protected-diff refusal and the discard refusal) into warnings. It
-also lets `upgrade_junos` run on a device declared plane-owned (with a warning),
-as it did before. It does not lift the rollback guards in the previous
+does not affect `upgrade_junos`. It does not lift the rollback guards in the previous
 paragraph, which stay unconditional. The warnings:
 
 - Mist: `WARNING: '<device>' is managed by Juniper Mist (...). This change will be overwritten and erased by the next Mist push.`
