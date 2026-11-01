@@ -11,8 +11,9 @@ All notable user-facing changes are recorded here. Format loosely follows
 - The plane guard now sees a Mist or Security Director client kept in an
   `apply-groups` group. It reads `system services outbound-ssh` with
   `| display inheritance`, so a managed device with its client in a group is no
-  longer treated as writable. A release that rejects the pipe falls back to the
-  plain command, which cannot see groups.
+  longer treated as writable. A release that cannot parse the pipe falls back to
+  the plain command, which cannot see groups; any other probe failure still
+  refuses the write.
 
 ## [2.7.0] - 2026-10-31
 

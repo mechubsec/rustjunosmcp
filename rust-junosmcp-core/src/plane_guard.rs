@@ -22,6 +22,10 @@ pub(crate) const OUTBOUND_SSH_COMMAND: &str =
 /// Fallback for a release that rejects the pipe; it omits inherited config.
 const OUTBOUND_SSH_PLAIN_COMMAND: &str = "show configuration system services outbound-ssh";
 
+/// How Junos answers a pipe it cannot parse (`syntax error, expecting <command>`
+/// on 24.2 and 26.2).
+const PIPE_REJECTED: &str = "syntax error";
+
 /// Top-level hierarchies Security Director owns on a managed SRX.
 const PROTECTED: [&str; 3] = ["security", "applications", "schedulers"];
 
@@ -56,8 +60,8 @@ impl AuthoritySource {
 
 /// Effective managing plane for a device: a declared authority wins; only an
 /// `Unknown` device is probed with [`OUTBOUND_SSH_COMMAND`], or the plain
-/// command if the device rejects it. A failed probe is an error (fail closed);
-/// the caller decides what that does to the session.
+/// command if the device cannot parse it. Any other failed probe is an error
+/// (fail closed); the caller decides what that does to the session.
 pub(crate) async fn resolve_authority(
     dev: &mut rustez::Device,
     declared: &JunosAuthority,
@@ -67,8 +71,9 @@ pub(crate) async fn resolve_authority(
     }
     let stanza = match dev.cli(OUTBOUND_SSH_COMMAND).await {
         Ok(stanza) => stanza,
-        // A dead session says nothing about the pipe, so it stays a failed probe.
-        Err(error) if crate::device_manager::error_is_transient(&error.to_string()) => {
+        // A denied read or dead session must not fall back: the plain command could
+        // then miss a client kept in a group and let the write through.
+        Err(error) if !error.to_string().contains(PIPE_REJECTED) => {
             return Err(JmcpError::from(error));
         }
         Err(error) => {

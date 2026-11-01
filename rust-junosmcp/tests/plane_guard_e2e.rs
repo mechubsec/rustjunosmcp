@@ -149,8 +149,11 @@ fn client_kept_in_a_group_is_detected_through_display_inheritance() {
 
 #[test]
 fn release_rejecting_the_pipe_falls_back_to_the_plain_command() {
-    let script =
-        script_with_inheritance_reply(rpc_error("syntax error"), MIST_STANZA, INTERFACE_DIFF);
+    let script = script_with_inheritance_reply(
+        rpc_error("syntax error, expecting &lt;command&gt;"),
+        MIST_STANZA,
+        INTERFACE_DIFF,
+    );
     let (fake, mut server, _dir) = start(script, None, &[]);
     let resp = load_and_commit(&mut server);
     assert_refused_as_mist(&fake, &resp);
@@ -160,6 +163,22 @@ fn release_rejecting_the_pipe_falls_back_to_the_plain_command() {
         .filter(|request| request.contains("outbound-ssh") && !request.contains("inheritance"));
     assert_eq!(plain.count(), 1, "{requests:?}");
     assert!(fake.saw("| display inheritance"), "{requests:?}");
+}
+
+#[test]
+fn denied_pipe_refuses_the_write_without_falling_back() {
+    let script =
+        script_with_inheritance_reply(rpc_error("permission denied"), NO_STANZA, INTERFACE_DIFF);
+    let (fake, mut server, _dir) = start(script, None, &[]);
+    let resp = load_and_commit(&mut server);
+    assert_eq!(resp.get("isError"), Some(&json!(true)), "{resp}");
+    let requests = fake.requests();
+    let plain = requests
+        .iter()
+        .filter(|request| request.contains("outbound-ssh") && !request.contains("inheritance"));
+    assert_eq!(plain.count(), 0, "{requests:?}");
+    assert!(!fake.saw("<nc:lock>"), "{requests:?}");
+    assert!(!fake.saw("<nc:commit"), "{requests:?}");
 }
 
 #[test]
@@ -600,10 +619,9 @@ fn session_with_a_failed_plane_probe_is_not_reused() {
         if !rpc.contains("outbound-ssh") {
             continue;
         }
-        // The plain-command fallback is a second probe on the same session.
-        let reused = requests[index + 1..].iter().any(|(later, rpc)| {
-            later == connection && !rpc.contains("close-session") && !rpc.contains("outbound-ssh")
-        });
+        let reused = requests[index + 1..]
+            .iter()
+            .any(|(later, rpc)| later == connection && !rpc.contains("close-session"));
         assert!(!reused, "connection {connection} reused: {requests:?}");
     }
 }
