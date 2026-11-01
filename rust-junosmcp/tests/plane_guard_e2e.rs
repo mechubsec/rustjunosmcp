@@ -12,6 +12,7 @@ use common::{
     spawn_with_auth_args, write_restricted,
 };
 use serde_json::{Value, json};
+use std::time::{Duration, Instant};
 
 const MIST_STANZA: &str =
     "<output>\nclient mist {\n    device-conn-retry 5;\n    services netconf;\n}</output>";
@@ -265,7 +266,7 @@ fn start_upgrade(
     (fake, server, staging, dir)
 }
 
-fn call_preview(server: &mut StdioChild) -> Value {
+fn call_upgrade(server: &mut StdioChild, confirm: bool) -> Value {
     call_tool(
         server,
         "upgrade_junos",
@@ -273,9 +274,43 @@ fn call_preview(server: &mut StdioChild) -> Value {
             "device": "fake",
             "source_path": "junos-25.4R1.12.tgz",
             "target_version": "25.4R1.12",
-            "confirm": false,
+            "confirm": confirm,
         }),
     )
+}
+
+fn call_preview(server: &mut StdioChild) -> Value {
+    call_upgrade(server, false)
+}
+
+/// Run one upgrade call and return the fields of its audit record.
+fn audited_upgrade(script: Script, authority: Option<&str>, confirm: bool) -> Value {
+    let audit_dir = tempfile::tempdir().unwrap();
+    let audit_log = audit_dir.path().join("audit.jsonl");
+    let (_fake, mut server, _staging, _dir) = start_upgrade(
+        script,
+        authority,
+        &[
+            "--audit-log-file",
+            audit_log.to_str().unwrap(),
+            "--audit-format",
+            "json",
+        ],
+    );
+    call_upgrade(&mut server, confirm);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let contents = std::fs::read_to_string(&audit_log).unwrap_or_default();
+        let record = contents
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|record| record["fields"]["tool"] == "upgrade_junos");
+        if let Some(record) = record {
+            return record["fields"].clone();
+        }
+        assert!(Instant::now() < deadline, "no audit record: {contents}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// The upgrade reached its confirmation prompt and changed nothing.
@@ -407,6 +442,79 @@ fn upgrade_proceeds_without_warning_when_the_plane_probe_fails() {
     assert_unrefused_preview(&fake, &text);
     assert!(fake.saw("outbound-ssh"), "{:?}", fake.requests());
     assert!(!text.contains("config_authority_warning"), "{text}");
+}
+
+#[test]
+fn audit_records_a_declared_plane() {
+    let fields = audited_upgrade(upgrade_script(NO_STANZA), Some("mist"), false);
+    let metadata = fields["metadata"].as_str().unwrap();
+    assert!(metadata.contains("config_authority=mist "), "{fields}");
+    assert_eq!(metadata.matches("config_authority=").count(), 1, "{fields}");
+    assert!(
+        metadata.ends_with("config_authority_detected=false"),
+        "{fields}"
+    );
+}
+
+#[test]
+fn audit_records_a_detected_plane() {
+    let fields = audited_upgrade(upgrade_script(MIST_STANZA), None, false);
+    let metadata = fields["metadata"].as_str().unwrap();
+    assert!(metadata.contains("config_authority=mist "), "{fields}");
+    assert!(
+        metadata.ends_with("config_authority_detected=true"),
+        "{fields}"
+    );
+}
+
+#[test]
+fn audit_records_an_unmanaged_device_as_probed() {
+    let fields = audited_upgrade(upgrade_script(NO_STANZA), None, false);
+    let metadata = fields["metadata"].as_str().unwrap();
+    assert!(metadata.contains("config_authority=unknown "), "{fields}");
+    assert!(
+        metadata.ends_with("config_authority_detected=true"),
+        "{fields}"
+    );
+}
+
+/// An upgrade that fails after preflight never produces a result to read the
+/// plane from, and this is the record an operator needs most.
+#[test]
+fn audit_keeps_the_plane_when_a_confirmed_upgrade_fails() {
+    let fields = audited_upgrade(upgrade_script(NO_STANZA), Some("mist"), true);
+    assert_eq!(fields["result"], "error", "{fields}");
+    let metadata = fields["metadata"].as_str().unwrap();
+    assert!(metadata.contains("config_authority=mist "), "{fields}");
+}
+
+#[test]
+fn audit_records_a_declared_plane_when_preflight_fails() {
+    let refused = common::fake_netconf::rpc_error("permission denied");
+    let script = upgrade_script_with_cluster(NO_STANZA, &refused);
+    let fields = audited_upgrade(script, Some("mist"), false);
+    assert_eq!(fields["result"], "error", "{fields}");
+    let metadata = fields["metadata"].as_str().unwrap();
+    assert!(metadata.contains("config_authority=mist "), "{fields}");
+}
+
+/// Detection comes after preflight, so a failed preflight has nothing to record.
+#[test]
+fn audit_omits_an_undeclared_plane_when_preflight_fails() {
+    let refused = common::fake_netconf::rpc_error("permission denied");
+    let script = upgrade_script_with_cluster(MIST_STANZA, &refused);
+    let fields = audited_upgrade(script, None, false);
+    assert_eq!(fields["result"], "error", "{fields}");
+    let metadata = fields["metadata"].as_str().unwrap();
+    assert!(!metadata.contains("config_authority"), "{fields}");
+}
+
+#[test]
+fn audit_omits_the_plane_when_the_probe_fails() {
+    let failing_probe = common::fake_netconf::rpc_error("probe refused");
+    let fields = audited_upgrade(upgrade_script(&failing_probe), None, false);
+    let metadata = fields["metadata"].as_str().unwrap();
+    assert!(!metadata.contains("config_authority"), "{fields}");
 }
 
 #[test]

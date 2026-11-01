@@ -1784,6 +1784,7 @@ impl JmcpHandler {
             self.upgrade_cfg.clone(),
             ct,
             correlation_id,
+            &mut audit,
         )
         .await;
         match &result {

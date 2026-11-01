@@ -651,6 +651,7 @@ use crate::tools::transfer_file::{
     TransferConfig, sha256_file_cancellable, validate_source_basename,
 };
 use crate::{DeviceLeaseManager, DeviceLock};
+use mecmcp_audit::AuditScope;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -789,20 +790,20 @@ async fn open_validated(
     }
 }
 
-/// How long `plane_warning` may probe. Pooled RPCs allow an hour, so a hung read
+/// How long `resolve_plane` may probe. Pooled RPCs allow an hour, so a hung read
 /// would otherwise spend the upgrade's own timeout on a warning.
 const PLANE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Warning naming the managing plane, if any. A plane never stops an upgrade,
-/// so the only error returned here is cancellation.
-async fn plane_warning(
+/// The device's authority, or `None` if a probe could not establish it. A plane
+/// never stops an upgrade, so the only error returned here is cancellation.
+async fn resolve_plane(
     router: &str,
     declared: &JunosAuthority,
     dm: Arc<DeviceManager>,
     ct: &CancellationToken,
-) -> Result<Option<String>, JmcpError> {
+) -> Result<Option<(JunosAuthority, AuthoritySource)>, JmcpError> {
     if *declared != JunosAuthority::Unknown {
-        return Ok(upgrade_warning(router, declared, AuthoritySource::Declared));
+        return Ok(Some((declared.clone(), AuthoritySource::Declared)));
     }
     let probe = async {
         let mut dev = dm.open(router).await?;
@@ -812,20 +813,20 @@ async fn plane_warning(
         dev.allow_reuse();
         Ok::<_, JmcpError>(resolved)
     };
-    bounded_plane_warning(router, probe, PLANE_PROBE_TIMEOUT, ct).await
+    bounded_plane_probe(router, probe, PLANE_PROBE_TIMEOUT, ct).await
 }
 
 /// Run a plane probe within `limit`. A failed or slow probe costs only the
 /// warning and never stops the upgrade.
-async fn bounded_plane_warning(
+async fn bounded_plane_probe(
     router: &str,
     probe: impl Future<Output = Result<(JunosAuthority, AuthoritySource), JmcpError>>,
     limit: std::time::Duration,
     ct: &CancellationToken,
-) -> Result<Option<String>, JmcpError> {
+) -> Result<Option<(JunosAuthority, AuthoritySource)>, JmcpError> {
     let bounded_probe = tokio::time::timeout(limit, probe);
     let failure = match select_cancel_raw::<_, _, JmcpError>(ct, bounded_probe).await? {
-        Ok(Ok((authority, source))) => return Ok(upgrade_warning(router, &authority, source)),
+        Ok(Ok(resolved)) => return Ok(Some(resolved)),
         Ok(Err(error)) => error.to_string(),
         Err(_) => format!("no reply within {limit:?}"),
     };
@@ -837,6 +838,16 @@ async fn bounded_plane_warning(
     Ok(None)
 }
 
+/// Record the plane as soon as it is known. The warning only reaches the client,
+/// and a failed or timed-out upgrade has no result to read it from.
+fn audit_plane(audit: &mut AuditScope, authority: &JunosAuthority, source: AuthoritySource) {
+    audit.meta("config_authority", authority.as_str());
+    audit.meta(
+        "config_authority_detected",
+        source == AuthoritySource::Detected,
+    );
+}
+
 /// Tool handler for `upgrade_junos`: standalone Junos software upgrade with install + reboot + verification.
 pub async fn handle(
     args: UpgradeJunosArgs,
@@ -844,9 +855,10 @@ pub async fn handle(
     cfg: UpgradeConfig,
     ct: CancellationToken,
     correlation_id: String,
+    audit: &mut AuditScope,
 ) -> Result<serde_json::Value, JmcpError> {
     let timeout = std::time::Duration::from_secs(args.timeout);
-    tokio::time::timeout(timeout, run(args, dm, cfg, ct, correlation_id))
+    tokio::time::timeout(timeout, run(args, dm, cfg, ct, correlation_id, audit))
         .await
         .map_err(|_| JmcpError::UpgradeOuterTimeout(timeout))?
 }
@@ -857,6 +869,7 @@ async fn run(
     cfg: UpgradeConfig,
     ct: CancellationToken,
     correlation_id: String,
+    audit: &mut AuditScope,
 ) -> Result<serde_json::Value, JmcpError> {
     // Issue #44 Half A: short-circuit if already cancelled before entry.
     if ct.is_cancelled() {
@@ -870,6 +883,9 @@ async fn run(
     let declared_authority = {
         let inv = dm.inventory();
         let entry = inv.get(&args.device)?;
+        if entry.config_authority != JunosAuthority::Unknown {
+            audit_plane(audit, &entry.config_authority, AuthoritySource::Declared);
+        }
         match &entry.auth {
             AuthConfig::Password { .. } | AuthConfig::PasswordEnv { .. } => {
                 return Err(JmcpError::UnsupportedAuth(args.device.clone()));
@@ -877,7 +893,7 @@ async fn run(
             AuthConfig::SshKey { .. } => {}
         }
 
-        // A managing plane never refuses an upgrade; it only adds a warning (see `plane_warning`).
+        // A managing plane never refuses an upgrade; it only adds a warning (see `resolve_plane`).
         entry.config_authority.clone()
     };
 
@@ -929,8 +945,13 @@ async fn run(
     .await?;
 
     // 7. Warn if a plane manages the device, then take the pure preflight decision.
-    let authority_warning =
-        plane_warning(&args.device, &declared_authority, dm.clone(), &ct).await?;
+    let plane = resolve_plane(&args.device, &declared_authority, dm.clone(), &ct).await?;
+    let authority_warning = plane.and_then(|(authority, source)| {
+        if source == AuthoritySource::Detected {
+            audit_plane(audit, &authority, source);
+        }
+        upgrade_warning(&args.device, &authority, source)
+    });
     dispatch_preflight(
         &args,
         &facts,
@@ -1386,6 +1407,7 @@ mod handle_early_exit_tests {
             cfg(dir.path()),
             CancellationToken::new(),
             "test-rejects-bad-basename".into(),
+            &mut test_audit(),
         )
         .await;
         assert!(matches!(r, Err(crate::error::JmcpError::BadSourcePath(_))));
@@ -1406,6 +1428,7 @@ mod handle_early_exit_tests {
             cfg(dir.path()),
             CancellationToken::new(),
             "test-unknown-router".into(),
+            &mut test_audit(),
         )
         .await;
         assert!(matches!(r, Err(crate::error::JmcpError::UnknownRouter(_))));
@@ -1426,6 +1449,7 @@ mod handle_early_exit_tests {
             cfg(dir.path()),
             CancellationToken::new(),
             "test-password-auth".into(),
+            &mut test_audit(),
         )
         .await;
         assert!(matches!(r, Err(crate::error::JmcpError::UnsupportedAuth(ref s)) if s == "r1"));
@@ -1445,6 +1469,7 @@ mod handle_early_exit_tests {
             cfg(dir.path()),
             CancellationToken::new(),
             "test-missing-file".into(),
+            &mut test_audit(),
         )
         .await;
         assert!(matches!(r, Err(crate::error::JmcpError::BadSourcePath(_))));
@@ -1466,9 +1491,14 @@ mod handle_early_exit_tests {
             cfg(dir.path()),
             CancellationToken::new(),
             "test-declared-plane".into(),
+            &mut test_audit(),
         )
         .await;
         assert!(matches!(r, Err(crate::error::JmcpError::BadSourcePath(_))));
+    }
+
+    fn test_audit() -> AuditScope {
+        AuditScope::stdio("upgrade_junos", "upgrade", vec![])
     }
 
     /// No router here is in the inventory, so opening a session always fails.
@@ -1477,55 +1507,56 @@ mod handle_early_exit_tests {
     }
 
     #[tokio::test]
-    async fn declared_plane_warns_without_opening_a_session() {
-        let warning = plane_warning(
+    async fn declared_plane_resolves_without_opening_a_session() {
+        let plane = resolve_plane(
             "not-in-inventory",
             &JunosAuthority::Mist,
             dm_with_no_devices(),
             &CancellationToken::new(),
         )
-        .await
-        .unwrap()
-        .unwrap();
-        assert!(warning.contains("declared in devices.json"), "{warning}");
+        .await;
+        assert_eq!(
+            plane.unwrap(),
+            Some((JunosAuthority::Mist, AuthoritySource::Declared))
+        );
     }
 
     #[tokio::test]
     async fn failed_open_costs_only_the_plane_warning() {
-        let warning = plane_warning(
+        let plane = resolve_plane(
             "not-in-inventory",
             &JunosAuthority::Unknown,
             dm_with_no_devices(),
             &CancellationToken::new(),
         )
         .await;
-        assert_eq!(warning.unwrap(), None);
+        assert_eq!(plane.unwrap(), None);
     }
 
     #[tokio::test]
     async fn hung_plane_probe_costs_only_the_plane_warning() {
-        let warning = bounded_plane_warning(
+        let plane = bounded_plane_probe(
             "r1",
             std::future::pending(),
             std::time::Duration::from_millis(10),
             &CancellationToken::new(),
         )
         .await;
-        assert_eq!(warning.unwrap(), None);
+        assert_eq!(plane.unwrap(), None);
     }
 
     #[tokio::test]
     async fn cancelling_a_plane_probe_still_cancels_the_upgrade() {
         let ct = CancellationToken::new();
         ct.cancel();
-        let warning = bounded_plane_warning(
+        let plane = bounded_plane_probe(
             "r1",
             std::future::pending(),
             std::time::Duration::from_secs(60),
             &ct,
         )
         .await;
-        assert!(matches!(warning, Err(JmcpError::Cancelled)));
+        assert!(matches!(plane, Err(JmcpError::Cancelled)));
     }
 
     /// T5 (issue #44 Half A): a token cancelled before `upgrade_junos::handle`
@@ -1552,6 +1583,7 @@ mod handle_early_exit_tests {
                 cfg(dir.path()),
                 ct,
                 "test-pre-cancelled".into(),
+                &mut test_audit(),
             ),
         )
         .await

@@ -11,6 +11,9 @@ All notable user-facing changes are recorded here. Format loosely follows
 - `upgrade_junos` no longer refuses a device declared as managed by Mist or
   Security Director, and it now warns for detected planes too.
   `--allow-plane-owned-writes` no longer affects upgrades.
+- `upgrade_junos` audit records now carry `config_authority` and
+  `config_authority_detected`, on success and on failure, so an upgrade of a
+  managed device is visible in the audit trail.
 
 ### Fixed
 

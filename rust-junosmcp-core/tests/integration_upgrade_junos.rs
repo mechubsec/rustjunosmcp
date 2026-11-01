@@ -68,6 +68,7 @@ async fn live_upgrade_round_trip() {
         cfg,
         CancellationToken::new(),
         "live-upgrade-round-trip".into(),
+        &mut mecmcp_audit::AuditScope::stdio("upgrade_junos", "upgrade", vec![]),
     )
     .await;
     eprintln!("upgrade result: {result:?}");

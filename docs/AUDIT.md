@@ -113,6 +113,23 @@ Server-level (not from an error enum):
 |------|---------|
 | `serialize` | Response serialization failed (internal error). |
 
+### `upgrade_junos` metadata
+
+Besides `basename` and `target_version`, the record names the device's
+management plane, whether the upgrade then succeeds or fails. A managing plane
+never stops an upgrade, so these fields are how an operator finds upgrades of
+managed devices.
+
+| Key | Meaning |
+|-----|---------|
+| `config_authority` | `local`, `mist`, `security-director-cloud`, `security-director-onprem`, or `unknown` when the device was probed and no plane was found. |
+| `config_authority_detected` | `true` if read from `system services outbound-ssh`, `false` if declared in `devices.json`. |
+
+A declared plane is recorded as soon as the device is found in the inventory. A
+detected plane is recorded after the read-only preflight checks. Neither key
+appears if a device with no declared plane fails those checks or the probe, so
+such a device may still be managed.
+
 ## JSON Event Format
 
 When `--audit-format json` is set, events are emitted as line-delimited JSON. The `tracing` crate's JSON formatter nests field data under a `"fields"` object:
