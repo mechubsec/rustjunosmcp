@@ -14,8 +14,13 @@ use crate::config_authority::JunosAuthority;
 use crate::error::JmcpError;
 use std::collections::HashSet;
 
-/// Read-only command whose output identifies the managing plane.
-pub(crate) const OUTBOUND_SSH_COMMAND: &str = "show configuration system services outbound-ssh";
+/// Read-only command whose output identifies the managing plane. `display
+/// inheritance` includes a client kept in an `apply-groups` group.
+pub(crate) const OUTBOUND_SSH_COMMAND: &str =
+    "show configuration system services outbound-ssh | display inheritance";
+
+/// Fallback for a release that rejects the pipe; it omits inherited config.
+const OUTBOUND_SSH_PLAIN_COMMAND: &str = "show configuration system services outbound-ssh";
 
 /// Top-level hierarchies Security Director owns on a managed SRX.
 const PROTECTED: [&str; 3] = ["security", "applications", "schedulers"];
@@ -50,8 +55,9 @@ impl AuthoritySource {
 }
 
 /// Effective managing plane for a device: a declared authority wins; only an
-/// `Unknown` device is probed with [`OUTBOUND_SSH_COMMAND`]. A failed probe is
-/// an error (fail closed); the caller decides what that does to the session.
+/// `Unknown` device is probed with [`OUTBOUND_SSH_COMMAND`], or the plain
+/// command if the device rejects it. A failed probe is an error (fail closed);
+/// the caller decides what that does to the session.
 pub(crate) async fn resolve_authority(
     dev: &mut rustez::Device,
     declared: &JunosAuthority,
@@ -59,19 +65,31 @@ pub(crate) async fn resolve_authority(
     if *declared != JunosAuthority::Unknown {
         return Ok((declared.clone(), AuthoritySource::Declared));
     }
-    let stanza = dev
-        .cli(OUTBOUND_SSH_COMMAND)
-        .await
-        .map_err(JmcpError::from)?;
+    let stanza = match dev.cli(OUTBOUND_SSH_COMMAND).await {
+        Ok(stanza) => stanza,
+        // A dead session says nothing about the pipe, so it stays a failed probe.
+        Err(error) if crate::device_manager::error_is_transient(&error.to_string()) => {
+            return Err(JmcpError::from(error));
+        }
+        Err(error) => {
+            // shortcut: the plain command cannot see a client kept in a group, drop
+            // this branch once no supported release rejects the pipe.
+            tracing::warn!(error = %error, "outbound-ssh probe rejected; retrying without display inheritance");
+            dev.cli(OUTBOUND_SSH_PLAIN_COMMAND)
+                .await
+                .map_err(JmcpError::from)?
+        }
+    };
     Ok((detect_authority(&stanza), AuthoritySource::Detected))
 }
 
 /// Infer the managing plane from `show configuration system services outbound-ssh`.
 ///
-/// Accepts curly-brace text (relative to `outbound-ssh`) or `| display set`
-/// lines. Inactive or protected clients still count: refusing too much is the
-/// safe error. Precedence is Mist, then Security Director Cloud, then
-/// Security Director On-Prem (`EMS-` client), else `Unknown`.
+/// Accepts curly-brace text (relative to `outbound-ssh`), `| display set`
+/// lines, or `| display inheritance` output (`##` annotations are skipped).
+/// Inactive or protected clients still count: refusing too much is the safe
+/// error. Precedence is Mist, then Security Director Cloud, then Security
+/// Director On-Prem (`EMS-` client), else `Unknown`.
 pub fn detect_authority(outbound_ssh: &str) -> JunosAuthority {
     let mut has_mist = false;
     let mut has_sd_cloud = false;
@@ -514,6 +532,29 @@ mod tests {
     fn annotations_do_not_detect() {
         let text = "/* old client mist, retired sdcloud.juniperclouds.net endpoint */\n\
                     client noc-collector {\n    10.0.0.9 port 2200;\n}\n";
+        assert_eq!(detect_authority(text), JunosAuthority::Unknown);
+    }
+
+    #[test]
+    fn inherited_mist_client_is_detected() {
+        let text = "##\n## 'mist' was inherited from group 'mgmt'\n##\nclient mist {\n    \
+                    ##\n    ## 'device-id' was inherited from group 'mgmt'\n    ##\n    \
+                    device-id x;\n    services netconf;\n}\n";
+        assert_eq!(detect_authority(text), JunosAuthority::Mist);
+    }
+
+    #[test]
+    fn inherited_sd_cloud_client_is_detected() {
+        let text = format!("##\n## 'EMS-srx' was inherited from group 'mgmt'\n##\n{SDC_STANZA}");
+        assert_eq!(
+            detect_authority(&text),
+            JunosAuthority::SecurityDirectorCloud
+        );
+    }
+
+    #[test]
+    fn lone_inheritance_annotation_does_not_detect() {
+        let text = "## 'client mist' was inherited from group 'old'\n";
         assert_eq!(detect_authority(text), JunosAuthority::Unknown);
     }
 
