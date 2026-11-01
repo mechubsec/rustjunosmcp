@@ -6,7 +6,7 @@
 //! still happen.
 mod common;
 
-use common::fake_netconf::{FakeNetconf, NO_REPLY, OK, Script, client_key_pem};
+use common::fake_netconf::{FakeNetconf, NO_REPLY, OK, Script, client_key_pem, rpc_error};
 use common::{
     Server, StdioChild, call_tool, http_post, initialize, spawn_stdio_server_with_protocol,
     spawn_with_auth_args, write_restricted,
@@ -117,6 +117,98 @@ fn detected_mist_is_refused_before_any_lock_or_load() {
     assert!(fake.saw("outbound-ssh"), "{:?}", fake.requests());
     assert!(!fake.saw("<nc:lock>"), "{:?}", fake.requests());
     assert!(!fake.saw("<nc:load-configuration"), "{:?}", fake.requests());
+}
+
+/// `script` with `inheritance_reply` answering the piped probe ahead of the
+/// plain `outbound-ssh` entry, which keeps answering the plain command.
+fn script_with_inheritance_reply(
+    inheritance_reply: String,
+    plain_reply: &str,
+    diff: &str,
+) -> Script {
+    let mut entries = script(plain_reply, diff);
+    entries.insert(0, ("display inheritance", inheritance_reply));
+    entries
+}
+
+fn assert_refused_as_mist(fake: &FakeNetconf, resp: &Value) {
+    assert_eq!(resp.get("isError"), Some(&json!(true)), "{resp}");
+    assert!(resp.to_string().contains("plan_mist_change"), "{resp}");
+    assert!(!fake.saw("<nc:lock>"), "{:?}", fake.requests());
+    assert!(!fake.saw("<nc:commit"), "{:?}", fake.requests());
+}
+
+#[test]
+fn client_kept_in_a_group_is_detected_through_display_inheritance() {
+    let script = script_with_inheritance_reply(MIST_STANZA.to_string(), NO_STANZA, INTERFACE_DIFF);
+    let (fake, mut server, _dir) = start(script, None, &[]);
+    let resp = load_and_commit(&mut server);
+    assert_refused_as_mist(&fake, &resp);
+    assert!(fake.saw("| display inheritance"), "{:?}", fake.requests());
+}
+
+#[test]
+fn release_rejecting_the_pipe_falls_back_to_the_plain_command() {
+    let script = script_with_inheritance_reply(
+        rpc_error("syntax error, expecting &lt;command&gt;"),
+        MIST_STANZA,
+        INTERFACE_DIFF,
+    );
+    let (fake, mut server, _dir) = start(script, None, &[]);
+    let resp = load_and_commit(&mut server);
+    assert_refused_as_mist(&fake, &resp);
+    let requests = fake.requests();
+    let plain = requests
+        .iter()
+        .filter(|request| request.contains("outbound-ssh") && !request.contains("inheritance"));
+    assert_eq!(plain.count(), 1, "{requests:?}");
+    assert!(fake.saw("| display inheritance"), "{requests:?}");
+}
+
+#[test]
+fn denied_pipe_refuses_the_write_without_falling_back() {
+    let script =
+        script_with_inheritance_reply(rpc_error("permission denied"), NO_STANZA, INTERFACE_DIFF);
+    let (fake, mut server, _dir) = start(script, None, &[]);
+    let resp = load_and_commit(&mut server);
+    assert_eq!(resp.get("isError"), Some(&json!(true)), "{resp}");
+    let requests = fake.requests();
+    let plain = requests
+        .iter()
+        .filter(|request| request.contains("outbound-ssh") && !request.contains("inheritance"));
+    assert_eq!(plain.count(), 0, "{requests:?}");
+    assert!(!fake.saw("<nc:lock>"), "{requests:?}");
+    assert!(!fake.saw("<nc:commit"), "{requests:?}");
+}
+
+#[test]
+fn both_probes_failing_refuses_the_write_and_commits_nothing() {
+    let script = script_with_inheritance_reply(
+        rpc_error("syntax error"),
+        &rpc_error("probe refused"),
+        INTERFACE_DIFF,
+    );
+    let (fake, mut server, _dir) = start(script, None, &[]);
+    let resp = load_and_commit(&mut server);
+    assert_eq!(resp.get("isError"), Some(&json!(true)), "{resp}");
+    assert!(!fake.saw("<nc:lock>"), "{:?}", fake.requests());
+    assert!(!fake.saw("<nc:commit"), "{:?}", fake.requests());
+}
+
+#[test]
+fn dead_session_does_not_fall_back_to_the_plain_command() {
+    let (fake, mut server, _dir) = start(script(MIST_STANZA, INTERFACE_DIFF), None, &[]);
+    // Connecting sends three facts RPCs, so the piped probe is the fourth.
+    fake.hang_up_on_rpc(4);
+    let resp = load_and_commit(&mut server);
+    assert_eq!(resp.get("isError"), Some(&json!(true)), "{resp}");
+    let requests = fake.requests();
+    let plain = requests
+        .iter()
+        .filter(|request| request.contains("outbound-ssh") && !request.contains("inheritance"));
+    assert_eq!(plain.count(), 0, "{requests:?}");
+    assert!(fake.saw("| display inheritance"), "{requests:?}");
+    assert!(!fake.saw("<nc:commit"), "{requests:?}");
 }
 
 #[test]

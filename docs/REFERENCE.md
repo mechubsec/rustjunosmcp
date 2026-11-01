@@ -720,13 +720,15 @@ its next push. Set `config_authority` on the device in `devices.json`:
 
 **Detection.** A declared value always wins, and declaring `local` turns
 detection off. Only an `unknown` device is probed, with one extra read per write
-(`show configuration system services outbound-ssh`), and only by the
-configuration tools listed below. `upgrade_junos` also probes once, only to
-word its warning. An `outbound-ssh` client named `mist` means Mist; a
+(`show configuration system services outbound-ssh | display inheritance`), and
+only by the configuration tools listed below. `upgrade_junos` also probes once,
+only to word its warning. An `outbound-ssh` client named `mist` means Mist; a
 `sdcloud.juniperclouds.net` address means Security Director Cloud; a client
 named `EMS-...` means Security Director On-Prem. Mist takes precedence over
-Security Director. Anything else stays `unknown` and is writable. A probe that
-fails refuses the write (fail closed).
+Security Director, and a client kept in an `apply-groups` group counts. Anything
+else stays `unknown` and is writable. A release that answers the pipe with a
+syntax error falls back to the plain command, which cannot see groups. Any other
+probe failure refuses the write (fail closed).
 
 **What is refused.**
 
