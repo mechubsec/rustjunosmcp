@@ -204,10 +204,10 @@ pub(crate) async fn run(
     }
 
     // A declared authority wins; Mist is read-only, so refuse before connecting.
+    // Any warning comes from the post-open check, which sees the final authority.
     let declared = dm.inventory().get(router)?.config_authority.clone();
-    let mut pre_warning = None;
     if declared == JunosAuthority::Mist {
-        pre_warning = plane_guard::check(
+        plane_guard::check(
             request.tool,
             router,
             &declared,
@@ -219,6 +219,10 @@ pub(crate) async fn run(
 
     let deadline = Instant::now() + timeout;
     let mut dev = run_step(deadline, timeout, ct, dm.open(router)).await?;
+    // A reload between the read above and `open` may have retargeted the name.
+    let declared = dm
+        .entry_for_session(router, dev.endpoint())?
+        .config_authority;
 
     // Only an undeclared device is probed. This runs before the session is
     // tainted so a refusal hands an untouched session back to the pool.
@@ -234,16 +238,18 @@ pub(crate) async fn run(
             return Err(error);
         }
     };
-    if authority == JunosAuthority::Mist {
-        pre_warning = plane_guard::check(
+    let pre_warning = if authority == JunosAuthority::Mist {
+        plane_guard::check(
             request.tool,
             router,
             &authority,
             source,
             None,
             request.allow_plane_owned_writes,
-        )?;
-    }
+        )?
+    } else {
+        None
+    };
     dev.prevent_reuse();
 
     let execution = {

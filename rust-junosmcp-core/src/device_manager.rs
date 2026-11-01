@@ -6,7 +6,7 @@
 //! config-db was left open, in which case the session is closed instead.
 
 use crate::error::JmcpError;
-use crate::inventory::{AuthConfig, Inventory};
+use crate::inventory::{AuthConfig, DeviceEntry, Inventory};
 use arc_swap::ArcSwap;
 use rustez::{Device, HostKeyVerification, SshConfigFile};
 use std::collections::HashMap;
@@ -117,8 +117,14 @@ where
 
 // ── Session pool ────────────────────────────────────────────────────────
 
+/// The `(ip, port)` a session connected to, fixed at open time. Inventory
+/// reloads can retarget a device name, so the name alone does not identify the
+/// device a live session is talking to.
+pub type Endpoint = (String, u16);
+
 struct PoolEntry {
     device: Device,
+    endpoint: Endpoint,
     returned_at: Instant,
 }
 
@@ -192,9 +198,15 @@ impl SessionPool {
         }
     }
 
-    async fn try_checkout(&self, name: &str) -> Option<Device> {
+    async fn try_checkout(&self, name: &str, endpoint: &Endpoint) -> Option<Device> {
         let mut slots = self.slots.lock().await;
         let entry = slots.remove(name)?;
+        // A session to a retargeted device is unusable whatever order the
+        // reload and the session's return happened in.
+        if &entry.endpoint != endpoint {
+            tokio::spawn(close_within_budget(entry.device));
+            return None;
+        }
         let now = Instant::now();
         if now.duration_since(entry.returned_at) > self.idle_timeout {
             tokio::spawn(close_within_budget(entry.device));
@@ -207,7 +219,7 @@ impl SessionPool {
         Some(entry.device)
     }
 
-    async fn return_session(&self, name: String, dev: Device) {
+    async fn return_session(&self, name: String, dev: Device, endpoint: Endpoint) {
         if !dev.session_alive() {
             close_within_budget(dev).await;
             return;
@@ -217,6 +229,7 @@ impl SessionPool {
             name,
             PoolEntry {
                 device: dev,
+                endpoint,
                 returned_at: Instant::now(),
             },
         ) {
@@ -272,6 +285,7 @@ impl SessionPool {
 pub struct PooledDevice {
     dev: Option<Device>,
     router_name: String,
+    endpoint: Endpoint,
     pool: Arc<SessionPool>,
     reuse_allowed: bool,
 }
@@ -325,6 +339,11 @@ async fn close_within_budget(mut dev: Device) {
 }
 
 impl PooledDevice {
+    /// The `(ip, port)` this session connected to, fixed when it was opened.
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
     /// Keep a session with uncertain candidate state out of the pool.
     pub(crate) fn prevent_reuse(&mut self) {
         self.reuse_allowed = false;
@@ -470,8 +489,9 @@ impl Drop for PooledDevice {
                 // Return to pool for reuse.
                 let pool = self.pool.clone();
                 let name = self.router_name.clone();
+                let endpoint = self.endpoint.clone();
                 handle.spawn(async move {
-                    pool.return_session(name, dev).await;
+                    pool.return_session(name, dev, endpoint).await;
                 });
             }
         }
@@ -583,8 +603,10 @@ impl DeviceManager {
     /// Atomically swap the in-memory inventory and its file metadata.
     ///
     /// Called by `reload_devices` after successfully loading and parsing the
-    /// new inventory. All subsequent `open()` calls see the new device set;
-    /// existing pooled sessions are unaffected (invalidation is explicit).
+    /// new inventory. All subsequent `open()` calls see the new device set.
+    /// Pooled sessions are not closed here (see `invalidate_pool`), but one
+    /// whose endpoint no longer matches the new inventory is discarded at
+    /// checkout rather than reused, even if it was returned after the swap.
     pub fn store_inventory(&self, inv: Arc<Inventory>, path: PathBuf, hash: [u8; 32]) {
         self.inventory.store(inv);
         self.inventory_path.store(Arc::new(path));
@@ -625,16 +647,23 @@ impl DeviceManager {
     ///
     /// If a pooled session exists and is healthy, it is returned immediately.
     /// Otherwise a fresh connection is established with retry on transient
-    /// errors (issue #83). Returns `UnknownRouter` if the device is not in the
-    /// current inventory. The returned `PooledDevice` guard is automatically
-    /// returned to the pool on drop.
+    /// errors (issue #83). A pooled session is reused only if it connected to
+    /// the device's current `(ip, port)`. Returns `UnknownRouter` if the device
+    /// is not in the current inventory. The returned `PooledDevice` guard is
+    /// automatically returned to the pool on drop.
     pub async fn open(&self, router_name: &str) -> Result<PooledDevice, JmcpError> {
+        let endpoint = {
+            let inventory = self.inventory.load();
+            let entry = inventory.get(router_name)?;
+            (entry.ip.clone(), entry.port)
+        };
         // Try the pool first.
-        if let Some(dev) = self.pool.try_checkout(router_name).await {
+        if let Some(dev) = self.pool.try_checkout(router_name, &endpoint).await {
             tracing::debug!(router = %router_name, "reusing pooled NETCONF session");
             return Ok(PooledDevice {
                 dev: Some(dev),
                 router_name: router_name.to_string(),
+                endpoint,
                 pool: self.pool.clone(),
                 reuse_allowed: true,
             });
@@ -693,6 +722,7 @@ impl DeviceManager {
             let inventory = self.inventory.load();
             inventory.get(router_name)?.clone()
         };
+        let endpoint = (entry.ip.clone(), entry.port);
         let policy = self.host_key_policy.clone();
 
         // Retry the fresh connect on transient transport errors (issue #83):
@@ -767,9 +797,36 @@ impl DeviceManager {
         Ok(PooledDevice {
             dev: Some(dev),
             router_name: router_name.to_string(),
+            endpoint,
             pool: self.pool.clone(),
             reuse_allowed: true,
         })
+    }
+
+    /// The current inventory entry for `router`, provided it still describes the
+    /// device `session_endpoint` is connected to.
+    ///
+    /// A reload can retarget a name while a session to the old device is held;
+    /// reading the entry by name alone would then judge that session by the new
+    /// device's authority and rollback settings. Only `(ip, port)` is compared.
+    ///
+    /// # Errors
+    ///
+    /// `UnknownRouter` if the router was removed, `Validation` if it was
+    /// retargeted.
+    pub(crate) fn entry_for_session(
+        &self,
+        router: &str,
+        session_endpoint: &Endpoint,
+    ) -> Result<DeviceEntry, JmcpError> {
+        let inventory = self.inventory.load();
+        let entry = inventory.get(router)?;
+        if (&entry.ip, entry.port) != (&session_endpoint.0, session_endpoint.1) {
+            return Err(JmcpError::Validation(format!(
+                "device '{router}' was retargeted in the inventory during this operation; refusing to continue on the old session"
+            )));
+        }
+        Ok(entry.clone())
     }
 }
 
@@ -1094,5 +1151,29 @@ mod tests {
         dm.record_cleanup_taint("r1", "unlock".to_owned()).await;
         dm.clear_cleanup_taint("r1").await;
         assert_eq!(dm.check_cleanup_taint("r1").await, None);
+    }
+
+    /// An entry is handed out only while it still describes the session's device.
+    #[test]
+    fn entry_for_session_follows_the_endpoint_not_the_name() {
+        let at = |port: u16| {
+            build_inventory(&format!(
+                r#"{{"r1":{{"ip":"10.0.0.1","port":{port},{PW}}}}}"#
+            ))
+        };
+        let dm = DeviceManager::new(at(830));
+        let session = ("10.0.0.1".to_string(), 830);
+
+        assert_eq!(dm.entry_for_session("r1", &session).unwrap().port, 830);
+
+        dm.store_inventory(at(831), PathBuf::new(), [0u8; 32]);
+        let error = dm.entry_for_session("r1", &session).unwrap_err();
+        assert!(error.to_string().contains("retargeted"), "{error}");
+
+        dm.store_inventory(build_inventory("{}"), PathBuf::new(), [0u8; 32]);
+        assert!(matches!(
+            dm.entry_for_session("r1", &session),
+            Err(JmcpError::UnknownRouter(_))
+        ));
     }
 }
