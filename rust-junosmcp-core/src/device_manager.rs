@@ -125,6 +125,8 @@ pub type Endpoint = (String, u16);
 struct PoolEntry {
     device: Device,
     endpoint: Endpoint,
+    /// The device's generation when the session was opened.
+    generation: u64,
     returned_at: Instant,
 }
 
@@ -143,6 +145,12 @@ struct SessionPool {
     /// Per-device cleanup failures. Warned on next open, cleared on successful
     /// lock acquisition. Shares the same idle timeout as the session pool.
     taints: Mutex<HashMap<String, CleanupTaint>>,
+    /// Per-device generation, bumped only by a reload that changed the device
+    /// (#612). A reload cannot reach a session that is checked out, so sessions
+    /// carry the generation they opened under and a stale one is never reused.
+    /// Only reloads bump it, so its size is bounded by names that came from
+    /// inventories.
+    generations: Mutex<HashMap<String, u64>>,
     idle_timeout: Duration,
 }
 
@@ -151,6 +159,7 @@ impl SessionPool {
         let pool = Arc::new(Self {
             slots: Mutex::new(HashMap::new()),
             taints: Mutex::new(HashMap::new()),
+            generations: Mutex::new(HashMap::new()),
             idle_timeout: POOL_IDLE_TIMEOUT,
         });
         // Spawn the reaper only if we're inside a tokio runtime
@@ -198,12 +207,44 @@ impl SessionPool {
         }
     }
 
-    async fn try_checkout(&self, name: &str, endpoint: &Endpoint) -> Option<Device> {
+    /// Current generation of `name`; 0 if no reload has ever changed it.
+    async fn generation(&self, name: &str) -> u64 {
+        self.generations
+            .lock()
+            .await
+            .get(name)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    async fn bump_generations(&self, names: &[String]) {
+        let mut generations = self.generations.lock().await;
+        for name in names {
+            *generations.entry(name.clone()).or_insert(0) += 1;
+        }
+    }
+
+    /// Retire every session for `names`, pooled or checked out: bump the
+    /// generation first so a checked-out session is discarded when it returns,
+    /// then purge the pooled ones (#612).
+    async fn retire(&self, names: &[String]) {
+        self.bump_generations(names).await;
+        self.invalidate(names).await;
+    }
+
+    /// Take the pooled session for `name` with the generation it opened under.
+    async fn try_checkout(&self, name: &str, endpoint: &Endpoint) -> Option<(Device, u64)> {
         let mut slots = self.slots.lock().await;
         let entry = slots.remove(name)?;
         // A session to a retargeted device is unusable whatever order the
         // reload and the session's return happened in.
         if &entry.endpoint != endpoint {
+            tokio::spawn(close_within_budget(entry.device));
+            return None;
+        }
+        // Opened before a reload changed this device's login. Read live under
+        // `slots`: a session the reload bumped but has not purged yet stops here.
+        if entry.generation != self.generation(name).await {
             tokio::spawn(close_within_budget(entry.device));
             return None;
         }
@@ -216,20 +257,28 @@ impl SessionPool {
             tokio::spawn(close_within_budget(entry.device));
             return None;
         }
-        Some(entry.device)
+        Some((entry.device, entry.generation))
     }
 
-    async fn return_session(&self, name: String, dev: Device, endpoint: Endpoint) {
+    async fn return_session(&self, name: String, dev: Device, endpoint: Endpoint, generation: u64) {
         if !dev.session_alive() {
             close_within_budget(dev).await;
             return;
         }
         let mut slots = self.slots.lock().await;
+        // Read under `slots`: a return that sees the old value and inserts is
+        // removed by the `invalidate` that follows the bump. `retire` never
+        // holds both locks, so the order slots-then-generations cannot cycle.
+        if self.generation(&name).await != generation {
+            tokio::spawn(close_within_budget(dev));
+            return;
+        }
         if let Some(old) = slots.insert(
             name,
             PoolEntry {
                 device: dev,
                 endpoint,
+                generation,
                 returned_at: Instant::now(),
             },
         ) {
@@ -286,6 +335,8 @@ pub struct PooledDevice {
     dev: Option<Device>,
     router_name: String,
     endpoint: Endpoint,
+    /// The device's generation when this session was opened (#612).
+    generation: u64,
     pool: Arc<SessionPool>,
     reuse_allowed: bool,
 }
@@ -490,8 +541,9 @@ impl Drop for PooledDevice {
                 let pool = self.pool.clone();
                 let name = self.router_name.clone();
                 let endpoint = self.endpoint.clone();
+                let generation = self.generation;
                 handle.spawn(async move {
-                    pool.return_session(name, dev, endpoint).await;
+                    pool.return_session(name, dev, endpoint, generation).await;
                 });
             }
         }
@@ -606,20 +658,32 @@ impl DeviceManager {
     /// new inventory. All subsequent `open()` calls see the new device set.
     /// Pooled sessions are not closed here (see `invalidate_pool`), but one
     /// whose endpoint no longer matches the new inventory is discarded at
-    /// checkout rather than reused, even if it was returned after the swap.
+    /// checkout rather than reused, even if it was returned after the swap. So
+    /// is one opened before a reload that changed its device, once
+    /// `invalidate_pool` has run for it (#612).
     pub fn store_inventory(&self, inv: Arc<Inventory>, path: PathBuf, hash: [u8; 32]) {
         self.inventory.store(inv);
         self.inventory_path.store(Arc::new(path));
         self.inventory_hash.store(Arc::new(hash));
     }
 
-    /// Close and evict pooled sessions for the named devices.
+    /// Close and evict pooled sessions for the named devices, and retire any
+    /// that are checked out.
     ///
     /// Called by `reload_devices` after swapping the inventory to purge stale
-    /// sessions for removed or reconfigured devices. Next `open()` for these
+    /// sessions for removed or reconfigured devices. A session in use at that
+    /// moment is closed when its guard drops instead of returning to the pool,
+    /// so a changed login is never reused (#612). Next `open()` for these
     /// devices will establish a fresh connection.
     pub async fn invalidate_pool(&self, names: &[String]) {
-        self.pool.invalidate(names).await;
+        self.pool.retire(names).await;
+    }
+
+    /// The first half of [`Self::invalidate_pool`], for tests of what a racing
+    /// `open` meets once a reload has bumped a device but not yet purged it.
+    #[doc(hidden)]
+    pub async fn bump_generations_for_test(&self, names: &[String]) {
+        self.pool.bump_generations(names).await;
     }
 
     /// Record a cleanup failure for a device (#260). The taint persists until
@@ -648,7 +712,8 @@ impl DeviceManager {
     /// If a pooled session exists and is healthy, it is returned immediately.
     /// Otherwise a fresh connection is established with retry on transient
     /// errors (issue #83). A pooled session is reused only if it connected to
-    /// the device's current `(ip, port)`. Returns `UnknownRouter` if the device
+    /// the device's current `(ip, port)` and was opened since the last reload
+    /// that changed the device (#612). Returns `UnknownRouter` if the device
     /// is not in the current inventory. The returned `PooledDevice` guard is
     /// automatically returned to the pool on drop.
     pub async fn open(&self, router_name: &str) -> Result<PooledDevice, JmcpError> {
@@ -658,12 +723,13 @@ impl DeviceManager {
             (entry.ip.clone(), entry.port)
         };
         // Try the pool first.
-        if let Some(dev) = self.pool.try_checkout(router_name, &endpoint).await {
+        if let Some((dev, generation)) = self.pool.try_checkout(router_name, &endpoint).await {
             tracing::debug!(router = %router_name, "reusing pooled NETCONF session");
             return Ok(PooledDevice {
                 dev: Some(dev),
                 router_name: router_name.to_string(),
                 endpoint,
+                generation,
                 pool: self.pool.clone(),
                 reuse_allowed: true,
             });
@@ -715,6 +781,9 @@ impl DeviceManager {
     /// checkout). Shared by [`Self::open`]'s cache-miss path and
     /// [`Self::open_fresh`].
     async fn connect_fresh(&self, router_name: &str) -> Result<PooledDevice, JmcpError> {
+        // Before the inventory read: a reload landing between the two leaves
+        // this session tagged old and discarded, never old credentials tagged new.
+        let generation = self.pool.generation(router_name).await;
         // Snapshot the inventory entry up front so the retry closure owns its
         // connection parameters (the ArcSwap guard must not be held across the
         // retry/backoff awaits).
@@ -798,6 +867,7 @@ impl DeviceManager {
             dev: Some(dev),
             router_name: router_name.to_string(),
             endpoint,
+            generation,
             pool: self.pool.clone(),
             reuse_allowed: true,
         })
