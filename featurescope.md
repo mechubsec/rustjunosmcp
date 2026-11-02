@@ -4,7 +4,7 @@ What each release added, oldest first. This is a summary; [CHANGELOG.md](CHANGEL
 is the full record and is authoritative. Detail for the features named here is in
 [docs/REFERENCE.md](docs/REFERENCE.md).
 
-The current version is 2.7.1. The sections up to v0.12 below were written as the
+The current version is 2.7.2. The sections up to v0.12 below were written as the
 roadmap was delivered and are kept as they were, with two corrections: the
 v0.12 items shipped in 0.27.0 and 2.5.0, and cross-references now point into
 docs/REFERENCE.md. From v0.13.0 on, each section is one released tag.
@@ -178,7 +178,7 @@ docs/REFERENCE.md. From v0.13.0 on, each section is one released tag.
 
 Summarised from [CHANGELOG.md](CHANGELOG.md). Routine dependency
 and CI releases are omitted here; the CHANGELOG lists them. Tags that exist:
-v0.13.0 through v0.28.1, v1.0.0, and v2.0.0 through v2.7.1.
+v0.13.0 through v0.28.1, v1.0.0, and v2.0.0 through v2.7.2.
 
 ### v0.13.0 and v0.13.1 (2026-07-29)
 
@@ -358,3 +358,8 @@ for CVE-2026-116794 and the client-side fixes in that release. No feature change
 - A session stays bound to the address it connected to. A write caught by a
   `reload_devices` or SIGHUP that retargets the device name is refused, and a
   stale pooled session is discarded.
+
+### v2.7.2 (2026-11-02)
+
+- A session in use during a `reload_devices` or SIGHUP that changes its device's
+  login is closed when released instead of going back into the pool.
