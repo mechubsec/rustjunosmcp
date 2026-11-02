@@ -91,7 +91,8 @@ pub(crate) async fn resolve_authority(
 /// Infer the managing plane from `show configuration system services outbound-ssh`.
 ///
 /// Accepts curly-brace text (relative to `outbound-ssh`), `| display set`
-/// lines, or `| display inheritance` output (`##` annotations are skipped).
+/// lines, or `| display inheritance` output (`##` annotations are skipped, and
+/// the XML notes NETCONF sends instead match nothing).
 /// Inactive or protected clients still count: refusing too much is the safe
 /// error. Precedence is Mist, then Security Director Cloud, then Security
 /// Director On-Prem (`EMS-` client), else `Unknown`.
@@ -561,6 +562,45 @@ mod tests {
     fn lone_inheritance_annotation_does_not_detect() {
         let text = "## 'client mist' was inherited from group 'old'\n";
         assert_eq!(detect_authority(text), JunosAuthority::Unknown);
+    }
+
+    /// Captured from a vSRX on 24.4R1.9 (#601). Over NETCONF the inheritance
+    /// notes arrive as XML, not the `##` lines the CLI prints.
+    const NETCONF_INHERITANCE: &str = r"<configuration-information>
+<configuration-output>
+</configuration-output>
+<configuration-detail>
+<indent>0</indent>
+<configuration-detail-line>
+<indent>0</indent>
+<detail-message>&apos;mist&apos; was inherited from group &apos;PLANE-GUARD-601&apos;</detail-message>
+</configuration-detail-line>
+</configuration-detail>
+<configuration-output>
+client mist {
+</configuration-output>
+<configuration-detail>
+<indent>4</indent>
+<configuration-detail-line>
+<indent>4</indent>
+<detail-message>&apos;netconf&apos; was inherited from group &apos;PLANE-GUARD-601&apos;</detail-message>
+</configuration-detail-line>
+</configuration-detail>
+<configuration-output>
+    services netconf;
+}
+</configuration-output>
+</configuration-information>";
+
+    #[test]
+    fn inherited_client_in_netconf_output_is_detected() {
+        assert_eq!(detect_authority(NETCONF_INHERITANCE), JunosAuthority::Mist);
+    }
+
+    #[test]
+    fn netconf_inheritance_notes_alone_do_not_detect() {
+        let notes_only = NETCONF_INHERITANCE.replace("client mist {", "");
+        assert_eq!(detect_authority(&notes_only), JunosAuthority::Unknown);
     }
 
     fn hits(diff: &str) -> Vec<String> {
