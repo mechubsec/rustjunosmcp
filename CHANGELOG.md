@@ -4,6 +4,17 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A `reload_devices` or SIGHUP that changed only a device's `username` or
+  `auth` left a session that was in use during the reload running as the
+  retired account: it went back into the pool, was reused, and its idle timer
+  restarted on each return. Sessions now remember which version of the device
+  they opened under, and one held during a reload that changed its device is
+  closed when released instead of being returned to the pool.
+
 ## [2.7.1] - 2026-11-01
 
 ### Fixed

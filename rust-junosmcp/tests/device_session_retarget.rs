@@ -2,7 +2,9 @@
 #![allow(missing_docs)]
 //! A pooled or locked NETCONF session stays bound to the `(ip, port)` it
 //! connected to, even when an inventory reload retargets the device name
-//! (#602). Two loopback fakes stand in for the old and new device.
+//! (#602). Two loopback fakes stand in for the old and new device. A session
+//! held across a reload that changed only a device's login is not reused
+//! either (#612).
 mod common;
 
 use common::fake_netconf::{FakeNetconf, OK, Script, client_key_pem};
@@ -47,13 +49,13 @@ fn script() -> Script {
     ]
 }
 
-/// An inventory with `r1` pointing at `port` on loopback.
-fn inventory_for(dir: &Path, key: &Path, port: u16) -> Arc<Inventory> {
-    let path = dir.join(format!("devices-{port}.json"));
+/// An inventory with `r1` pointing at `port` on loopback, logging in as `username`.
+fn inventory_for(dir: &Path, key: &Path, port: u16, username: &str) -> Arc<Inventory> {
+    let path = dir.join(format!("devices-{port}-{username}.json"));
     let device = json!({
         "ip": "127.0.0.1",
         "port": port,
-        "username": "netconf",
+        "username": username,
         "auth": { "type": "ssh_key", "private_key_path": key.to_str().unwrap() },
     });
     write_restricted(&path, &json!({ "r1": device }).to_string());
@@ -75,8 +77,8 @@ fn rig() -> Rig {
     let dir = tempfile::tempdir().unwrap();
     let key = dir.path().join("id_ed25519");
     write_restricted(&key, &client_key_pem());
-    let old_inventory = inventory_for(dir.path(), &key, old_device.port);
-    let new_inventory = inventory_for(dir.path(), &key, new_device.port);
+    let old_inventory = inventory_for(dir.path(), &key, old_device.port, "netconf");
+    let new_inventory = inventory_for(dir.path(), &key, new_device.port, "netconf");
     Rig {
         old_device,
         new_device,
@@ -156,4 +158,103 @@ async fn stage_refuses_a_name_retargeted_after_lock() {
         "{:?}",
         rig.old_device.requests()
     );
+}
+
+/// Yield so the spawned return and close tasks run.
+async fn settle() {
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+}
+
+/// One fake, one port, and an inventory for it per username.
+struct LoginRig {
+    device: FakeNetconf,
+    manager: DeviceManager,
+    renamed_login: Arc<Inventory>,
+    _dir: tempfile::TempDir,
+}
+
+fn login_rig() -> LoginRig {
+    let device = FakeNetconf::start(script());
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("id_ed25519");
+    write_restricted(&key, &client_key_pem());
+    let original = inventory_for(dir.path(), &key, device.port, "netconf");
+    let renamed_login = inventory_for(dir.path(), &key, device.port, "operator");
+    LoginRig {
+        device,
+        manager: DeviceManager::new(original),
+        renamed_login,
+        _dir: dir,
+    }
+}
+
+/// The connections `show version` ran on, in order.
+fn show_version_connections(device: &FakeNetconf) -> Vec<usize> {
+    device
+        .requests_by_connection()
+        .into_iter()
+        .filter(|(_, rpc)| rpc.contains("show version"))
+        .map(|(connection, _)| connection)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_session_returned_after_a_credential_change_is_not_reused() {
+    let rig = login_rig();
+    let held = rig.manager.open("r1").await.unwrap();
+
+    // Same address, different login: `reload_devices` swaps, then purges.
+    rig.manager
+        .store_inventory(rig.renamed_login.clone(), Default::default(), [1; 32]);
+    rig.manager.invalidate_pool(&["r1".to_string()]).await;
+    drop(held);
+    settle().await;
+
+    let mut fresh = rig.manager.open("r1").await.unwrap();
+    fresh.cli("show version").await.unwrap();
+
+    let connections = show_version_connections(&rig.device);
+    assert_eq!(connections.len(), 1, "{connections:?}");
+    assert_ne!(connections[0], 1, "ran on the retired session");
+    assert!(rig.device.connection_closed(1));
+}
+
+#[tokio::test]
+async fn a_reload_that_changed_another_device_keeps_the_session() {
+    let rig = login_rig();
+    let mut held = rig.manager.open("r1").await.unwrap();
+    held.cli("show version").await.unwrap();
+
+    rig.manager.invalidate_pool(&["other".to_string()]).await;
+    drop(held);
+    settle().await;
+
+    let mut reused = rig.manager.open("r1").await.unwrap();
+    reused.cli("show version").await.unwrap();
+
+    let connections = show_version_connections(&rig.device);
+    assert_eq!(connections.len(), 2, "{connections:?}");
+    assert_eq!(connections[0], connections[1], "session was not reused");
+}
+
+#[tokio::test]
+async fn a_pooled_session_bumped_but_not_yet_purged_is_not_handed_out() {
+    let rig = login_rig();
+    drop(rig.manager.open("r1").await.unwrap());
+    settle().await;
+
+    rig.manager
+        .store_inventory(rig.renamed_login.clone(), Default::default(), [1; 32]);
+    rig.manager
+        .bump_generations_for_test(&["r1".to_string()])
+        .await;
+
+    let mut fresh = rig.manager.open("r1").await.unwrap();
+    fresh.cli("show version").await.unwrap();
+
+    let connections = show_version_connections(&rig.device);
+    assert_eq!(connections.len(), 1, "{connections:?}");
+    assert_ne!(connections[0], 1, "ran on the retired session");
 }
