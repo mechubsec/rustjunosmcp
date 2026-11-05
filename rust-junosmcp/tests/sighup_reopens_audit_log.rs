@@ -133,10 +133,12 @@ fn sighup_reopens_audit_log_after_rename() {
         "new audit file missing post-rotation record: {after_rotation}"
     );
 
+    // Records polled out before the reopen completes legitimately land in the
+    // old inode, so the rotated file may grow past `before` but never lose it.
     let rotated_contents = std::fs::read_to_string(&rotated).unwrap();
-    assert_eq!(
-        rotated_contents, before,
-        "the rotated-away file must keep exactly what was written before the rename, losing nothing"
+    assert!(
+        rotated_contents.starts_with(&before),
+        "the rotated-away file must keep everything written before the rename, losing nothing: {rotated_contents}"
     );
 }
 
