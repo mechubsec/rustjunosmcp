@@ -33,7 +33,7 @@ jobs:
       packages: write # cosign attest pushes the attestation to GHCR
       id-token: write # keyless cosign signing (see reusable-release-image.yml)
     # Pinned to mecmcp main after #502 merged (squash). Repin to a mecmcp tag once one is cut.
-    uses: mechubsec/mecmcp/.github/workflows/reusable-attest-release-sbom.yml@a857dd0912086f193d7a082d4d1deae273ef83a5
+    uses: mechubsec/mecmcp/.github/workflows/reusable-attest-release-sbom.yml@312097bd231ff65746fb31a5739d0eda6fcb86dd
     with:
       image: ghcr.io/${{ github.repository }}
       cargo-manifest-path: rust-junosmcp/Cargo.toml
