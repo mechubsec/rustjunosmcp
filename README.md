@@ -20,7 +20,7 @@ control for configuration writes. It reads the same `devices.json` inventory as
 [Juniper/junos-mcp-server](https://github.com/Juniper/junos-mcp-server).
 
 The server runs on Linux only, in an LXC container or in Docker. The current
-version is 2.7.2. It is stable: see [Stability](docs/REFERENCE.md#stability)
+version is 2.7.3. It is stable: see [Stability](docs/REFERENCE.md#stability)
 for what that covers.
 
 ## 1. Install
@@ -54,14 +54,14 @@ this image, so stop if the check fails. Pin the image by digest, so the bytes yo
 verify are the bytes you run. A later release needs its own version and digest.
 
 ```bash
-image=ghcr.io/mechubsec/rustjunosmcp:2.7.2@sha256:a6f9c89291d213e7f81d73fda59bc859d98c85c517596304b4a57a283d4247c1
+image=ghcr.io/mechubsec/rustjunosmcp:2.7.3@sha256:529279791cbf438592e20980efe3a27ebd47bedf71013c3ce57849fc80be10c1
 
 cosign verify \
   --certificate-identity-regexp '^https://github\.com/mechubsec/mecmcp/\.github/workflows/reusable-release-image\.yml@' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-repository mechubsec/rustjunosmcp \
   --certificate-github-workflow-trigger push \
-  --certificate-github-workflow-ref refs/tags/v2.7.2 \
+  --certificate-github-workflow-ref refs/tags/v2.7.3 \
   "$image"
 ```
 
@@ -125,7 +125,7 @@ The checksum proves the download is intact. The signature proves it came from
 this project's release workflow. Stop if either check fails.
 
 ```bash
-version=2.7.2
+version=2.7.3
 base="https://github.com/mechubsec/rustjunosmcp/releases/download/v${version}"
 tarball="rust-junosmcp_${version}_amd64.tar.gz"
 curl -fLO "$base/$tarball"
