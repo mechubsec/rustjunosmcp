@@ -15,7 +15,13 @@ enabled = false
 [mcp_servers.proxmox-mcp]
 enabled = false
 
-[mcp_servers.unifi-mcp]
+# Renamed 2026-11-10: the global config now defines unifi as
+# `prod-labmode-unifi` and `prod-unifi2mcp`. The old `unifi-mcp` override
+# resolved to nothing, which fails the whole file (see the note below).
+[mcp_servers.prod-labmode-unifi]
+enabled = false
+
+[mcp_servers.prod-unifi2mcp]
 enabled = false
 
 # Renamed 2026-08-19: the fleet moved to `prod-*` names on 2026-08-16 and no
