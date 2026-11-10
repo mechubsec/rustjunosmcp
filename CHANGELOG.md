@@ -4,6 +4,24 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.3] - 2026-11-09
+
+### Security
+
+- The container image's `distroless/cc-debian13` runtime base moves to
+  `cc66d22`, which carries zlib `1.3.1-1+deb13u1` for CVE-2026-76844 and
+  CVE-2026-85091. The 2.7.2 image's base is affected (#620, #628).
+- **rmcp 3.9.0** for RUSTSEC-2026-0462 (#627). The advisory is in rmcp's
+  Streamable HTTP client, which this server does not use.
+
+### Dependencies
+
+- `aws-lc-rs` 1.18.2 -> 1.19.0, `globset` 0.4.20 -> 0.4.21, `rustix`
+  1.1.5 -> 1.1.6 (#625).
+- Release workflows and the package-conformance action move to mecmcp
+  v0.32.0; the tarball-signing, SBOM-attestation and conformance pins sit on
+  the README-only commit after that tag (#621-#624).
+
 ## [2.7.2] - 2026-11-02
 
 ### Fixed
