@@ -222,6 +222,6 @@ jobs:
       # mecmcp's docs/RELEASE-WORKFLOWS.md.
       id-token: write
     # Pinned to mecmcp main after #440 merged (squash). Repin to a mecmcp tag once one is cut.
-    uses: mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@312097bd231ff65746fb31a5739d0eda6fcb86dd
+    uses: mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@1ffbbdd3f4c115d505e61ebe40e74944c99c8e11
     with:
       tag: ${{ needs.resolve-tag.outputs.tag }}
