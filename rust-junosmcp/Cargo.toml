@@ -23,8 +23,8 @@ default = ["tls", "srx"]
 # `serve_router` signature names `rustls::ServerConfig` whether or not TLS is
 # configured, so a --no-default-features build still has to name the type.
 # The `tls` feature still gates what is TLS-specific here: reading a cert and
-# key off disk, and axum-server.
-tls = ["dep:rustls-pki-types", "dep:axum-server"]
+# key off disk.
+tls = ["dep:rustls-pki-types"]
 srx = ["dep:rust-junosmcp-srx-core"]
 # Opt-in OAuth 2.1 resource-server mode (mecmcp#498): `--oauth-*` flags, RFC 9728
 # metadata, JWT access tokens after the static token store misses. Off by default,
@@ -112,7 +112,6 @@ tower-http         = { workspace = true, features = ["trace"] }
 http               = { workspace = true }
 rustls             = { workspace = true }
 rustls-pki-types   = { workspace = true, optional = true }
-axum-server        = { workspace = true, optional = true, default-features = false, features = ["tls-rustls-no-provider"] }
 rustix             = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
