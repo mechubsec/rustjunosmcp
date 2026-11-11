@@ -56,6 +56,11 @@ pub enum LockProbeResult {
 /// How long one device may take to answer before its record is left alone.
 pub const REPROBE_DEVICE_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// How long after a rollback deadline the log is not trusted to show the
+/// outcome: on a lab vSRX Junos wrote the rollback entry 25 s and 54 s late,
+/// and `rollback pending` was seen up to 3 s before it, not to the instant.
+const ROLLBACK_SETTLE_GRACE: u64 = 300;
+
 /// How long the whole startup sweep may take before it gives up.
 ///
 /// The sweep runs before the server serves traffic, so it must not be able to
@@ -70,9 +75,10 @@ pub enum ReprobeOutcome {
     /// reached the device and took effect.
     Committed,
     /// The id is in the log, but the commit that carried it was a *confirmed*
-    /// commit: it is live only provisionally, and the device reverts it unless
-    /// a confirming commit arrives. Finding it proves the provisional commit
-    /// entered history, not that the rollback was ever cancelled.
+    /// commit that is either still pending (the device reverts it unless a
+    /// confirming commit arrives) or whose fate cannot be read from the log.
+    /// Finding it proves the provisional commit entered history, not that the
+    /// rollback was ever cancelled.
     CommittedProvisional,
     /// The device answered and the id is not in its commit log.
     ///
@@ -153,8 +159,9 @@ fn line_offsets(text: &str) -> impl Iterator<Item = (usize, &str)> {
 /// Whether this commit-log entry records a *confirmed* commit.
 ///
 /// Junos appends `commit confirmed, rollback in Nmins` to the entry's header
-/// line, which is how a provisional commit is told from a settled one without
-/// asking the device anything further.
+/// line. The text persists after the commit is confirmed or rolled back, so it
+/// says the commit *was* a commit confirmed, not that it is still provisional;
+/// see [`confirmed_commit_outcome`] for the settled-or-not decision.
 pub fn entry_is_confirmed_commit(entry: &str) -> bool {
     entry
         .lines()
@@ -192,14 +199,56 @@ pub async fn reprobe_operation(
         return Ok(ReprobeOutcome::NotFound);
     };
 
-    // A deadline already on the record says this was a confirmed commit even if
-    // the log entry is ambiguous; the log's own marker catches the case where
-    // the crash beat the deadline to disk. Either way the outcome is
-    // provisional and the device, not this sweep, decides it.
-    if record.rollback_deadline_unix.is_some() || entry_is_confirmed_commit(entry) {
-        return Ok(ReprobeOutcome::CommittedProvisional);
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    Ok(confirmed_commit_outcome(
+        entry,
+        record.rollback_deadline_unix,
+        now_unix,
+    ))
+}
+
+/// Decide `Committed` or `CommittedProvisional` for a log entry that carries
+/// the operation's `request.id`.
+///
+/// A deadline on the record or the header's marker says it was a confirmed
+/// commit (the marker catches a crash that beat the deadline to disk). The
+/// marker persists after settling, so it is provisional unless the entry is
+/// entry 0 and no longer pending: an automatic rollback writes a *new* entry 0,
+/// so an entry 0 that is not pending was confirmed. The window around the
+/// deadline is not trusted (see [`ROLLBACK_SETTLE_GRACE`]). Anything pushed
+/// below entry 0 could be a confirming commit or a rollback, so it stays
+/// provisional.
+// shortcut: with no deadline on the record a settled entry 0 stays provisional;
+// the header's `rollback in Nmins` plus its timestamp could compute one, if
+// that matters.
+fn confirmed_commit_outcome(
+    entry: &str,
+    rollback_deadline_unix: Option<u64>,
+    now_unix: u64,
+) -> ReprobeOutcome {
+    if rollback_deadline_unix.is_none() && !entry_is_confirmed_commit(entry) {
+        return ReprobeOutcome::Committed;
     }
-    Ok(ReprobeOutcome::Committed)
+    let Some(deadline) = rollback_deadline_unix else {
+        return ReprobeOutcome::CommittedProvisional;
+    };
+    let is_entry_zero = entry
+        .lines()
+        .next()
+        .and_then(|header| header.split_whitespace().next())
+        == Some("0");
+    let outside_gap =
+        now_unix < deadline || now_unix >= deadline.saturating_add(ROLLBACK_SETTLE_GRACE);
+    if is_entry_zero
+        && entry_is_confirmed_commit(entry)
+        && !crate::commit_attribution::commit_confirm_pending(entry)
+        && outside_gap
+    {
+        return ReprobeOutcome::Committed;
+    }
+    ReprobeOutcome::CommittedProvisional
 }
 
 /// Whether this record is one a crashed commit could have left behind.
@@ -651,6 +700,38 @@ mod tests {
         );
     }
 
+    // Captured from a lab vSRX on Junos 24.4R1.9 on 2026-11-11 through execute_junos_command.
+    const CHANGESET_REQUEST_ID: &str = "0f4f3f37-9088-4b40-89d7-0c30f8665fd4";
+    const CHANGESET_DEADLINE: u64 = 1_794_372_656;
+    const CHANGESET_PENDING_LOG: &str = "\
+<output xmlns:junos=\"http://xml.juniper.net/junos/24.4R1.9/junos\" xmlns:nc=\"urn:ietf:params:xml:ns:netconf:base:1.0\">
+0   2026-11-11 04:48:56 UTC by netconf via netconf commit confirmed, rollback in 2mins
+    no-change-ref by claude-fullscope (unknown) on-behalf-of=self via unknown-public request.id=0f4f3f37-9088-4b40-89d7-0c30f8665fd4 change-set=ba40922fbc291fd6
+    rollback pending
+1   2026-11-11 00:05:12 UTC by netconf via netconf
+    rjm-632 capture: restore baseline
+";
+    const CHANGESET_ROLLED_BACK_LOG: &str = "\
+<output xmlns:junos=\"http://xml.juniper.net/junos/24.4R1.9/junos\" xmlns:nc=\"urn:ietf:params:xml:ns:netconf:base:1.0\">
+0   2026-11-11 04:51:50 UTC by root via other
+1   2026-11-11 04:48:56 UTC by netconf via netconf commit confirmed, rollback in 2mins
+    no-change-ref by claude-fullscope (unknown) on-behalf-of=self via unknown-public request.id=0f4f3f37-9088-4b40-89d7-0c30f8665fd4 change-set=ba40922fbc291fd6
+2   2026-11-11 00:05:12 UTC by netconf via netconf
+";
+
+    fn changeset_entry(log: &str) -> String {
+        commit_entry_for_request_id(log, CHANGESET_REQUEST_ID)
+            .expect("the capture carries the request id")
+            .to_string()
+    }
+
+    /// No change-set capture exists for a commit confirmed by a later commit
+    /// check, so this is CHANGESET_PENDING_LOG minus its `rollback pending`
+    /// line, which is exactly what the earlier capture showed a confirm does.
+    fn settled_changeset_entry() -> String {
+        changeset_entry(&CHANGESET_PENDING_LOG.replace("    rollback pending\n", ""))
+    }
+
     /// The whole point of the provisional outcome: a confirmed commit that was
     /// found in the log is still one the device may revert, so settling it
     /// `Committed` would both hide a live rollback and free the device for an
@@ -1097,6 +1178,66 @@ mod tests {
             probe_result,
             LockProbeResult::NotProven,
             "timed-out probe must yield NotProven"
+        );
+    }
+
+    const DEADLINE: u64 = CHANGESET_DEADLINE;
+
+    #[test]
+    fn pending_entry_zero_is_provisional() {
+        let entry = changeset_entry(CHANGESET_PENDING_LOG);
+        for now in [DEADLINE - 10, DEADLINE + 60, DEADLINE + 1000] {
+            assert_eq!(
+                confirmed_commit_outcome(&entry, Some(DEADLINE), now),
+                ReprobeOutcome::CommittedProvisional
+            );
+        }
+    }
+
+    #[test]
+    fn settled_entry_zero_commits_outside_the_deadline_gap() {
+        let entry = settled_changeset_entry();
+        assert_eq!(
+            confirmed_commit_outcome(&entry, Some(DEADLINE), DEADLINE - 1),
+            ReprobeOutcome::Committed
+        );
+        assert_eq!(
+            confirmed_commit_outcome(&entry, Some(DEADLINE), DEADLINE + 60),
+            ReprobeOutcome::CommittedProvisional
+        );
+        assert_eq!(
+            confirmed_commit_outcome(&entry, Some(DEADLINE), DEADLINE + 301),
+            ReprobeOutcome::Committed
+        );
+    }
+
+    #[test]
+    fn settled_entry_zero_without_a_deadline_is_provisional() {
+        assert_eq!(
+            confirmed_commit_outcome(&settled_changeset_entry(), None, DEADLINE + 1000),
+            ReprobeOutcome::CommittedProvisional
+        );
+    }
+
+    /// The rolled-back capture: a later entry exists, so the fate of the
+    /// confirmed commit is not readable however long ago the deadline passed.
+    #[test]
+    fn confirmed_commit_below_entry_zero_is_provisional() {
+        let entry = changeset_entry(CHANGESET_ROLLED_BACK_LOG);
+        assert!(entry.starts_with("1 "), "entry was: {entry:?}");
+        assert_eq!(
+            confirmed_commit_outcome(&entry, Some(DEADLINE), DEADLINE + 100_000),
+            ReprobeOutcome::CommittedProvisional
+        );
+    }
+
+    #[test]
+    fn plain_entry_without_a_deadline_commits() {
+        let entry = commit_entry_for_request_id(REAL_LOG, "abadcafe-dead-4bad-8bad-c0dedeadbeef")
+            .expect("present");
+        assert_eq!(
+            confirmed_commit_outcome(entry, None, DEADLINE),
+            ReprobeOutcome::Committed
         );
     }
 }

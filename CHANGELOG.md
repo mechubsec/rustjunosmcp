@@ -14,6 +14,11 @@ All notable user-facing changes are recorded here. Format loosely follows
   inside a rollback window. It now reads entry 0's `rollback pending` line,
   and the error names `confirm_junos_change_set` and `confirm_commit` instead
   of a remaining time. (#632)
+- Junos keeps a commit confirmed's `commit confirmed, rollback in Nmins` header
+  after the window closes, and two places read it as still pending. A guarded
+  `rollback_source: 1` no longer refuses with `pending_confirm` once entry 0
+  has been confirmed, and the restart re-probe settles a crashed change-set
+  commit that was confirmed since without a new commit. (#632)
 
 ## [2.7.3] - 2026-11-09
 
