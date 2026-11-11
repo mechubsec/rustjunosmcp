@@ -280,6 +280,10 @@ pub fn settle_from_outcome(
         ReprobeOutcome::Committed => {
             let mut settled = record.clone();
             settled.state = LifecycleState::Committed;
+            // `Committed` is only reached for a confirmed commit once the log
+            // shows it confirmed; drop the deadline as `confirm_change_set` does,
+            // or status keeps reporting the closed window.
+            settled.rollback_deadline_unix = None;
 
             let lock_status_msg = match lock_probe {
                 LockProbeResult::ProvenFree => {
@@ -992,6 +996,24 @@ mod tests {
                 .contains("lock was proven free"),
             "details must state that lock freedom was proven"
         );
+    }
+
+    /// A confirmed commit the log shows settled leaves no deadline behind, or
+    /// status would still report `awaiting_confirmation` or `indeterminate`.
+    #[test]
+    fn settle_from_outcome_committed_clears_the_rollback_deadline() {
+        let mut record = test_record(
+            LifecycleState::Indeterminate,
+            Some(test_attribution(CHANGESET_REQUEST_ID)),
+        );
+        record.rollback_deadline_unix = Some(CHANGESET_DEADLINE);
+        let settled = settle_from_outcome(
+            &record,
+            &ReprobeOutcome::Committed,
+            LockProbeResult::NotProven,
+        )
+        .expect("Committed should settle");
+        assert_eq!(settled.rollback_deadline_unix, None);
     }
 
     /// When lock freedom was not proven, the flag must remain set.
