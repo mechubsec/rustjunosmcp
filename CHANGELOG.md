@@ -4,6 +4,17 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `upgrade_junos` now detects a pending commit confirmed. It looked for a
+  remaining-time line that Junos never prints, so on a real device the
+  `commit_confirmed_active` refusal never fired and an upgrade could start
+  inside a rollback window. It now reads entry 0's `rollback pending` line,
+  and the error names `confirm_junos_change_set` and `confirm_commit` instead
+  of a remaining time. (#632)
+
 ## [2.7.3] - 2026-11-09
 
 ### Security

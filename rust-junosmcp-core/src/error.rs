@@ -294,17 +294,16 @@ pub enum JmcpError {
         router: String,
     },
 
-    /// Device has an active `commit confirmed` timer. Upgrade would trigger an
-    /// automatic rollback mid-operation. Operator must confirm or roll back the
-    /// pending commit first.
+    /// Device has a pending `commit confirmed`. Upgrade would trigger an
+    /// automatic rollback mid-operation. Operator must confirm
+    /// (`confirm_junos_change_set` or `confirm_commit`) or let the pending commit
+    /// roll back first.
     #[error(
-        "active commit-confirmed window [code=commit_confirmed_active]: router '{router}' has a pending rollback in {rollback_secs}s; run `commit` or `rollback` first, then retry"
+        "active commit-confirmed window [code=commit_confirmed_active]: router '{router}' has a commit confirmed pending; confirm it (`confirm_junos_change_set` for a change set, `confirm_commit` otherwise) or let it roll back, then retry"
     )]
     UpgradeCommitConfirmedActive {
-        /// Name of the device with an active commit-confirmed timer.
+        /// Name of the device with a pending commit-confirmed.
         router: String,
-        /// Remaining seconds before automatic rollback.
-        rollback_secs: u64,
     },
 
     /// Junos `request system software add` RPC did not complete within the
@@ -1372,15 +1371,15 @@ mod tests {
     }
 
     #[test]
-    fn upgrade_commit_confirmed_active_display_includes_code_and_rollback() {
+    fn upgrade_commit_confirmed_active_display_includes_code_and_confirm_commit() {
         let s = JmcpError::UpgradeCommitConfirmedActive {
             router: "vsrx-test10".into(),
-            rollback_secs: 540,
         }
         .to_string();
         assert!(s.contains("[code=commit_confirmed_active]"), "got {s}");
         assert!(s.contains("vsrx-test10"), "got {s}");
-        assert!(s.contains("540"), "got {s}");
+        assert!(s.contains("confirm_commit"), "got {s}");
+        assert!(s.contains("confirm_junos_change_set"), "got {s}");
     }
 
     #[test]
