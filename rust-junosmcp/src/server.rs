@@ -322,7 +322,7 @@ pub(super) fn tool_error_code(error: &rust_junosmcp_core::JmcpError) -> ToolErro
         | E::LocalDestExistsDiffers { .. }
         | E::ConfirmationRequired { .. }
         | E::UpgradeClusterUnsupported { .. }
-        | E::UpgradeCommitConfirmedActive { .. }
+        | E::CommitConfirmedActive { .. }
         | E::CommitLogMoved { .. } => InvalidArgument,
 
         E::Denied { .. }

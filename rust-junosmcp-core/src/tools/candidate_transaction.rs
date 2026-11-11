@@ -5,7 +5,7 @@ use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
 use crate::plane_guard::{self, AuthoritySource};
 use async_trait::async_trait;
-use rustez::{ConfigManager, ConfigPayload, LoadAction};
+use rustez::{ConfigPayload, LoadAction};
 use rustnetconf::error::{NetconfError, RpcError};
 use rustnetconf::types::ErrorTag;
 use std::future::Future;
@@ -111,56 +111,64 @@ pub(crate) trait CandidateBackend {
     async fn commit_confirmed(&mut self, seconds: u32) -> Result<(), JmcpError>;
     async fn rollback(&mut self) -> Result<(), JmcpError>;
     async fn unlock(&mut self) -> Result<(), JmcpError>;
+    /// Text of `show system commit`, used to detect a pending commit confirmed.
+    async fn commit_log(&mut self) -> Result<String, JmcpError>;
 }
 
 #[async_trait]
-impl CandidateBackend for ConfigManager<'_> {
+impl CandidateBackend for rustez::Device {
     async fn lock(&mut self) -> Result<(), JmcpError> {
-        ConfigManager::lock(self).await.map_err(Into::into)
+        self.config()?.lock().await.map_err(Into::into)
     }
 
     async fn load(&mut self, payload: ConfigPayload, action: LoadAction) -> Result<(), JmcpError> {
-        ConfigManager::load_with_action(self, payload, action)
+        self.config()?
+            .load_with_action(payload, action)
             .await
             .map(|_| ())
             .map_err(Into::into)
     }
 
     async fn load_rollback(&mut self, version: u32) -> Result<(), JmcpError> {
-        ConfigManager::rollback(self, version)
-            .await
-            .map_err(Into::into)
+        self.config()?.rollback(version).await.map_err(Into::into)
     }
 
     async fn diff(&mut self) -> Result<String, JmcpError> {
-        ConfigManager::diff(self)
+        self.config()?
+            .diff()
             .await
             .map(|diff| diff.unwrap_or_default())
             .map_err(Into::into)
     }
 
     async fn commit_check(&mut self) -> Result<(), JmcpError> {
-        ConfigManager::commit_check(self).await.map_err(Into::into)
+        self.config()?.commit_check().await.map_err(Into::into)
     }
 
     async fn commit_with_comment(&mut self, comment: &str) -> Result<(), JmcpError> {
-        ConfigManager::commit_with_comment(self, comment)
+        self.config()?
+            .commit_with_comment(comment)
             .await
             .map_err(Into::into)
     }
 
     async fn commit_confirmed(&mut self, seconds: u32) -> Result<(), JmcpError> {
-        ConfigManager::commit_confirmed(self, seconds)
+        self.config()?
+            .commit_confirmed(seconds)
             .await
             .map_err(Into::into)
     }
 
     async fn rollback(&mut self) -> Result<(), JmcpError> {
-        ConfigManager::rollback(self, 0).await.map_err(Into::into)
+        self.config()?.rollback(0).await.map_err(Into::into)
     }
 
     async fn unlock(&mut self) -> Result<(), JmcpError> {
-        ConfigManager::unlock(self).await.map_err(Into::into)
+        self.config()?.unlock().await.map_err(Into::into)
+    }
+
+    async fn commit_log(&mut self) -> Result<String, JmcpError> {
+        self.cli("show system commit").await.map_err(Into::into)
     }
 }
 
@@ -253,9 +261,8 @@ pub(crate) async fn run(
     dev.prevent_reuse();
 
     let execution = {
-        let mut cfg = dev.config()?;
         execute(
-            &mut cfg,
+            &mut *dev,
             router,
             (&authority, source),
             request,
@@ -450,6 +457,16 @@ async fn primary_operation<B: CandidateBackend>(
     committed: &mut bool,
     warning: &mut Option<String>,
 ) -> Result<CandidateResult, JmcpError> {
+    // A commit check or commit while a commit confirmed is pending silently
+    // confirms it (#632); refuse before loading anything.
+    if !matches!(request.mode, CandidateMode::DryRun) {
+        let log = run_step(deadline, operation_timeout, ct, backend.commit_log()).await?;
+        if crate::commit_attribution::commit_confirm_pending(&log) {
+            return Err(JmcpError::CommitConfirmedActive {
+                router: device.to_owned(),
+            });
+        }
+    }
     // Load step: either a rollback archive or a config payload.
     if let Some(version) = request.rollback_source {
         run_step(
@@ -689,6 +706,7 @@ mod tests {
         failures: HashSet<Op>,
         hang: Option<Op>,
         diff: String,
+        commit_log: String,
     }
 
     impl FakeBackend {
@@ -698,7 +716,13 @@ mod tests {
                 failures: HashSet::new(),
                 hang: None,
                 diff: "fake diff".into(),
+                commit_log: crate::commit_attribution::tests::CONFIRMED_LOG.into(),
             }
+        }
+
+        fn with_commit_log(mut self, commit_log: &str) -> Self {
+            self.commit_log = commit_log.into();
+            self
         }
 
         fn with_diff(mut self, diff: &str) -> Self {
@@ -802,6 +826,10 @@ mod tests {
             self.state.lock().unwrap().locked = false;
             Ok(())
         }
+
+        async fn commit_log(&mut self) -> Result<String, JmcpError> {
+            Ok(self.commit_log.clone())
+        }
     }
 
     fn commit_request() -> CandidateRequest {
@@ -869,6 +897,78 @@ mod tests {
             assert!(execution.result.is_ok());
             assert_eq!(state.lock().unwrap().last_load_action, Some(action));
         }
+    }
+
+    /// A commit check or commit made while a commit confirmed is pending would
+    /// silently confirm it (#632): refuse before anything is loaded.
+    #[tokio::test]
+    async fn pending_commit_confirmed_refuses_every_committing_mode() {
+        for mode in [
+            CandidateMode::CommitCheck,
+            CandidateMode::CommitWithComment("test".into()),
+            CandidateMode::CommitConfirmed(5),
+        ] {
+            let state = Arc::new(Mutex::new(DeviceState::default()));
+            let mut backend = FakeBackend::new(state.clone())
+                .with_commit_log(crate::commit_attribution::tests::PENDING_LOG);
+            let mut request = commit_request();
+            request.mode = mode;
+            let execution = run_fake(
+                &mut backend,
+                request,
+                Duration::from_secs(1),
+                Duration::from_millis(50),
+                &CancellationToken::new(),
+            )
+            .await;
+
+            assert!(matches!(
+                execution.result,
+                Err(JmcpError::CommitConfirmedActive { .. })
+            ));
+            assert!(execution.reusable);
+            let state = state.lock().unwrap();
+            assert!(!state.locked);
+            assert!(
+                state
+                    .events
+                    .iter()
+                    .all(|op| !matches!(op, Op::Load | Op::Check | Op::Commit))
+            );
+            assert!(state.events.ends_with(&[Op::Rollback, Op::Unlock]));
+        }
+    }
+
+    #[tokio::test]
+    async fn pending_commit_confirmed_does_not_block_dry_run() {
+        let state = Arc::new(Mutex::new(DeviceState::default()));
+        let mut backend =
+            FakeBackend::new(state).with_commit_log(crate::commit_attribution::tests::PENDING_LOG);
+        let execution = run_fake(
+            &mut backend,
+            dry_run_request(),
+            Duration::from_secs(1),
+            Duration::from_millis(50),
+            &CancellationToken::new(),
+        )
+        .await;
+        assert!(execution.result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn settled_commit_log_lets_commit_check_proceed() {
+        let state = Arc::new(Mutex::new(DeviceState::default()));
+        let mut backend = FakeBackend::new(state.clone());
+        let execution = run_fake(
+            &mut backend,
+            check_request(),
+            Duration::from_secs(1),
+            Duration::from_millis(50),
+            &CancellationToken::new(),
+        )
+        .await;
+        assert!(execution.result.is_ok());
+        assert!(state.lock().unwrap().events.contains(&Op::Check));
     }
 
     async fn run_fake(

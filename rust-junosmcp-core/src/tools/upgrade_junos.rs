@@ -961,7 +961,7 @@ fn finish_preflight(
             "target_version": args.target_version,
             "message": "device already running target version; no action taken"
         })),
-        PreflightDecision::CommitConfirmedActive => Err(JmcpError::UpgradeCommitConfirmedActive {
+        PreflightDecision::CommitConfirmedActive => Err(JmcpError::CommitConfirmedActive {
             router: args.device.clone(),
         }),
         PreflightDecision::InsufficientDisk { free, required } => {

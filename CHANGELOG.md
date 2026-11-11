@@ -19,6 +19,11 @@ All notable user-facing changes are recorded here. Format loosely follows
   `rollback_source: 1` no longer refuses with `pending_confirm` once entry 0
   has been confirmed, and the restart re-probe settles a crashed change-set
   commit that was confirmed since without a new commit. (#632)
+- `commit_check_config`, `load_and_commit_config`, `render_and_apply_j2_template`,
+  `rollback_config` and `apply_junos_change_set` now refuse with
+  `commit_confirmed_active` while a commit confirmed is pending. A commit check
+  or commit silently confirms it, so a validate-only call could cancel another
+  session's safety rollback. (#632)
 
 ## [2.7.3] - 2026-11-09
 
