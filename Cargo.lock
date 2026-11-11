@@ -3116,7 +3116,6 @@ dependencies = [
  "async-trait",
  "aws-lc-rs",
  "axum",
- "axum-server",
  "clap",
  "http",
  "jsonwebtoken",
