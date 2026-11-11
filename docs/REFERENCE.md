@@ -266,12 +266,14 @@ traceable after the fact.
 **To confirm** a pending window (cancel the scheduled auto-rollback), call
 the `confirm_commit` tool with the device name — it sends the confirming
 commit the same way `confirm_junos_change_set` does for the change-set
-path. Sending another `load_and_commit_config` (or `rollback_config` /
-`render_and_apply_j2_template`) also confirms, since Junos treats any
-commit against the candidate as confirmation regardless of which tool
-issued it. While a commit-confirmed window is open, `upgrade_junos` refuses
-to proceed (`commit_confirmed_active`) rather than reboot a device that
-might still roll back its configuration underneath the new image.
+path. A commit check or commit made against the candidate would also
+confirm it silently, so while a window is open `commit_check_config`,
+`load_and_commit_config`, `render_and_apply_j2_template`, `rollback_config`
+(when it commits) and `apply_junos_change_set` refuse with
+`commit_confirmed_active`, as does `upgrade_junos` (it would otherwise reboot
+a device that might still roll back its configuration underneath the new
+image). Confirm with `confirm_junos_change_set` or `confirm_commit`, or let
+the commit roll back.
 
 ## File transfers (`transfer_file` / `fetch_file` / `list_staged_files`)
 

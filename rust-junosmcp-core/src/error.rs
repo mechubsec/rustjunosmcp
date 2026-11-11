@@ -294,14 +294,15 @@ pub enum JmcpError {
         router: String,
     },
 
-    /// Device has a pending `commit confirmed`. Upgrade would trigger an
-    /// automatic rollback mid-operation. Operator must confirm
+    /// Device has a pending `commit confirmed`. A commit check or commit would
+    /// silently confirm it, and an upgrade would trigger an automatic rollback
+    /// mid-operation. Operator must confirm
     /// (`confirm_junos_change_set` or `confirm_commit`) or let the pending commit
     /// roll back first.
     #[error(
         "active commit-confirmed window [code=commit_confirmed_active]: router '{router}' has a commit confirmed pending; confirm it (`confirm_junos_change_set` for a change set, `confirm_commit` otherwise) or let it roll back, then retry"
     )]
-    UpgradeCommitConfirmedActive {
+    CommitConfirmedActive {
         /// Name of the device with a pending commit-confirmed.
         router: String,
     },
@@ -876,7 +877,7 @@ impl JmcpError {
             Self::TransferOuterTimeout(_) => "timeout",
             Self::ConfirmationRequired { .. } => "confirmation_required",
             Self::UpgradeClusterUnsupported { .. } => "unsupported",
-            Self::UpgradeCommitConfirmedActive { .. } => "commit_confirmed_active",
+            Self::CommitConfirmedActive { .. } => "commit_confirmed_active",
             Self::UpgradeInstallTimeout { .. } => "timeout",
             Self::UpgradeRebootTimeout { .. } => "timeout",
             Self::UpgradePostVerifyMismatch { .. } => "verify_mismatch",
@@ -1371,8 +1372,8 @@ mod tests {
     }
 
     #[test]
-    fn upgrade_commit_confirmed_active_display_includes_code_and_confirm_commit() {
-        let s = JmcpError::UpgradeCommitConfirmedActive {
+    fn commit_confirmed_active_display_includes_code_and_confirm_commit() {
+        let s = JmcpError::CommitConfirmedActive {
             router: "vsrx-test10".into(),
         }
         .to_string();

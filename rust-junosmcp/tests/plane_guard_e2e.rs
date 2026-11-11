@@ -50,6 +50,11 @@ fn script(outbound_ssh_reply: &str, diff: &str) -> Script {
             "get-route-engine-information",
             "<route-engine-information><route-engine><slot>0</slot></route-engine></route-engine-information>".to_string(),
         ),
+        // The pending-commit-confirmed guard reads this before any commit check.
+        (
+            "show system commit",
+            "<output>\n0   2026-05-14 09:12:31 UTC by netconf via netconf\n</output>".to_string(),
+        ),
         ("close-session", OK.to_string()),
     ]
 }
@@ -297,10 +302,6 @@ fn upgrade_script_with_cluster(outbound_ssh_reply: &str, cluster_reply: &str) ->
         (
             "show version | match Junos:",
             "<output>\nJunos: 24.4R1.9\n</output>",
-        ),
-        (
-            "show system commit",
-            "<output>\n0   2026-05-14 09:12:31 UTC by netconf via netconf\n</output>",
         ),
         (
             "show system storage no-forwarding",
@@ -867,4 +868,66 @@ fn changeset_detected_sdc_rollback_depth_two_is_refused() {
         "{:?}",
         rig.fake.requests()
     );
+}
+
+// ---- pending commit confirmed (#632) ----
+
+/// Captured from a lab vSRX on Junos 24.4R1.9: the fixture `PENDING_LOG` in
+/// `rust-junosmcp-core/src/commit_attribution.rs`, closed for the reply.
+const PENDING_COMMIT_LOG: &str = "\
+<output xmlns:junos=\"http://xml.juniper.net/junos/24.4R1.9/junos\" xmlns:nc=\"urn:ietf:params:xml:ns:netconf:base:1.0\">
+0   2026-11-10 23:57:00 UTC by netconf via netconf commit confirmed, rollback in 3mins
+    rollback pending
+1   2026-11-09 16:05:55 UTC by netconf via netconf
+    rotate root password [REDACTED]
+</output>";
+
+/// `script` where the device reports a commit confirmed still pending.
+fn pending_script(script: Script) -> Script {
+    let mut entries = script;
+    entries.insert(0, ("show system commit", PENDING_COMMIT_LOG.to_string()));
+    entries
+}
+
+#[test]
+fn commit_check_is_refused_while_a_commit_confirmed_is_pending() {
+    let (fake, mut server, _dir) = start(
+        pending_script(script(NO_STANZA, INTERFACE_DIFF)),
+        Some("local"),
+        &[],
+    );
+    let resp = call_tool(
+        &mut server,
+        "commit_check_config",
+        json!({ "device": "fake", "config_text": "set system host-name x", "config_format": "set" }),
+    );
+    assert_eq!(resp.get("isError"), Some(&json!(true)), "{resp}");
+    assert!(
+        resp.to_string().contains("commit_confirmed_active"),
+        "{resp}"
+    );
+    assert!(fake.saw("show system commit"), "{:?}", fake.requests());
+    assert!(!fake.saw("<nc:validate"), "{:?}", fake.requests());
+    assert!(!fake.saw("<nc:commit"), "{:?}", fake.requests());
+    assert!(!fake.saw("<commit-configuration"), "{:?}", fake.requests());
+}
+
+#[test]
+fn changeset_apply_is_refused_while_a_commit_confirmed_is_pending() {
+    let rig = start_changeset(
+        pending_script(changeset_script(NO_STANZA, INTERFACE_DIFF)),
+        Some("local"),
+        &[],
+    );
+    let (created, (apply_error, apply_text)) = rig.create_and_apply();
+    assert!(!created.0, "{created:?}");
+    assert!(apply_error, "{apply_text}");
+    assert!(
+        apply_text.contains("commit_confirmed_active"),
+        "{apply_text}"
+    );
+    let requests = rig.fake.requests();
+    assert!(!rig.fake.saw("<nc:validate"), "{requests:?}");
+    assert!(!rig.fake.saw("<nc:commit"), "{requests:?}");
+    assert!(!rig.fake.saw("<commit-configuration"), "{requests:?}");
 }

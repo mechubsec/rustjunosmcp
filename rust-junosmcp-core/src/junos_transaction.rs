@@ -659,6 +659,23 @@ impl DeviceTransaction for JunosTransaction {
             }
         }
 
+        // Under the candidate lock, before any commit check or commit: either
+        // would silently confirm another session's pending commit confirmed.
+        let pending_error = match dev.cli("show system commit").await {
+            Err(error) => Some(JmcpError::from(error)),
+            Ok(log) if crate::commit_attribution::commit_confirm_pending(&log) => {
+                Some(JmcpError::CommitConfirmedActive {
+                    router: self.router.clone(),
+                })
+            }
+            Ok(_) => None,
+        };
+        if let Some(error) = pending_error {
+            return Err(self
+                .revert_and_release(&mut dev, 0, error, "pending commit confirmed")
+                .await);
+        }
+
         let mut cfg = dev.config()?;
 
         // Load actions. Track success count for partial-failure revert.
