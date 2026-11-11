@@ -39,8 +39,8 @@ pub struct CommitLogEntry {
     /// The `via <client>` field (`cli`, `netconf`, `other`, `synchronize`,
     /// `autoinstall`, `button`, `snmp`, ...).
     pub client: String,
-    /// Whether the header carries Junos's `commit confirmed, rollback in Nmins`
-    /// marker: the commit is live only provisionally.
+    /// Whether entry 0 is a commit confirmed still awaiting confirmation (see
+    /// [`commit_confirm_pending`]): the commit is live only provisionally.
     pub pending_confirm: bool,
     /// Continuation lines (the commit comment), joined and trimmed. `None` when
     /// the entry has no comment at all.
@@ -63,9 +63,12 @@ fn is_header_line(line: &str) -> bool {
 /// Parse one header line into its fields.
 ///
 /// Expected shape: `<seq>   <date> <time> UTC by <user> via <client>[ commit
-/// confirmed, rollback in Nmins]`. Returns `None` if the line does not match
-/// this shape — callers treat that as `unreadable`, never as a best-effort guess.
-fn parse_header(line: &str) -> Option<(u32, String, String, String, bool)> {
+/// confirmed, rollback in Nmins]`. The `commit confirmed...` suffix is stripped
+/// from the client; it persists after the commit settles, so it says nothing
+/// about pending state (see [`commit_confirm_pending`]). Returns `None` if the
+/// line does not match this shape — callers treat that as `unreadable`, never
+/// as a best-effort guess.
+fn parse_header(line: &str) -> Option<(u32, String, String, String)> {
     let (seq_str, rest) = line.trim_start().split_once(char::is_whitespace)?;
     let sequence: u32 = seq_str.parse().ok()?;
     let rest = rest.trim_start();
@@ -81,15 +84,15 @@ fn parse_header(line: &str) -> Option<(u32, String, String, String, bool)> {
     }
     let after_via = after_by[via_idx + 5..].trim();
 
-    let (client, pending_confirm) = match after_via.find("commit confirmed") {
-        Some(marker_idx) => (after_via[..marker_idx].trim().to_string(), true),
-        None => (after_via.to_string(), false),
+    let client = match after_via.find("commit confirmed") {
+        Some(marker_idx) => after_via[..marker_idx].trim().to_string(),
+        None => after_via.to_string(),
     };
     if client.is_empty() || timestamp.is_empty() {
         return None;
     }
 
-    Some((sequence, timestamp, user, client, pending_confirm))
+    Some((sequence, timestamp, user, client))
 }
 
 /// Whether entry 0 of a `show system commit` log is a `commit confirmed` still
@@ -124,7 +127,7 @@ pub fn commit_confirm_pending(log: &str) -> bool {
 pub fn parse_newest_entry(log: &str) -> Option<CommitLogEntry> {
     let mut lines = log.lines();
     let header_line = lines.find(|l| is_header_line(l))?;
-    let (sequence, timestamp, user, client, pending_confirm) = parse_header(header_line)?;
+    let (sequence, timestamp, user, client) = parse_header(header_line)?;
 
     let mut comment_lines = Vec::new();
     for line in lines {
@@ -147,7 +150,7 @@ pub fn parse_newest_entry(log: &str) -> Option<CommitLogEntry> {
         timestamp,
         user,
         client,
-        pending_confirm,
+        pending_confirm: commit_confirm_pending(log),
         comment,
     })
 }
@@ -500,10 +503,26 @@ pub(crate) mod tests {
 
     #[test]
     fn pending_confirm_marker_is_detected() {
-        let log = "0   2026-03-30 21:49:31 UTC by netconf via netconf commit confirmed, rollback in 3mins\n    provisional\n";
+        let log = "0   2026-03-30 21:49:31 UTC by netconf via netconf commit confirmed, rollback in 3mins\n    rollback pending\n";
         let entry = parse_newest_entry(log).expect("parses");
         assert!(entry.pending_confirm);
         assert_eq!(entry.client, "netconf");
+    }
+
+    #[test]
+    fn pending_capture_is_pending() {
+        let entry = parse_newest_entry(PENDING_LOG).expect("parses");
+        assert!(entry.pending_confirm);
+        assert_eq!(entry.client, "netconf");
+    }
+
+    #[test]
+    fn confirmed_capture_is_not_pending() {
+        let entry = parse_newest_entry(CONFIRMED_LOG).expect("parses");
+        assert!(!entry.pending_confirm);
+        assert_eq!(entry.client, "netconf");
+        let class = classify_commit_zero(Some(&entry), &["sdc-svc".into()], "rjm-netconf");
+        assert_ne!(class, CommitZeroClass::PendingConfirm);
     }
 
     #[test]
