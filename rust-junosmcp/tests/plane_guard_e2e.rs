@@ -889,12 +889,48 @@ fn pending_script(script: Script) -> Script {
     entries
 }
 
+/// The audit record `tool` wrote to `audit_log` that carries an error kind,
+/// once it appears (a change-set apply also writes an `ok` preflight record).
+fn audit_fields(audit_log: &std::path::Path, tool: &str) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let contents = std::fs::read_to_string(audit_log).unwrap_or_default();
+        let record = contents
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|record| {
+                record["fields"]["tool"] == tool && record["fields"]["error_kind"] != ""
+            });
+        if let Some(record) = record {
+            return record["fields"].clone();
+        }
+        assert!(Instant::now() < deadline, "no audit record: {contents}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Tool error `code` for a `commit_confirmed_active` refusal (the server maps
+/// it with the other precondition errors).
+const COMMIT_CONFIRMED_ACTIVE_CODE: &str = "invalid_argument";
+
+/// The structured error code of a tool response.
+fn error_code(resp: &Value) -> &str {
+    resp["structuredContent"]["code"].as_str().unwrap_or("")
+}
+
 #[test]
 fn commit_check_is_refused_while_a_commit_confirmed_is_pending() {
+    let audit_dir = tempfile::tempdir().unwrap();
+    let audit_log = audit_dir.path().join("audit.jsonl");
     let (fake, mut server, _dir) = start(
         pending_script(script(NO_STANZA, INTERFACE_DIFF)),
         Some("local"),
-        &[],
+        &[
+            "--audit-log-file",
+            audit_log.to_str().unwrap(),
+            "--audit-format",
+            "json",
+        ],
     );
     let resp = call_tool(
         &mut server,
@@ -902,32 +938,43 @@ fn commit_check_is_refused_while_a_commit_confirmed_is_pending() {
         json!({ "device": "fake", "config_text": "set system host-name x", "config_format": "set" }),
     );
     assert_eq!(resp.get("isError"), Some(&json!(true)), "{resp}");
-    assert!(
-        resp.to_string().contains("commit_confirmed_active"),
-        "{resp}"
-    );
+    assert_eq!(error_code(&resp), COMMIT_CONFIRMED_ACTIVE_CODE, "{resp}");
     assert!(fake.saw("show system commit"), "{:?}", fake.requests());
     assert!(!fake.saw("<nc:validate"), "{:?}", fake.requests());
     assert!(!fake.saw("<nc:commit"), "{:?}", fake.requests());
     assert!(!fake.saw("<commit-configuration"), "{:?}", fake.requests());
+    let fields = audit_fields(&audit_log, "commit_check_config");
+    assert_eq!(fields["error_kind"], "commit_confirmed_active", "{fields}");
 }
 
 #[test]
 fn changeset_apply_is_refused_while_a_commit_confirmed_is_pending() {
+    let audit_dir = tempfile::tempdir().unwrap();
+    let audit_log = audit_dir.path().join("audit.jsonl");
     let rig = start_changeset(
         pending_script(changeset_script(NO_STANZA, INTERFACE_DIFF)),
         Some("local"),
-        &[],
+        &[
+            "--audit-log-file",
+            audit_log.to_str().unwrap(),
+            "--audit-format",
+            "json",
+        ],
     );
     let (created, (apply_error, apply_text)) = rig.create_and_apply();
     assert!(!created.0, "{created:?}");
     assert!(apply_error, "{apply_text}");
+    // Typed, not stringified into a validation error by the coordinator. The
+    // HTTP response carries no structured `code` on this path, so the typed
+    // error's own text is the signal; the audit kind below is the other.
     assert!(
-        apply_text.contains("commit_confirmed_active"),
+        apply_text.starts_with("active commit-confirmed window [code=commit_confirmed_active]"),
         "{apply_text}"
     );
     let requests = rig.fake.requests();
     assert!(!rig.fake.saw("<nc:validate"), "{requests:?}");
     assert!(!rig.fake.saw("<nc:commit"), "{requests:?}");
     assert!(!rig.fake.saw("<commit-configuration"), "{requests:?}");
+    let fields = audit_fields(&audit_log, "apply_junos_change_set");
+    assert_eq!(fields["error_kind"], "commit_confirmed_active", "{fields}");
 }

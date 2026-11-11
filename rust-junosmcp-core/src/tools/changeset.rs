@@ -1215,12 +1215,12 @@ pub async fn apply_change_set_with_cancel(
             &ct,
         )
         .await
-        // The coordinator stringifies stage errors; a plane refusal goes back typed
-        // so it is audited as `blocked` with the `unauthorized` code. Only the
-        // stage wrapper carries it: a bookkeeping failure must stay visible.
+        // The coordinator stringifies stage errors; a plane refusal or a pending
+        // commit confirmed goes back typed so it keeps its audit kind and code.
+        // Only the stage wrapper carries it: a bookkeeping failure must stay visible.
         .map_err(|e| {
             is_stage_failure(&e)
-                .then(|| transaction.take_plane_refusal())
+                .then(|| transaction.take_stage_refusal())
                 .flatten()
                 .unwrap_or_else(|| JmcpError::Validation(e.to_string()))
         })?;

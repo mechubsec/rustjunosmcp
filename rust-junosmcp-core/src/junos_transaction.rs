@@ -264,10 +264,23 @@ pub struct JunosTransaction {
     allow_plane_owned_writes: bool,
     /// Plane-guard warning recorded by `stage()` when the flag let a write through.
     plane_warning: std::sync::Mutex<Option<String>>,
-    /// Plane-guard refusal from `stage()` as `(tool, device, authority, detail)`,
-    /// kept because the coordinator stringifies stage errors and the caller
-    /// needs the typed `PlaneManagedConfig` back for its audit kind and code.
-    plane_refusal: std::sync::Mutex<Option<(&'static str, String, String, String)>>,
+    /// Typed refusal from `stage()`, kept because the coordinator stringifies
+    /// stage errors and the caller needs the typed error back for its audit
+    /// kind and code.
+    stage_refusal: std::sync::Mutex<Option<StageRefusal>>,
+}
+
+/// A `stage()` refusal that must survive the coordinator's stringification.
+enum StageRefusal {
+    /// Plane-guard refusal, the fields of `JmcpError::PlaneManagedConfig`.
+    Plane {
+        tool: &'static str,
+        device: String,
+        authority: String,
+        detail: String,
+    },
+    /// A commit confirmed is pending on the device (#632).
+    CommitConfirmedActive { router: String },
 }
 
 impl JunosTransaction {
@@ -279,7 +292,7 @@ impl JunosTransaction {
             locked_session: tokio::sync::Mutex::new(None),
             allow_plane_owned_writes: false,
             plane_warning: std::sync::Mutex::new(None),
-            plane_refusal: std::sync::Mutex::new(None),
+            stage_refusal: std::sync::Mutex::new(None),
         }
     }
 
@@ -306,38 +319,56 @@ impl JunosTransaction {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(warning);
     }
 
-    /// The plane-guard refusal `stage()` returned, rebuilt as the typed error.
-    pub fn take_plane_refusal(&self) -> Option<JmcpError> {
-        let (tool, device, authority, detail) = self
-            .plane_refusal
+    /// The refusal `stage()` returned, rebuilt as the typed error.
+    pub fn take_stage_refusal(&self) -> Option<JmcpError> {
+        let refusal = self
+            .stage_refusal
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take()?;
-        Some(JmcpError::PlaneManagedConfig {
-            tool,
-            device,
-            authority,
-            detail,
+        Some(match refusal {
+            StageRefusal::Plane {
+                tool,
+                device,
+                authority,
+                detail,
+            } => JmcpError::PlaneManagedConfig {
+                tool,
+                device,
+                authority,
+                detail,
+            },
+            StageRefusal::CommitConfirmedActive { router } => {
+                JmcpError::CommitConfirmedActive { router }
+            }
         })
     }
 
-    /// Remember `error` if it is a plane refusal. A `CandidateCleanupFailed`
-    /// wrapping one is not recorded: the cleanup failure must stay visible.
-    fn record_plane_refusal(&self, error: &JmcpError) {
-        let JmcpError::PlaneManagedConfig {
-            tool,
-            device,
-            authority,
-            detail,
-        } = error
-        else {
-            return;
+    /// Remember `error` if it is a plane or pending-commit refusal. A
+    /// `CandidateCleanupFailed` wrapping one is not recorded: the cleanup
+    /// failure must stay visible.
+    fn record_stage_refusal(&self, error: &JmcpError) {
+        let refusal = match error {
+            JmcpError::PlaneManagedConfig {
+                tool,
+                device,
+                authority,
+                detail,
+            } => StageRefusal::Plane {
+                tool,
+                device: device.clone(),
+                authority: authority.clone(),
+                detail: detail.clone(),
+            },
+            JmcpError::CommitConfirmedActive { router } => StageRefusal::CommitConfirmedActive {
+                router: router.clone(),
+            },
+            _ => return,
         };
         *self
-            .plane_refusal
+            .stage_refusal
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-            Some((tool, device.clone(), authority.clone(), detail.clone()));
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(refusal);
     }
 
     /// Revert anything loaded into the candidate and release the lock, then
@@ -653,7 +684,7 @@ impl DeviceTransaction for JunosTransaction {
                     let error = self
                         .revert_and_release(&mut dev, 0, refusal, "plane-owned refusal")
                         .await;
-                    self.record_plane_refusal(&error);
+                    self.record_stage_refusal(&error);
                     return Err(error);
                 }
             }
@@ -671,9 +702,11 @@ impl DeviceTransaction for JunosTransaction {
             Ok(_) => None,
         };
         if let Some(error) = pending_error {
-            return Err(self
+            let error = self
                 .revert_and_release(&mut dev, 0, error, "pending commit confirmed")
-                .await);
+                .await;
+            self.record_stage_refusal(&error);
+            return Err(error);
         }
 
         let mut cfg = dev.config()?;
@@ -833,7 +866,7 @@ impl DeviceTransaction for JunosTransaction {
                 let error = self
                     .revert_and_release(&mut dev, actions.len(), refusal, "plane-owned refusal")
                     .await;
-                self.record_plane_refusal(&error);
+                self.record_stage_refusal(&error);
                 return Err(error);
             }
         }
