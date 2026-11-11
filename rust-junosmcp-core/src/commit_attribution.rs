@@ -92,6 +92,29 @@ fn parse_header(line: &str) -> Option<(u32, String, String, String, bool)> {
     Some((sequence, timestamp, user, client, pending_confirm))
 }
 
+/// Whether entry 0 of a `show system commit` log is a `commit confirmed` still
+/// awaiting confirmation. Junos marks that with a `rollback pending`
+/// continuation line under entry 0; the `commit confirmed, rollback in Nmins`
+/// header text persists after the commit is confirmed or rolled back, so on
+/// its own it is not a signal. It is still required, because a plain commit
+/// whose comment is `rollback pending` renders the same continuation line.
+/// `false` when the log has no header.
+// shortcut: a commit confirmed that was already confirmed and whose own comment
+// is exactly `rollback pending` still reads as pending (a fail-closed refusal);
+// read `<get-commit-information>`'s `<commit-confirmed>` element if that matters.
+pub fn commit_confirm_pending(log: &str) -> bool {
+    let mut lines = log.lines().skip_while(|line| !is_header_line(line));
+    if !lines
+        .next()
+        .is_some_and(|header| header.contains("commit confirmed"))
+    {
+        return false;
+    }
+    lines
+        .take_while(|line| !is_header_line(line))
+        .any(|line| line.trim() == "rollback pending")
+}
+
 /// Parse the newest (entry 0) record out of a `show system commit` log.
 ///
 /// Returns `None` when the log is empty, carries no recognisable header, or
@@ -385,8 +408,60 @@ pub async fn classify_commit_zero_for_router(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    // Captured from a lab vSRX on Junos 24.4R1.9 on 2026-11-10 through execute_junos_command.
+    pub(crate) const PENDING_LOG: &str = "\
+<output xmlns:junos=\"http://xml.juniper.net/junos/24.4R1.9/junos\" xmlns:nc=\"urn:ietf:params:xml:ns:netconf:base:1.0\">
+0   2026-11-10 23:57:00 UTC by netconf via netconf commit confirmed, rollback in 3mins
+    rollback pending
+1   2026-11-09 16:05:55 UTC by netconf via netconf
+    rotate root password [REDACTED]
+";
+    pub(crate) const CONFIRMED_LOG: &str = "\
+<output xmlns:junos=\"http://xml.juniper.net/junos/24.4R1.9/junos\" xmlns:nc=\"urn:ietf:params:xml:ns:netconf:base:1.0\">
+0   2026-11-10 23:57:00 UTC by netconf via netconf commit confirmed, rollback in 3mins
+1   2026-11-09 16:05:55 UTC by netconf via netconf
+    rotate root password [REDACTED]
+";
+    const ROLLED_BACK_LOG: &str = "\
+<output xmlns:junos=\"http://xml.juniper.net/junos/24.4R1.9/junos\" xmlns:nc=\"urn:ietf:params:xml:ns:netconf:base:1.0\">
+0   2026-11-11 00:03:23 UTC by root via other
+1   2026-11-11 00:01:58 UTC by netconf via netconf commit confirmed, rollback in 1mins
+2   2026-11-10 23:57:00 UTC by netconf via netconf commit confirmed, rollback in 3mins
+3   2026-11-09 16:05:55 UTC by netconf via netconf
+    rotate root password [REDACTED]
+";
+
+    #[test]
+    fn commit_confirm_pending_true_for_pending_capture() {
+        assert!(commit_confirm_pending(PENDING_LOG));
+    }
+
+    #[test]
+    fn commit_confirm_pending_false_once_confirmed_or_rolled_back() {
+        assert!(!commit_confirm_pending(CONFIRMED_LOG));
+        assert!(!commit_confirm_pending(ROLLED_BACK_LOG));
+    }
+
+    #[test]
+    fn commit_confirm_pending_false_for_empty_log() {
+        assert!(!commit_confirm_pending(""));
+    }
+
+    #[test]
+    fn commit_confirm_pending_ignores_later_entries() {
+        let log = "0   2026-11-11 00:03:23 UTC by root via other\n\
+1   2026-11-10 23:57:00 UTC by netconf via netconf commit confirmed, rollback in 3mins\n    rollback pending\n";
+        assert!(!commit_confirm_pending(log));
+    }
+
+    #[test]
+    fn commit_confirm_pending_ignores_a_plain_commit_comment() {
+        let log = "0   2026-11-11 00:05:12 UTC by netconf via netconf\n    rollback pending\n";
+        assert!(!commit_confirm_pending(log));
+    }
 
     /// Same captured log as `changeset_recovery`'s `REAL_LOG` (vSRX 24.4R1.9,
     /// #370 hardware run), so this module's parser is tested against the same
