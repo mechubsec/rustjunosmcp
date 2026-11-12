@@ -101,25 +101,28 @@ rustez       = "0.20.1"
 # redact_log_text (mecmcp#586); CallerCtx gains token_created_at/token_expires_at (mecmcp#580).
 # mecmcp 0.31.1: junos::redact_json_value/redact_xml apply the Junos vocabulary to string values,
 # text, attributes and comments (mecmcp#591).
+# mecmcp 0.33.0: DeviceTransaction::validate_rewrites_candidate, which JunosTransaction opts
+# into for #626 (mecmcp#612); flattened Args rustdoc no longer leaks into --help (mecmcp#610);
+# axum-server 0.9.2 in mecmcp-transport (mecmcp#611).
 # The built-in whoami tool is opt-in and not registered here; allows_tool("whoami") is exempt
 # from scope checks upstream, so a restricted token gets unknown-tool rather than a 403.
 #
 # mecmcp is consumed at an exact pinned tag; all crates must resolve to the
 # same git ref (see the TypeId note above).
-mecmcp-audit = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
-mecmcp-auth  = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
-mecmcp-transport = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
-mecmcp-runtime = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
-mecmcp-policy = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
-mecmcp-inventory = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
-mecmcp-device = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
-mecmcp-changeset = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
-mecmcp-scp = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
-mecmcp-secret = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
-mecmcp-redact = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
-mecmcp-oidc = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
-mecmcp-http = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
-mecmcp-server = { version = "0.32.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.32.0" }
+mecmcp-audit = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
+mecmcp-auth  = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
+mecmcp-transport = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
+mecmcp-runtime = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
+mecmcp-policy = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
+mecmcp-inventory = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
+mecmcp-device = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
+mecmcp-changeset = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
+mecmcp-scp = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
+mecmcp-secret = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
+mecmcp-redact = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
+mecmcp-oidc = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
+mecmcp-http = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
+mecmcp-server = { version = "0.33.0", git = "https://github.com/mechubsec/mecmcp", tag = "v0.33.0" }
 globset      = "0.4"
 regex        = "1"
 metrics                     = "0.24.6"
