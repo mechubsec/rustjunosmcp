@@ -4,7 +4,7 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.7.4] - 2026-11-11
 
 ### Fixed
 
@@ -24,6 +24,16 @@ All notable user-facing changes are recorded here. Format loosely follows
   `commit_confirmed_active` while a commit confirmed is pending. A commit check
   or commit silently confirms it, so a validate-only call could cancel another
   session's safety rollback. (#632)
+
+### Dependencies
+
+- `arc-swap` 1.9.3 -> 1.9.5, `flate2` 1.1.10 -> 1.1.11, `russh` 0.65.0 ->
+  0.65.1, `uuid` 1.29.0 -> 1.29.1 (#640).
+- `rust-junosmcp` no longer declares `axum-server`, which nothing used. The
+  TLS listener's copy comes from `mecmcp-transport` and is unchanged (#642).
+- The builder image moves to `rust:1.99-slim-bookworm@f2c004e` (#636), and
+  the release workflows and package-conformance action move to mecmcp
+  `1ffbbdd`, a README-only commit after v0.32.0 (#637-#639).
 
 ## [2.7.3] - 2026-11-09
 
