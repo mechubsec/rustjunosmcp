@@ -4,6 +4,26 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `apply_junos_change_set` no longer refuses every change set that adds a
+  login user. Junos `commit check` gives a new `system login user` a `uid` and
+  writes it into the candidate, and the commit step read that as another
+  session's change (`candidate changed since the caller observed it`). The
+  fingerprint is now re-read after a successful validate, while the staged
+  session still holds the candidate lock, and the commit is bound to it. A
+  fingerprint refusal now names both fingerprints and the step that checked.
+  (#626)
+- `rust-junosmcp --help` shows the server's description instead of an internal
+  mecmcp-runtime doc comment.
+
+### Dependencies
+
+- mecmcp 0.32.0 -> 0.33.0, which carries the shared half of both fixes above
+  and moves `axum-server` 0.8.0 -> 0.9.2 in mecmcp-transport (mecmcp#610-#612).
+
 ## [2.7.4] - 2026-11-11
 
 ### Fixed

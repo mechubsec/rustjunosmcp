@@ -461,6 +461,13 @@ impl DeviceTransaction for JunosTransaction {
         true
     }
 
+    /// `<commit-check/>` writes into the candidate: a new `system login user` is
+    /// given a `uid` (#626). The staged session holds the candidate lock from
+    /// stage through commit, so nothing else can move the candidate meanwhile.
+    fn validate_rewrites_candidate(&self) -> bool {
+        true
+    }
+
     /// Take the Junos candidate lock and hold the session that owns it.
     ///
     /// The coordinator calls this before reading the fingerprint, so the check
@@ -1933,6 +1940,17 @@ mod tests {
         assert!(
             offline_transaction().requires_config_lock(),
             "Junos must opt into the device lock"
+        );
+    }
+
+    /// `<commit-check/>` gives a new login user a `uid` in the candidate, so
+    /// without this opt-in every change set adding one is refused at commit
+    /// (#626). The default is `false`, the same trap as the lock above.
+    #[test]
+    fn junos_declares_that_validate_rewrites_the_candidate() {
+        assert!(
+            offline_transaction().validate_rewrites_candidate(),
+            "Junos must opt into the post-validate fingerprint refresh"
         );
     }
 

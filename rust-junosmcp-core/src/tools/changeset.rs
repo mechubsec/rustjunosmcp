@@ -1331,12 +1331,41 @@ pub async fn apply_change_set_with_cancel(
         return Err(JmcpError::Validation(reason));
     }
 
+    // Validate re-read the fingerprint, because `<commit-check/>` can write into
+    // the candidate (a new login user is given a `uid`, #626). The commit is
+    // bound to that value, not the post-stage one.
+    let validated_fingerprint = match coordinator
+        .record(&result.operation_id, &principal, &args.device)
+        .await
+    {
+        Ok(record) => record.current,
+        Err(error) => {
+            let reason = error.to_string();
+            abandon_failed_apply(
+                &coordinator,
+                &transaction,
+                &result.staged,
+                Abandon {
+                    change_set_id: &args.change_set_id,
+                    device: &args.device,
+                    principal: &principal,
+                    operation_id: &result.operation_id,
+                    pre_stage_fingerprint: &args.expected_fingerprint,
+                    reason: &reason,
+                    outcome: AbandonOutcome::CandidateNotCommitted,
+                },
+            )
+            .await;
+            return Err(JmcpError::Validation(reason));
+        }
+    };
+
     let commit_result = match coordinator
         .commit_operation(
             &result.operation_id,
             &args.device,
             &principal,
-            &result.after_fingerprint,
+            &validated_fingerprint,
             policy_signature,
             &transaction,
             &result.staged,
