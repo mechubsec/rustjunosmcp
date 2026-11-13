@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.6
-# linux/amd64 manifests pinned on 2026-08-07. The published image is currently
-# amd64-only; update both digests deliberately when refreshing either base.
+# Multi-arch image index digests pinned on 2026-08-07; the release builds
+# linux/amd64 and linux/arm64 from them. Update both deliberately when
+# refreshing either base.
 #
 # Builder version is taken from rust-toolchain.toml (currently 1.99.0). The two
 # must stay in sync.
