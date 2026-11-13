@@ -1061,10 +1061,9 @@ only, append `--ssh-accept-new-host-keys` to the `docker run` command; this lets
 the server add first-seen keys to the writable state file, but does not
 authenticate that first connection out of band.
 
-> **Apple Silicon (M-series):** images are built for `linux/amd64` only, so
-> they run under emulation on Apple Silicon. This works, but if you hit a
-> platform-mismatch warning add `--platform linux/amd64` to both the `pull`
-> and `run` commands.
+> **Apple Silicon (M-series):** images are published for `linux/amd64` and
+> `linux/arm64`, so Docker pulls the native image. Releases before multi-arch
+> support are amd64-only and need `--platform linux/amd64` on `pull` and `run`.
 
 Prefer to build locally instead:
 

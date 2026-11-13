@@ -4,6 +4,14 @@ All notable user-facing changes are recorded here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Container images are published for `linux/amd64` and `linux/arm64`, so Apple
+  Silicon pulls a native image instead of failing with `no matching manifest`
+  (#648). Each platform builds on its own native runner.
+
 ## [2.7.5] - 2026-11-12
 
 ### Fixed
