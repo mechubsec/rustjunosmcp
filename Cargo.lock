@@ -1689,6 +1689,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonwebtoken"
+version = "12.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f347a975eb5fa8f5c4eadce6c1152c11c326cf32cf839fb64ff12d5cb8f4ce8b"
+dependencies = [
+ "aws-lc-rs",
+ "base64 0.23.1",
+ "getrandom 0.4.3",
+ "js-sys",
+ "pem 4.0.0",
+ "serde",
+ "serde_json",
+ "signature 3.0.0",
+ "simple_asn1",
+ "zeroize",
+]
+
+[[package]]
 name = "keccak"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1924,7 +1942,7 @@ version = "0.33.0"
 source = "git+https://github.com/mechubsec/mecmcp?tag=v0.33.0#256f16c16ca9c53d4d472507536e4852b77284c8"
 dependencies = [
  "async-trait",
- "jsonwebtoken",
+ "jsonwebtoken 11.1.0",
  "mecmcp-http",
  "serde",
  "serde_json",
@@ -3108,7 +3126,7 @@ dependencies = [
  "axum",
  "clap",
  "http",
- "jsonwebtoken",
+ "jsonwebtoken 12.0.0",
  "mecmcp-audit",
  "mecmcp-auth",
  "mecmcp-changeset",
@@ -3922,7 +3940,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
