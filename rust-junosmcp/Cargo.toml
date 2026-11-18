@@ -119,7 +119,7 @@ rustix             = { workspace = true, features = ["process"] }
 # features mecmcp's own approver_assertion test uses; already in the lockfile).
 async-trait = { workspace = true }
 aws-lc-rs = "1"
-jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "aws_lc_rs"] }
+jsonwebtoken = { version = "12", default-features = false, features = ["use_pem", "aws_lc_rs"] }
 pem = "4"
 # Loopback fake NETCONF server (tests/common/fake_netconf.rs); already in the
 # lockfile via rustez, same version.
