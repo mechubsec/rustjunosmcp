@@ -29,6 +29,15 @@ vulnerabilities:
       Suppression added 2026-09-30 pending an upstream distroless rebuild
       with the patched libssl3t64; tracked in MEC-1031. Expires 2026-11-30 so
       trivy re-flags this for review if the upstream fix still hasn't shipped.
+  - id: CVE-2026-124709
+    expired_at: 2027-01-31
+    statement: >-
+      Unreachable: no OpenSSL/native-tls dependency in rust-junosmcp (rustls
+      only; `cargo tree -i native-tls` and `-i openssl-sys` match nothing);
+      the CVE is an OpenSSL QUIC stream memory leak and this server speaks no
+      QUIC. Distroless nonroot runtime has no shell to exec openssl. No fixed
+      libssl3t64 exists yet. Suppression added 2026-11-21 (MEC-1031); expires
+      2027-01-31 so trivy re-flags it for review if no fix has shipped.
 
 misconfigurations:
   - id: AVD-DS-0026
