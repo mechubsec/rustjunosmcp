@@ -938,8 +938,8 @@ default) and want to use it, set `port` to 830 explicitly.
 > [`docs/HOW-TO-SETUP-DOCKER.md`](HOW-TO-SETUP-DOCKER.md).
 
 Prebuilt images are published to GHCR on every version tag. The package is
-public — no `docker login` required. The runtime is `distroless` — no shell,
-`apt`, or OpenSSH client (#201) — and runs as numeric UID/GID `65532:65532`.
+public — no `docker login` required. The runtime is `distroless/base-nossl` — no shell,
+`apt`, OpenSSH client (#201) or OpenSSL — and runs as numeric UID/GID `65532:65532`.
 `transfer_file`/`fetch_file` no longer spawn `scp`; they speak the SCP1 wire
 protocol natively via `mecmcp-scp` over the SSH exec channel (#212).
 

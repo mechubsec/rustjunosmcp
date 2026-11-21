@@ -211,7 +211,7 @@ v0.13.0 through v0.28.1, v1.0.0, and v2.0.0 through v2.7.5.
 
 - rmcp 3.1.1 on mecmcp 0.5.0 (MCP 2026-07-28 support).
 - **The container image has no shell, `apt` or `openssh-client`.** The runtime
-  base is `gcr.io/distroless/cc-debian13:nonroot`. `transfer_file` and
+  base is `gcr.io/distroless/base-nossl-debian13:nonroot`. `transfer_file` and
   `fetch_file` no longer spawn `scp`; they use the SCP wire protocol natively.
 - New stable error code `host_key_revoked`.
 

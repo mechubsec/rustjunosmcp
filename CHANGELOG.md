@@ -8,6 +8,10 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ### Changed
 
+- The container image runs on `distroless/base-nossl-debian13` (plus `libgcc_s.so.1`
+  with its dpkg record) instead of `cc-debian13`, so it no longer carries
+  `libssl3t64` and its unfixed CVE-2026-124709. The libssl `.trivyignore.yaml`
+  entries are removed.
 - Container images are published for `linux/amd64` and `linux/arm64`, so Apple
   Silicon pulls a native image instead of failing with `no matching manifest`
   (#648). Each platform builds on its own native runner.

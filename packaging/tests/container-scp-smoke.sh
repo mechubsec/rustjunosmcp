@@ -73,6 +73,20 @@ if docker run --rm --entrypoint /usr/bin/scp "$APP_IMAGE" --version 2>/dev/null;
     exit 1
 fi
 
+# Verify the image carries no OpenSSL (base-nossl; the binary is rustls-only)
+# and still ships libgcc_s, the one library it needs beyond glibc.
+container_id=$(docker create "$APP_IMAGE")
+image_files="$(docker export "$container_id" | tar -t)"
+docker rm "$container_id" > /dev/null
+if grep -E 'lib(ssl|crypto)' <<<"$image_files"; then
+    echo "image should not contain libssl or libcrypto" >&2
+    exit 1
+fi
+grep -q '/libgcc_s\.so\.1$' <<<"$image_files" || {
+    echo "image is missing libgcc_s.so.1" >&2
+    exit 1
+}
+
 echo ">> Verifying config-path argv survival under operator overrides"
 # Regression guard for mecmcp#357: config paths must survive operator overrides.
 # Docker replaces CMD entirely when the caller supplies args, but appends to
