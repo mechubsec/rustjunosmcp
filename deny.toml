@@ -7,6 +7,10 @@ all-features = true
 
 [advisories]
 yanked = "deny"
+ignore = [
+    # chrono is unmaintained (no fix exists). It is required non-optionally by rmcp, oauth2 and mecmcp; revisit when rmcp drops it.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; required by rmcp/oauth2, no maintained replacement upstream" },
+]
 
 [licenses]
 confidence-threshold = 0.8
