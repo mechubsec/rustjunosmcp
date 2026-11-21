@@ -9,8 +9,8 @@ name: Release SBOM
 # can check against the exact digest that was pulled.
 #
 # The SBOM covers only the Rust dependency graph (from rust-junosmcp's
-# Cargo.toml), not the image's runtime base (gcr.io/distroless/cc-debian13:
-# glibc, libgcc, libssl, ca-certificates). Call it a "Rust dependency SBOM"
+# Cargo.toml), not the image's runtime base (gcr.io/distroless/base-nossl-debian13:
+# glibc, libgcc, ca-certificates). Call it a "Rust dependency SBOM"
 # anywhere a reader might otherwise take it as a full image SBOM.
 #
 # Triggered on `release: published`, matching release-sign-tarball.yml's

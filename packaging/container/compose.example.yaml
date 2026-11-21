@@ -4,8 +4,8 @@
 # and explicit writable mounts. Copy this, adjust the image tag and the paths,
 # and treat it as a starting point rather than a drop-in.
 #
-# The image is distroless (gcr.io/distroless/cc-debian13:nonroot) — no shell,
-# no package manager, just the binary and glibc. All file transfers run in-process
+# The image is distroless (gcr.io/distroless/base-nossl-debian13:nonroot) — no shell,
+# no package manager, no OpenSSL, just the binary, glibc and libgcc_s. All file transfers run in-process
 # via the native SCP1 client (#212).
 
 services:
