@@ -3,7 +3,7 @@
 # linux/amd64 and linux/arm64 from them. Update both deliberately when
 # refreshing either base.
 #
-# Builder version is taken from rust-toolchain.toml (currently 1.99.0). The two
+# Builder version is taken from rust-toolchain.toml (currently 1.100.0). The two
 # must stay in sync.
 FROM rust:1.100-slim-bookworm@sha256:7c7d4eb4d05b7781187a327809466cfddf29753f6defdc3d19a0e291951b7a37 AS builder
 WORKDIR /src
