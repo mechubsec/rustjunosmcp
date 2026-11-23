@@ -20,6 +20,11 @@ All notable user-facing changes are recorded here. Format loosely follows
 - The container build moves from `rust:1.99-slim-bookworm` to
   `rust:1.100-slim-bookworm`.
 
+### Security
+
+- `url` 2.5.8 -> 2.5.9 (RUSTSEC-2026-0592, stack overflow in `Url::origin()` on
+  nested `blob:` URLs).
+
 ### Fixed
 
 - The audit-log rotation test no longer fails when a record lands in the old
