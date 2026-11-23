@@ -6,6 +6,19 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-11-22
+
+### Security
+
+- The container image's distroless bases are repinned (`cc-debian13` and
+  `base-nossl-debian13`, both `:nonroot`), moving `libc6` from
+  2.41-12+deb13u4 to deb13u5. This fixes 14 glibc CVEs: CVE-2026-18374,
+  CVE-2026-19499, CVE-2026-19542, CVE-2026-5435, CVE-2026-6238,
+  CVE-2026-6368, CVE-2026-6791, CVE-2026-77117, CVE-2026-80489,
+  CVE-2026-8674, CVE-2026-86805, CVE-2026-89092, CVE-2026-95818 and
+  CVE-2026-97399. The v2.8.0 image is affected. v2.8.0 got no GitHub release,
+  so use v2.8.1.
+
 ## [2.8.0] - 2026-11-22
 
 ### Changed
