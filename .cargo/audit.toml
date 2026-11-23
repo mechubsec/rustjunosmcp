@@ -4,20 +4,4 @@
 # re-evaluated whenever russh / rmcp publish new releases.
 
 [advisories]
-ignore = [
-    # Marvin Attack: potential key recovery via timing sidechannel in `rsa`.
-    # Reaches us transitively via russh -> rustnetconf -> rustEZ. No upstream
-    # fix is available. Not exploitable in this crate's use case (NETCONF
-    # client to managed devices, not a public-facing service).
-    # Track: https://github.com/Eugeny/russh/issues
-    "RUSTSEC-2023-0071",
-
-    # NOTE: RUSTSEC-2024-0436 (`paste` unmaintained) was removed when rmcp was
-    # upgraded 0.8.5 -> 2.0.0 (#97) — rmcp 2.x replaced `paste` with `pastey`,
-    # so `paste` is no longer in the tree and the ignore was dead.
-
-    # NOTE: RUSTSEC-2025-0067 (libyml) and RUSTSEC-2025-0068 (serde_yml)
-    # were removed in v0.5.2 (RJMCP-SEC-002). The serde_yml dependency was
-    # dropped entirely when `render_and_apply_j2_template.vars_content` was
-    # restricted to JSON-only.
-]
+ignore = []
