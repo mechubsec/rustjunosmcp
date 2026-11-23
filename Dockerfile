@@ -7,7 +7,7 @@
 # must stay in sync.
 # Source of libgcc-s1 only; the runtime is base-nossl, which lacks it. Not the
 # runtime itself, so keep it ahead of the builder and out of the last FROM.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2 AS libgcc
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:532c7a94f9e96ba9db75eb9388f4227751131c7cb0a411d1a8521af4096135de AS libgcc
 
 FROM rust:1.100-slim-bookworm@sha256:7c7d4eb4d05b7781187a327809466cfddf29753f6defdc3d19a0e291951b7a37 AS builder
 WORKDIR /src
@@ -15,7 +15,7 @@ WORKDIR /src
 # rustez / rustnetconf are crates.io dependencies now (no sibling checkout),
 # so the build context is just the repo root and this Dockerfile is
 # self-contained:
-#   docker build -t rust-junosmcp:2.8.0 .
+#   docker build -t rust-junosmcp:2.8.1 .
 COPY . .
 RUN cargo build --release --bin rust-junosmcp
 
@@ -54,7 +54,7 @@ RUN triplet="$(gcc -dumpmachine | sed 's/-pc-/-/')" \
 # glibc rule: builder generation must be <= runtime generation. The builder is
 # bookworm (glibc 2.36) and this is debian13 (glibc 2.41), so the direction is
 # safe. Moving the builder forward would require moving this first.
-FROM gcr.io/distroless/base-nossl-debian13:nonroot@sha256:89815d620ac01d8de13cdaf04d19ed874447ca2296d4985b14b818f6e5e47854
+FROM gcr.io/distroless/base-nossl-debian13:nonroot@sha256:4006ac92504be607b70de01d1f64f38288c69fcd8faa820f6d3aed266ea32ac5
 LABEL org.opencontainers.image.source="https://github.com/mechubsec/rustjunosmcp"
 LABEL org.opencontainers.image.licenses="MIT"
 # Official MCP Registry ownership check: must equal server.json "name".
