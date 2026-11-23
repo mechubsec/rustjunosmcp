@@ -6,6 +6,8 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-11-22
+
 ### Changed
 
 - The container image runs on `distroless/base-nossl-debian13` (plus `libgcc_s.so.1`
@@ -15,6 +17,26 @@ All notable user-facing changes are recorded here. Format loosely follows
 - Container images are published for `linux/amd64` and `linux/arm64`, so Apple
   Silicon pulls a native image instead of failing with `no matching manifest`
   (#648). Each platform builds on its own native runner.
+- The container build moves from `rust:1.99-slim-bookworm` to
+  `rust:1.100-slim-bookworm`.
+
+### Security
+
+- `url` 2.5.8 -> 2.5.9 (RUSTSEC-2026-0592, stack overflow in `Url::origin()` on
+  nested `blob:` URLs).
+
+### Fixed
+
+- The audit-log rotation test no longer fails when a record lands in the old
+  inode before the SIGHUP reopen (#666). Test-only; no runtime change.
+
+### Dependencies
+
+- mecmcp 0.33.x -> 0.34.0 and `jsonwebtoken` 11 -> 12 (#665).
+- `quinn-udp` 0.5.16 (RUSTSEC-2026-0538) (#649).
+- The benchmark's `opentelemetry-api` 1.45.2 (GHSA-mf5v-w3w3-f6cg) (#653).
+- Routine cargo minor/patch updates (#660) and the pinned mecmcp reusable
+  workflows (#652, #656-#659).
 
 ## [2.7.5] - 2026-11-12
 
