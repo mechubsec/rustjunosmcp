@@ -113,6 +113,7 @@ async fn get_running_config() {
             max_lines: None,
             max_bytes: None,
             tail: false,
+            inherit: false,
         },
         dm.clone(),
         policy,

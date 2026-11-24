@@ -192,9 +192,15 @@ separate code path for the new formats.
 { "router_name": "core-1", "config_path": "system services", "format": "set" }
 ```
 
+Set `"inherit": true` (default `false`) to expand `apply-groups`: the command
+becomes `show configuration [config_path] | display inheritance [| display
+<format>]`, so group-supplied values appear in every format. Redaction and
+output caps apply as usual. Under `mode: allowlist`, add `display inheritance`
+to `allowed_pipes`.
+
 **Under `mode: allowlist`, `get_junos_config` is governed by the
 `commands` allowlist, not a separate rule.** The rendered command is
-`show configuration [config_path] [| display set|xml|json]`, checked the
+`show configuration [config_path] [| display inheritance] [| display set|xml|json]`, checked the
 same way as any other `execute_junos_command` input: `show configuration`
 must be a prefix in `allow`, and — if a `format` other than the default
 `text` is requested — `display set`/`display xml`/`display json` must be

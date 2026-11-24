@@ -1,0 +1,53 @@
+
+<configuration-information>
+<configuration-output>
+global {
+    address 10.10.10.0/24 10.10.10.0/24;
+    address users-v4 192.0.2.0/25;
+    address users-v6 2001:db8:10::/64;
+    address iot-range {
+        range-address 192.0.2.200 {
+            to {
+                192.0.2.250;
+            }
+        }
+    }
+    address example-fqdn {
+        dns-name www.example.com;
+    }
+</configuration-output>
+<configuration-detail>
+<indent>4</indent>
+<configuration-detail-line>
+<indent>4</indent>
+<detail-message>'grp-only-host' was inherited from group 'inherit-probe'</detail-message>
+</configuration-detail-line>
+<configuration-detail-line>
+<indent>4</indent>
+<detail-message>'192.0.2.99/32' was inherited from group 'inherit-probe'</detail-message>
+</configuration-detail-line>
+</configuration-detail>
+<configuration-output>
+    address grp-only-host 192.0.2.99/32;
+    address-set internal-users {
+        address users-v4;
+        address users-v6;
+    }
+    address-set nested-set {
+        address iot-range;
+        address-set internal-users;
+    }
+}
+dmz-book {
+    address web-1 198.51.100.10/32;
+    address web-2 198.51.100.11/32;
+    address-set web-servers {
+        address web-1;
+        address web-2;
+    }
+    attach {
+        zone dmz;
+    }
+}
+</configuration-output>
+</configuration-information>

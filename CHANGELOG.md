@@ -6,6 +6,21 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- `get_junos_config` takes an optional `inherit` (default `false`, output
+  unchanged). When `true` it adds `| display inheritance` before the format
+  pipe for every format, so values supplied by `apply-groups` appear.
+  Redaction and output caps still apply. Under `mode: allowlist`,
+  `display inheritance` must be in `allowed_pipes`. Tested against replies
+  captured from a vSRX (#671).
+
+### Fixed
+
+- `get_junos_config` with `inherit` (and any text reply Junos splits into
+  several `<configuration-output>` blocks) no longer drops everything after
+  the first block.
+
 ## [2.8.1] - 2026-11-22
 
 ### Security

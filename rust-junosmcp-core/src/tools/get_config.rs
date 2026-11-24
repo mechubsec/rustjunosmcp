@@ -63,13 +63,24 @@ fn junos_text_fallback(text: &str) -> String {
 /// Build the `show configuration [<config_path>]` command for the requested
 /// `format`, appending the Junos `| display <format>` suffix that produces
 /// it (absent for `text`, the unmodified default this tool has always
-/// returned). Pure — no I/O, no RPC sent; an unrecognized `format` is
+/// returned). With `inherit`, `| display inheritance` goes before the format
+/// pipe (the order checked against a vSRX), so `apply-groups` values are
+/// expanded. Pure — no I/O, no RPC sent; an unrecognized `format` is
 /// rejected here before any device is touched.
-fn build_command(config_path: Option<&str>, format: &str) -> Result<String, JmcpError> {
+fn build_command(
+    config_path: Option<&str>,
+    format: &str,
+    inherit: bool,
+) -> Result<String, JmcpError> {
     let suffix = config_display_suffix(format)?;
     let base = match config_path {
         Some(path) if !path.trim().is_empty() => format!("show configuration {}", path.trim()),
         _ => "show configuration".to_string(),
+    };
+    let base = if inherit {
+        format!("{base} | display inheritance")
+    } else {
+        base
     };
     Ok(match suffix {
         Some(suffix) => format!("{base} | {suffix}"),
@@ -77,9 +88,26 @@ fn build_command(config_path: Option<&str>, format: &str) -> Result<String, Jmcp
     })
 }
 
+/// Turn the device's reply into the tool result: strip the XML wrapper,
+/// redact by `format`, then apply the output caps. Split from [`handle`] so
+/// captured device replies can drive it in tests.
+fn finish_output(command: &str, reply: &str, args: &GetConfigArgs) -> Value {
+    // Caps are applied after the XML wrapper is stripped so a line budget
+    // counts configuration lines, not markup.
+    let stripped = strip_config_xml_wrapper(reply);
+    let redacted = redact_config_output(&stripped, &args.format);
+    json!(crate::output::process_output(
+        command,
+        redacted,
+        args.max_lines,
+        args.max_bytes,
+        args.tail,
+    ))
+}
+
 /// Retrieve the running configuration from a Junos device.
 ///
-/// Runs `show configuration [<config_path>]` over NETCONF, strips the XML
+/// Runs `show configuration [<config_path>] [| display inheritance]` over NETCONF, strips the XML
 /// wrapper, validates the `config_path` against injection (newlines, pipes,
 /// semicolons), checks the final command against policy, and applies optional
 /// output caps. Returns configuration in the requested `format` (`text`,
@@ -100,7 +128,7 @@ pub async fn handle(
 
     // Build command up front: also validates `format` deterministically,
     // before any inventory lookup or device connection.
-    let command = build_command(args.config_path.as_deref(), &args.format)?;
+    let command = build_command(args.config_path.as_deref(), &args.format, args.inherit)?;
 
     // Fail fast on unknown devices so the policy check has a valid target.
     let _ = dm.inventory().get(&args.device)?;
@@ -123,21 +151,8 @@ pub async fn handle(
     .await
     .map_err(|_| JmcpError::Timeout(timeout))??;
 
-    // Apply the same output caps the operational-command tools honour. Without
-    // them a caller that asks for a bounded response has no way to get one, and
-    // a full `show configuration` is large enough to matter (#253). Caps are
-    // applied after the XML wrapper is stripped so a line budget counts
-    // configuration lines, not markup.
-    let stripped = strip_config_xml_wrapper(&result);
-    let redacted = redact_config_output(&stripped, &args.format);
-    let capped = crate::output::process_output(
-        &command,
-        redacted,
-        args.max_lines,
-        args.max_bytes,
-        args.tail,
-    );
-    Ok(json!(capped))
+    // Output caps matter here: a full `show configuration` is large (#253).
+    Ok(finish_output(&command, &result, &args))
 }
 
 #[cfg(test)]
@@ -266,9 +281,12 @@ mod tests {
 
     #[test]
     fn build_command_text_format_is_unchanged_from_before_this_field_existed() {
-        assert_eq!(build_command(None, "text").unwrap(), "show configuration");
         assert_eq!(
-            build_command(Some("system services"), "text").unwrap(),
+            build_command(None, "text", false).unwrap(),
+            "show configuration"
+        );
+        assert_eq!(
+            build_command(Some("system services"), "text", false).unwrap(),
             "show configuration system services"
         );
     }
@@ -276,15 +294,15 @@ mod tests {
     #[test]
     fn build_command_appends_the_matching_display_modifier() {
         assert_eq!(
-            build_command(None, "set").unwrap(),
+            build_command(None, "set", false).unwrap(),
             "show configuration | display set"
         );
         assert_eq!(
-            build_command(None, "xml").unwrap(),
+            build_command(None, "xml", false).unwrap(),
             "show configuration | display xml"
         );
         assert_eq!(
-            build_command(None, "json").unwrap(),
+            build_command(None, "json", false).unwrap(),
             "show configuration | display json"
         );
     }
@@ -292,14 +310,92 @@ mod tests {
     #[test]
     fn build_command_combines_config_path_and_format() {
         assert_eq!(
-            build_command(Some("system services"), "set").unwrap(),
+            build_command(Some("system services"), "set", false).unwrap(),
             "show configuration system services | display set"
         );
     }
 
     #[test]
+    fn build_command_inherit_pipes_inheritance_before_the_format() {
+        assert_eq!(
+            build_command(Some("security address-book"), "text", true).unwrap(),
+            "show configuration security address-book | display inheritance"
+        );
+        assert_eq!(
+            build_command(Some("security address-book"), "xml", true).unwrap(),
+            "show configuration security address-book | display inheritance | display xml"
+        );
+    }
+
+    /// Replies captured from vsrx-ci (26.2R1.7) over NETCONF for the exact
+    /// `<command format="text">` this tool sends, content of `<rpc-reply>`
+    /// as rustnetconf returns it. The device has `apply-groups inherit-probe`,
+    /// which supplies address `grp-only-host`: it appears only with
+    /// `| display inheritance`.
+    fn captured_reply(command: &str) -> &'static str {
+        const P: &str = "show configuration security address-book";
+        match command
+            .strip_prefix(P)
+            .unwrap_or_else(|| panic!("{command}"))
+        {
+            "" => include_str!("../../tests/fixtures/get_config_inherit/text_plain.reply"),
+            " | display inheritance" => {
+                include_str!("../../tests/fixtures/get_config_inherit/text_inherit.reply")
+            }
+            " | display set" => {
+                include_str!("../../tests/fixtures/get_config_inherit/set_plain.reply")
+            }
+            " | display inheritance | display set" => {
+                include_str!("../../tests/fixtures/get_config_inherit/set_inherit.reply")
+            }
+            " | display xml" => {
+                include_str!("../../tests/fixtures/get_config_inherit/xml_plain.reply")
+            }
+            " | display inheritance | display xml" => {
+                include_str!("../../tests/fixtures/get_config_inherit/xml_inherit.reply")
+            }
+            " | display json" => {
+                include_str!("../../tests/fixtures/get_config_inherit/json_plain.reply")
+            }
+            " | display inheritance | display json" => {
+                include_str!("../../tests/fixtures/get_config_inherit/json_inherit.reply")
+            }
+            other => panic!("no captured reply for command suffix {other:?}"),
+        }
+    }
+
+    fn args_for(format: &str, inherit: bool) -> GetConfigArgs {
+        serde_json::from_value(json!({
+            "device": "r1", "config_path": "security address-book",
+            "format": format, "inherit": inherit
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn group_inherited_value_appears_only_when_inherit_is_true() {
+        for format in ["text", "set", "xml", "json"] {
+            for inherit in [false, true] {
+                let args = args_for(format, inherit);
+                let command =
+                    build_command(args.config_path.as_deref(), format, args.inherit).unwrap();
+                let out = finish_output(&command, captured_reply(&command), &args).to_string();
+                assert!(
+                    out.contains("global") || out.contains("dmz-book"),
+                    "{format}/{inherit}: lost the config: {out}"
+                );
+                assert_eq!(
+                    out.contains("grp-only-host"),
+                    inherit,
+                    "{format} inherit={inherit}: {out}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn build_command_rejects_unknown_format_before_any_rpc() {
-        let r = build_command(None, "yaml");
+        let r = build_command(None, "yaml", false);
         assert!(matches!(r, Err(JmcpError::BadConfigFormat(ref s)) if s == "yaml"));
     }
 
@@ -317,6 +413,7 @@ mod tests {
                 max_lines: None,
                 max_bytes: None,
                 tail: false,
+                inherit: false,
             },
             dm,
             policy,
@@ -334,6 +431,12 @@ mod tests {
         assert_eq!(args.device, "r1");
         assert_eq!(args.timeout, 30);
         assert!(args.config_path.is_none());
+    }
+
+    #[test]
+    fn inherit_defaults_to_false() {
+        let args: GetConfigArgs = serde_json::from_str(r#"{"device": "r1"}"#).unwrap();
+        assert!(!args.inherit);
     }
 
     #[test]
@@ -398,6 +501,7 @@ mod tests {
                 max_lines: None,
                 max_bytes: None,
                 tail: false,
+                inherit: false,
             },
             dm,
             policy,
@@ -422,6 +526,7 @@ mod tests {
                 max_lines: None,
                 max_bytes: None,
                 tail: false,
+                inherit: false,
             },
             dm,
             policy,
@@ -454,6 +559,7 @@ mod tests {
                 max_lines: None,
                 max_bytes: None,
                 tail: false,
+                inherit: false,
             },
             dm,
             policy,
@@ -486,6 +592,7 @@ mod tests {
                 max_lines: None,
                 max_bytes: None,
                 tail: false,
+                inherit: false,
             },
             dm,
             policy,
@@ -518,6 +625,7 @@ mod tests {
                 max_lines: None,
                 max_bytes: None,
                 tail: false,
+                inherit: false,
             },
             dm,
             policy,
@@ -569,6 +677,7 @@ mod tests {
                 max_lines: None,
                 max_bytes: None,
                 tail: false,
+                inherit: false,
             },
             dm,
             policy,
@@ -597,6 +706,7 @@ mod tests {
                 max_lines: None,
                 max_bytes: None,
                 tail: false,
+                inherit: false,
             },
             dm,
             policy,
@@ -632,6 +742,7 @@ mod tests {
                 max_lines: None,
                 max_bytes: None,
                 tail: false,
+                inherit: false,
             },
             dm,
             policy,
