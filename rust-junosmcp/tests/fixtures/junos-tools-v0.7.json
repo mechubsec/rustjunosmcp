@@ -1187,7 +1187,7 @@
   },
   "get_junos_config": {
     "name": "get_junos_config",
-    "description": "Get the configuration of the device. Returns the full running config by default. Pass config_path (also accepted as 'filter'; e.g. 'system services', 'security policies', 'interfaces ge-0/0/0') to retrieve only a subtree, reducing token usage and limiting exposure to secrets the caller did not ask for. Supports optional max_lines/max_bytes/tail output caps. Invalid paths, and arguments this tool does not recognise, return an error rather than silently falling back to the full config. Output is redacted: config values matching known secret patterns (Junos type-9 reversibly-encrypted secrets, PSKs, SNMP communities, RADIUS/TACACS secrets, and similar) are replaced before being returned; structure, hostnames, and non-secret values are preserved.",
+    "description": "Get the configuration of the device. Returns the full running config by default. Pass config_path (also accepted as 'filter'; e.g. 'system services', 'security policies', 'interfaces ge-0/0/0') to retrieve only a subtree, reducing token usage and limiting exposure to secrets the caller did not ask for. Pass inherit=true to expand apply-groups (adds '| display inheritance', all formats); default false. Supports optional max_lines/max_bytes/tail output caps. Invalid paths, and arguments this tool does not recognise, return an error rather than silently falling back to the full config. Output is redacted: config values matching known secret patterns (Junos type-9 reversibly-encrypted secrets, PSKs, SNMP communities, RADIUS/TACACS secrets, and similar) are replaced before being returned; structure, hostnames, and non-secret values are preserved.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "allOf": [
@@ -1245,6 +1245,11 @@
           "description": "Output format: `text` (default, unmodified `show configuration`),\n`set`, `xml`, or `json`. Rendered device-side via the equivalent\n`| display <format>` CLI modifier — the same mechanism\n`execute_junos_command` already passes through for arbitrary commands.",
           "type": "string",
           "default": "text"
+        },
+        "inherit": {
+          "description": "Expand `apply-groups` (adds `| display inheritance` before the format\npipe), so group-inherited values appear in every format. Default\nfalse: output is unchanged.",
+          "type": "boolean",
+          "default": false
         },
         "max_lines": {
           "description": "Cap output to at most N lines (head; use `tail` for the last N).\nIncludes the truncation marker, so the response never exceeds N lines.",

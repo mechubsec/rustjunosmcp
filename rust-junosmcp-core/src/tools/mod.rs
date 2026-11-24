@@ -212,6 +212,11 @@ pub struct GetConfigArgs {
     /// `execute_junos_command` already passes through for arbitrary commands.
     #[serde(default = "default_get_config_format")]
     pub format: String,
+    /// Expand `apply-groups` (adds `| display inheritance` before the format
+    /// pipe), so group-inherited values appear in every format. Default
+    /// false: output is unchanged.
+    #[serde(default)]
+    pub inherit: bool,
     /// Cap output to at most N lines (head; use `tail` for the last N).
     /// Includes the truncation marker, so the response never exceeds N lines.
     #[serde(default)]

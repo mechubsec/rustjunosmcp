@@ -1,0 +1,19 @@
+
+<configuration-information>
+<configuration-output>
+set security address-book global address 10.10.10.0/24 10.10.10.0/24
+set security address-book global address users-v4 192.0.2.0/25
+set security address-book global address users-v6 2001:db8:10::/64
+set security address-book global address iot-range range-address 192.0.2.200 to 192.0.2.250
+set security address-book global address example-fqdn dns-name www.example.com
+set security address-book global address-set internal-users address users-v4
+set security address-book global address-set internal-users address users-v6
+set security address-book global address-set nested-set address iot-range
+set security address-book global address-set nested-set address-set internal-users
+set security address-book dmz-book address web-1 198.51.100.10/32
+set security address-book dmz-book address web-2 198.51.100.11/32
+set security address-book dmz-book address-set web-servers address web-1
+set security address-book dmz-book address-set web-servers address web-2
+set security address-book dmz-book attach zone dmz
+</configuration-output>
+</configuration-information>

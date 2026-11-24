@@ -1,0 +1,118 @@
+
+<configuration-information>
+<json-output>
+{
+    "configuration" : {
+        "@" : {
+            "xmlns" : "http://xml.juniper.net/xnm/1.1/xnm", 
+            "junos:commit-seconds" : "1795542590", 
+            "junos:commit-localtime" : "2026-11-24 17:49:50 UTC", 
+            "junos:commit-user" : "netconf"
+        }, 
+        "security" : {
+            "address-book" : [
+            {
+                "name" : "global", 
+                "address" : [
+                {
+                    "name" : "10.10.10.0/24", 
+                    "ip-prefix" : "10.10.10.0/24"
+                }, 
+                {
+                    "name" : "users-v4", 
+                    "ip-prefix" : "192.0.2.0/25"
+                }, 
+                {
+                    "name" : "users-v6", 
+                    "ip-prefix" : "2001:db8:10::/64"
+                }, 
+                {
+                    "name" : "iot-range", 
+                    "range-address" : [
+                    {
+                        "name" : "192.0.2.200", 
+                        "to" : {
+                            "range-high" : "192.0.2.250"
+                        }
+                    }
+                    ]
+                }, 
+                {
+                    "name" : "example-fqdn", 
+                    "dns-name" : [
+                    {
+                        "name" : "www.example.com"
+                    }
+                    ]
+                }, 
+                {
+                    "name" : "grp-only-host", 
+                    "ip-prefix" : "192.0.2.99/32"
+                }
+                ], 
+                "address-set" : [
+                {
+                    "name" : "internal-users", 
+                    "address" : [
+                    {
+                        "name" : "users-v4"
+                    }, 
+                    {
+                        "name" : "users-v6"
+                    }
+                    ]
+                }, 
+                {
+                    "name" : "nested-set", 
+                    "address" : [
+                    {
+                        "name" : "iot-range"
+                    }
+                    ], 
+                    "address-set" : [
+                    {
+                        "name" : "internal-users"
+                    }
+                    ]
+                }
+                ]
+            }, 
+            {
+                "name" : "dmz-book", 
+                "address" : [
+                {
+                    "name" : "web-1", 
+                    "ip-prefix" : "198.51.100.10/32"
+                }, 
+                {
+                    "name" : "web-2", 
+                    "ip-prefix" : "198.51.100.11/32"
+                }
+                ], 
+                "address-set" : [
+                {
+                    "name" : "web-servers", 
+                    "address" : [
+                    {
+                        "name" : "web-1"
+                    }, 
+                    {
+                        "name" : "web-2"
+                    }
+                    ]
+                }
+                ], 
+                "attach" : {
+                    "zone" : [
+                    {
+                        "name" : "dmz"
+                    }
+                    ]
+                }
+            }
+            ]
+        }, 
+    }
+}
+</json-output>
+</configuration-information>

@@ -106,14 +106,28 @@ pub fn excerpt(s: &str) -> String {
 
 /// Strip `<configuration-information>` / `<configuration-output>` XML wrapper
 /// tags that Junos adds around CLI output delivered over NETCONF.
+///
+/// With `| display inheritance` Junos splits the text into several
+/// `<configuration-output>` blocks separated by `<configuration-detail>`
+/// annotations ("... was inherited from group ..."); every block is kept, in
+/// order, and the annotations are dropped.
 pub fn strip_config_xml_wrapper(raw: &str) -> String {
-    if let Some(start) = raw.find("<configuration-output>") {
-        let content_start = start + "<configuration-output>".len();
-        if let Some(end) = raw[content_start..].find("</configuration-output>") {
-            return raw[content_start..content_start + end].trim().to_string();
-        }
+    const OPEN: &str = "<configuration-output>";
+    const CLOSE: &str = "</configuration-output>";
+    let mut out = String::new();
+    let mut found = false;
+    let mut rest = raw;
+    while let Some(start) = rest.find(OPEN) {
+        let body = &rest[start + OPEN.len()..];
+        let Some(end) = body.find(CLOSE) else { break };
+        found = true;
+        out.push_str(&body[..end]);
+        rest = &body[end + CLOSE.len()..];
     }
-    raw.trim().to_string()
+    if !found {
+        return raw.trim().to_string();
+    }
+    out.trim().to_string()
 }
 
 /// Maximum allowed length for user-supplied text fields (1 MB).
@@ -705,6 +719,12 @@ mod tests {
     fn strip_config_xml_wrapper_extracts_content() {
         let raw = "<configuration-information><configuration-output>  system { host-name r1; }  </configuration-output></configuration-information>";
         assert_eq!(strip_config_xml_wrapper(raw), "system { host-name r1; }");
+    }
+
+    #[test]
+    fn strip_config_xml_wrapper_keeps_every_output_block() {
+        let raw = "<configuration-information><configuration-output>a {\n</configuration-output><configuration-detail><indent>4</indent></configuration-detail><configuration-output>}\n</configuration-output></configuration-information>";
+        assert_eq!(strip_config_xml_wrapper(raw), "a {\n}");
     }
 
     #[test]
