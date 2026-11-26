@@ -6,6 +6,8 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-11-26
+
 ### Added
 
 - `get_junos_config` takes an optional `inherit` (default `false`, output
