@@ -47,8 +47,10 @@ catalog of every operational RPC and configuration path per **Family**
 ## Reading a `warning`
 
 A `warning` on a lookup or RPC result means the answer came from a nearby
-release train, or the Family was guessed because the model is unknown (SRX on
-Junos OS Evolved answers from `junos-es`). The name or argument may not exist
+release train, the train has catalog gaps, or the Family was inferred: an
+SRX on Junos OS Evolved is answered from `junos-es`. A model the catalog does
+not cover (MX, QFX) is an error, not a warning; pass `family` + `release` to
+look up a nearby one. The name or argument may not exist
 on this device. Verify with a cheap read (`show ... | count`, or retry the CLI
 form through `execute_junos_command`) before building on it.
 

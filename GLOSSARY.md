@@ -7,8 +7,9 @@ vocabulary for describing which Junos API calls exist on a given device.
 
 **Family**:
 The Juniper schema lineage a device belongs to, which decides its RPC and configuration tree:
-`junos-es` (SRX, vSRX), `junos-ex` (EX switches) or `junos-evo` (devices running Junos OS
-Evolved, such as PTX, ACX and SRX440).
+`junos-es` (SRX, vSRX), `junos-ex` (EX switches) or `junos-evo` (routers and switches running
+Junos OS Evolved, such as PTX and ACX). An SRX running Junos OS Evolved uses the `junos-es`
+Family.
 _Avoid_: platform, product line, model
 
 **Model**:

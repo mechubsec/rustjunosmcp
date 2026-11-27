@@ -40,13 +40,19 @@ All notable user-facing changes are recorded here. Format loosely follows
   RPC (flags before and after values) must pass the command allowlist; an
   allowlist entry written with a positional value, such as `show log
   messages`, now also needs the named form allowed. `list_junos_skills` and
-  `read_junos_skill` serve skills for clients without the extension. See
+  `read_junos_skill` serve skills for clients without the extension. Tokens
+  with a wildcard tool scope get all four (read tools). Each family's catalog
+  data is parsed on first use, lazily per family and kind, and costs about
+  90–125 MB resident once loaded. An SRX, vSRX or cSRX on a Junos OS Evolved
+  release is answered from junos-es, with the warning "SRX on Junos OS
+  Evolved: Juniper publishes no SRX EVO YANG; answered from junos-es". See
   `docs/REFERENCE.md` for known upstream gaps.
 - Skills over MCP (SEP-2640) from `--skills-dir` / `JMCP_SKILLS_DIR` (default
   `/usr/share/rust-junosmcp/skills`): four skills ship in `skills/` and the LXC
   package and the Docker image install them. `skills/*` and `resources/*`
   need a valid token but are not tool-scoped. New dependencies via rmcp
-  `skills-fs`: the cap-std family (Apache-2.0 / MIT) and `yaml_serde` + `libyaml-rs`; see the dependency review in
+  `skills-fs`: the cap-std family (Apache-2.0 / MIT) and
+  `yaml_serde` + `libyaml-rs`; see the dependency review in
   `docs/REFERENCE.md`.
 
 ### Changed
@@ -74,10 +80,6 @@ All notable user-facing changes are recorded here. Format loosely follows
   call cancels the check. A change-set create has no device step of its own:
   it now connects once (within the same 15 s budget) to read facts, and for
   an unreachable device it only warns.
-- `lookup_junos_api` and `execute_junos_rpc` answer an SRX, vSRX or cSRX on a
-  Junos OS Evolved release from junos-es, with the warning "SRX on Junos OS
-  Evolved: Juniper publishes no SRX EVO YANG; answered from junos-es".
-  Before, they answered from junos-evo, which has no SRX security hierarchy.
 
 ### Fixed
 

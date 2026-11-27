@@ -1,6 +1,6 @@
 """Verify the embedded Junos API catalog against the bench lab, read-only.
 
-Run: cd ~/Projects/mechubbench && uv run python <repo>/scripts/catalog/verify_lab.py \
+Run: cd ~/Projects/mechubbench && BENCH_MCP_URL=<bench MCP url> uv run python <repo>/scripts/catalog/verify_lab.py \
     <repo>/rust-junosmcp-core/catalog/data <repo>/scripts/catalog/lab-results \
     <repo>/rust-junosmcp/tests/fixtures/catalog-lab
 
@@ -22,7 +22,7 @@ from pathlib import Path
 
 from mechubbench.runner import MCPClient
 
-ENDPOINT = os.environ.get("BENCH_MCP_URL", "http://192.168.1.231:30030/mcp")
+ENDPOINT = os.environ.get("BENCH_MCP_URL", "")
 TOKEN_FILE = Path.home() / "Projects/mechubbench/.env.bench-setup-token"
 DEVICES = ["bench-ex2300", "bench-srx1600", "bench-srx440", "bench-srx345", "bench-vsrx-inet", "bench-csrx"]
 FIXTURE_DEVICES = {"bench-ex2300": "junos-ex", "bench-srx1600": "junos-es"}
@@ -103,6 +103,8 @@ def pick(catalog, family, train):
 
 
 def main():
+    if not ENDPOINT:
+        sys.exit("BENCH_MCP_URL is not set: export the bench MCP endpoint, e.g. http://<bench-host>:30030/mcp")
     data_dir, results_dir, fixture_dir = map(Path, sys.argv[1:4])
     client = MCPClient(ENDPOINT, read_token())
     catalogs, report = {}, {}

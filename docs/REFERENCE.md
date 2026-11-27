@@ -323,7 +323,9 @@ cleared by `reload_devices` and `upgrade_junos`.
 
 Calls a catalog RPC and returns the XML reply, redacted like
 `execute_junos_command` output. Arguments: `device`, `rpc`, `args` (a string,
-or `true` for an `empty` flag, by catalog argument name) and `timeout`.
+or `true` for an `empty` flag, by catalog argument name), `timeout` (one
+budget for family detection and the RPC) and the `max_lines`, `max_bytes`
+and `tail` output caps of `execute_junos_command`.
 
 - Only `get-*` RPCs whose CLI equivalent is `show …` are accepted. Unknown
   arguments are refused, as is any value that is not printable ASCII or
