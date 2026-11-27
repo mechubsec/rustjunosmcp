@@ -261,22 +261,89 @@ fn load_embedded<T: DeserializeOwned>(family: Family, gz: &[u8]) -> Data<T> {
     data
 }
 
+/// The on-disk RPC file read for names and CLIs only: the reply trees and
+/// arguments are skipped without being kept.
+#[derive(Deserialize)]
+struct CliFile {
+    families: BTreeMap<String, BTreeMap<String, Vec<CliVariant>>>,
+}
+
+#[derive(Deserialize)]
+struct CliVariant {
+    trains: Vec<Train>,
+    cli: String,
+}
+
+/// RPC name → CLI of its newest definition, for one embedded Family.
+fn load_embedded_clis(family: Family) -> BTreeMap<String, String> {
+    let file: CliFile = serde_json::from_reader(BufReader::new(flate2::read::GzDecoder::new(
+        EMBEDDED[family as usize].0,
+    )))
+    .expect("embedded catalog is valid gzip JSON");
+    file.families
+        .into_values()
+        .flatten()
+        .filter_map(|(name, variants)| {
+            let newest = variants
+                .into_iter()
+                .max_by_key(|variant| variant.trains.iter().max().copied())?;
+            Some((name, newest.cli))
+        })
+        .collect()
+}
+
+/// Runs `f`, which may parse a catalog file on first use (about a second),
+/// without stalling a tokio worker: through `block_in_place` on a
+/// multi-thread runtime, inline elsewhere (current-thread tests).
+pub fn off_runtime<R>(f: impl FnOnce() -> R) -> R {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(f)
+        }
+        _ => f(),
+    }
+}
+
 /// The Junos API Catalog.
 pub struct Catalog {
     /// Empty slots are filled from [`EMBEDDED`] on first use when set.
     embedded: bool,
     rpc: [OnceLock<Data<RpcVariant>>; 3],
     config: [OnceLock<Data<ConfigEntry>>; 3],
+    /// Name-only RPC index per Family, for checks before the Family is known.
+    rpc_clis: [OnceLock<BTreeMap<String, String>>; 3],
 }
 
 impl Catalog {
     /// The catalog compiled into this binary.
     pub fn embedded() -> &'static Catalog {
         static CATALOG: OnceLock<Catalog> = OnceLock::new();
-        CATALOG.get_or_init(|| Catalog {
+        CATALOG.get_or_init(Catalog::embedded_unloaded)
+    }
+
+    fn embedded_unloaded() -> Catalog {
+        Catalog {
             embedded: true,
             rpc: Default::default(),
             config: Default::default(),
+            rpc_clis: Default::default(),
+        }
+    }
+
+    /// A fresh embedded catalog with nothing loaded, for load-state tests.
+    #[cfg(test)]
+    pub(crate) fn embedded_fresh() -> Catalog {
+        Catalog::embedded_unloaded()
+    }
+
+    /// Which Families' `(rpc, config)` data are loaded, in [`Family::ALL`] order.
+    #[cfg(test)]
+    pub(crate) fn loaded(&self) -> [(bool, bool); 3] {
+        [0, 1, 2].map(|slot| {
+            (
+                self.rpc[slot].get().is_some(),
+                self.config[slot].get().is_some(),
+            )
         })
     }
 
@@ -294,6 +361,7 @@ impl Catalog {
             embedded: false,
             rpc: Default::default(),
             config: Default::default(),
+            rpc_clis: Default::default(),
         };
         let slot = rpc_family as usize;
         // Fresh slots cannot already be set.
@@ -318,14 +386,74 @@ impl Catalog {
         Some(slot.get_or_init(|| load_embedded(family, EMBEDDED[family as usize].1)))
     }
 
+    /// The CLI of the newest definition of RPC `name` in `family`, read from
+    /// a name-only index when the Family's full RPC data is not loaded, so a
+    /// check before the device's Family is known parses no reply trees.
+    pub fn rpc_cli(&self, family: Family, name: &str) -> Option<String> {
+        if let Some(data) = self.rpc[family as usize].get() {
+            let newest = data
+                .entries
+                .get(name)?
+                .iter()
+                .max_by_key(|variant| variant.trains.iter().max().copied())?;
+            return Some(newest.cli.to_string());
+        }
+        if !self.embedded {
+            return None;
+        }
+        self.rpc_clis[family as usize]
+            .get_or_init(|| load_embedded_clis(family))
+            .get(name)
+            .cloned()
+    }
+
     /// Picks the catalog train to answer for `requested` on `family`.
     ///
     /// `exact_family` is false when the Family was inferred rather than
-    /// matched to the device (SRX on Junos OS Evolved, see [`family_for`]). Loads both the RPC and configuration data
-    /// of `family`, since the warning covers gaps in either.
+    /// matched to the device (SRX on Junos OS Evolved, see [`family_for`]).
+    /// Loads both the RPC and configuration data of `family`, and warns of
+    /// gaps in either; [`resolve_rpc`](Self::resolve_rpc) and
+    /// [`resolve_config`](Self::resolve_config) load one kind.
     pub fn resolve(&self, family: Family, requested: Train, exact_family: bool) -> Resolution {
-        let rpc = self.rpc_data(family);
-        let config = self.config_data(family);
+        self.resolve_in(
+            family,
+            requested,
+            exact_family,
+            self.rpc_data(family),
+            self.config_data(family),
+        )
+    }
+
+    /// [`resolve`](Self::resolve) for an RPC query: loads only the RPC data.
+    pub fn resolve_rpc(&self, family: Family, requested: Train, exact_family: bool) -> Resolution {
+        self.resolve_in(family, requested, exact_family, self.rpc_data(family), None)
+    }
+
+    /// [`resolve`](Self::resolve) for a configuration query: loads only the
+    /// configuration data.
+    pub fn resolve_config(
+        &self,
+        family: Family,
+        requested: Train,
+        exact_family: bool,
+    ) -> Resolution {
+        self.resolve_in(
+            family,
+            requested,
+            exact_family,
+            None,
+            self.config_data(family),
+        )
+    }
+
+    fn resolve_in(
+        &self,
+        family: Family,
+        requested: Train,
+        exact_family: bool,
+        rpc: Option<&Data<RpcVariant>>,
+        config: Option<&Data<ConfigEntry>>,
+    ) -> Resolution {
         let trains = config
             .map(|data| data.trains.as_slice())
             .or(rpc.map(|data| data.trains.as_slice()))
@@ -450,6 +578,27 @@ mod tests {
         let res = fixture_catalog().resolve(Family::JunosEx, train(24, 2), true);
         assert_eq!(res.used, train(24, 2));
         assert!(res.warning.unwrap().contains("no data for junos-ex"));
+    }
+
+    #[test]
+    fn resolve_one_kind_loads_one_kind() {
+        let catalog = Catalog::embedded_fresh();
+        catalog.resolve_rpc(Family::JunosEs, train(24, 4), true);
+        assert_eq!(
+            catalog
+                .rpc_cli(Family::JunosEx, "get-arp-table-information")
+                .as_deref(),
+            Some("show arp")
+        );
+        assert_eq!(
+            catalog.loaded(),
+            [(true, false), (false, false), (false, false)]
+        );
+        catalog.resolve_config(Family::JunosEs, train(24, 4), true);
+        assert_eq!(
+            catalog.loaded(),
+            [(true, true), (false, false), (false, false)]
+        );
     }
 
     #[test]

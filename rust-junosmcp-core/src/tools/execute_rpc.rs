@@ -4,7 +4,7 @@
 //! CLI equivalent plus the validated arguments is checked against the same
 //! policy as `execute_junos_command`.
 
-use crate::catalog::{Catalog, Family, Train};
+use crate::catalog::{Catalog, Family};
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
 use crate::helpers::validate_input_length;
@@ -116,28 +116,29 @@ pub(crate) async fn run(
     // Fail fast on unknown devices before any connection.
     let _ = dm.inventory().get(&args.device)?;
 
-    // Before connecting: the RPC's CLI in every family must be a `show`, and
-    // must not already be explicitly denied. Only an explicit deny rule is
-    // acted on here; allowlist matching needs the full argument string.
-    let newest = Train {
-        major: u16::MAX,
-        minor: u16::MAX,
+    // Before connecting to detect the Family: the RPC's CLI in every family
+    // must be a `show`, and must not already be explicitly denied. Only an
+    // explicit deny rule is acted on here; allowlist matching needs the full
+    // argument string. With the Family cached, detection does not connect and
+    // the checks below run first, so this is skipped. Reads the name-only
+    // index, never the reply trees or configuration data.
+    let base_clis: Vec<String> = if cache.get(&args.device).is_some() {
+        Vec::new()
+    } else {
+        let clis: Vec<String> = crate::catalog::off_runtime(|| {
+            Family::ALL
+                .iter()
+                .filter_map(|family| catalog.rpc_cli(*family, &args.rpc))
+                .collect()
+        });
+        if clis.is_empty() {
+            return Err(invalid(format!(
+                "RPC {:?} is not in the API catalog; use lookup_junos_api to find it",
+                args.rpc
+            )));
+        }
+        clis
     };
-    let base_clis: Vec<String> = Family::ALL
-        .iter()
-        .filter_map(|family| {
-            let resolution = catalog.resolve(*family, newest, true);
-            catalog
-                .rpc(&resolution, &args.rpc)
-                .map(|hit| hit.cli.to_string())
-        })
-        .collect();
-    if base_clis.is_empty() {
-        return Err(invalid(format!(
-            "RPC {:?} is not in the API catalog; use lookup_junos_api to find it",
-            args.rpc
-        )));
-    }
     for base in &base_clis {
         if !is_show(base) {
             return Err(invalid(format!(
@@ -156,7 +157,8 @@ pub(crate) async fn run(
     let (family, train, exact_family) = cache
         .detect(&dm, &args.device, Duration::from_secs(args.timeout))
         .await?;
-    let resolution = catalog.resolve(family, train, exact_family);
+    let resolution =
+        crate::catalog::off_runtime(|| catalog.resolve_rpc(family, train, exact_family));
     let hit = catalog.rpc(&resolution, &args.rpc).ok_or_else(|| {
         invalid(format!(
             "RPC {:?} is not in the {} catalog; use lookup_junos_api to find it",
@@ -524,6 +526,43 @@ mod tests {
         let (err, _) =
             run_err_in(Catalog::embedded(), None, call("get-shmlog-entries", &many)).await;
         assert!(err.to_string().contains("at most 6"), "{err}");
+    }
+
+    /// One call on a junos-es device loads junos-es RPC data only: the
+    /// pre-connect check on a cache miss reads the name-only index.
+    #[tokio::test]
+    async fn rpc_loads_only_the_device_family_rpc_data() {
+        let catalog = Catalog::embedded_fresh();
+        let (dm, policy, cache) = setup(None);
+        let detected = cache.get("r1").unwrap();
+        cache.invalidate(&["r1".to_string()]);
+        // Cache miss: detection fails on the unreachable device.
+        let _ = run(
+            &catalog,
+            call("get-arp-table-information", &[]),
+            dm.clone(),
+            policy.clone(),
+            &cache,
+            &mut Vec::new(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(catalog.loaded(), [(false, false); 3]);
+        cache.put("r1", detected);
+        let _ = run(
+            &catalog,
+            call("get-arp-table-information", &[]),
+            dm,
+            policy,
+            &cache,
+            &mut Vec::new(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            catalog.loaded(),
+            [(true, false), (false, false), (false, false)]
+        );
     }
 
     #[tokio::test]

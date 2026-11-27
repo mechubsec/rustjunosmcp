@@ -210,7 +210,8 @@ impl DeviceTrainCache {
             Err(error) => return Ok(vec![skipped_warning(router, &error)]),
         };
         let catalog = Catalog::embedded();
-        let resolution = catalog.resolve(family, train, exact_family);
+        let resolution =
+            crate::catalog::off_runtime(|| catalog.resolve_config(family, train, exact_family));
         let mut warnings = Vec::new();
         for payload in payloads {
             warnings.extend(check_config_paths(catalog, &resolution, payload)?);
@@ -288,7 +289,11 @@ pub(crate) async fn run(
         }
     };
     let limit = usize::from(args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT));
-    let resolution = catalog.resolve(family, train, exact_family);
+    // Loads only the queried kind of the one Family, off the async worker.
+    let resolution = crate::catalog::off_runtime(|| match args.kind {
+        LookupKind::Rpc => catalog.resolve_rpc(family, train, exact_family),
+        LookupKind::Config => catalog.resolve_config(family, train, exact_family),
+    });
     let hits = match args.kind {
         LookupKind::Rpc => {
             serde_json::to_value(catalog.lookup_rpc(&resolution, &args.query, limit))?
