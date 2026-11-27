@@ -1,0 +1,3 @@
+# Juniper/yang commit SHA (public, pinned in rust-junosmcp-core/catalog/SOURCE) in generated catalog data;
+# gitleaks' sourcegraph-access-token rule matches any 40-hex string.
+6e9d0fd3059fd29b6f388020b1c22967c0ea4eca:rust-junosmcp-core/catalog/data/rpc-junos-evo.json:sourcegraph-access-token:1
