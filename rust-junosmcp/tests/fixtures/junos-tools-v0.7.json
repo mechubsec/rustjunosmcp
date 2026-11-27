@@ -949,7 +949,7 @@
   },
   "execute_junos_rpc": {
     "name": "execute_junos_rpc",
-    "description": "Call a read-only Junos RPC (name starting with `get-`) known to the API catalog, instead of parsing CLI text. Find the RPC name and its arguments first with lookup_junos_api. `args` maps argument names to a string, or to true for an `empty` flag. Unknown arguments, non-`get-` RPCs and values containing `<`, `>`, `&`, quotes or control characters are refused. The RPC's CLI equivalent (e.g. `show arp`) plus the arguments is checked against the same command allow/blocklist as execute_junos_command. Returns the XML reply, redacted like execute_junos_command output; `warning` is set when the catalog train differs from the device's.",
+    "description": "Call a read-only Junos RPC (name starting with `get-`) known to the API catalog, instead of parsing CLI text. Find the RPC name and its arguments first with lookup_junos_api. `args` maps argument names to a string, or to true for an `empty` flag. Unknown arguments, non-`get-` RPCs and values containing `<`, `>`, `&`, quotes or control characters are refused. The RPC's CLI equivalent (e.g. `show arp`) plus the arguments is checked against the same command allow/blocklist as execute_junos_command. Returns the XML reply, redacted like execute_junos_command output, with the same optional max_lines/max_bytes/tail caps; `timeout` covers the whole call. `warning` is set when the catalog train differs from the device's.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$defs": {
@@ -1006,11 +1006,36 @@
           }
         },
         "timeout": {
-          "description": "RPC timeout in seconds.",
+          "description": "Timeout in seconds for the whole call: Family detection and the RPC.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0,
           "default": 360
+        },
+        "max_lines": {
+          "description": "Cap output to at most N lines (head; use `tail` for the last N).\nIncludes the truncation marker, so the response never exceeds N lines.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "default": null
+        },
+        "max_bytes": {
+          "description": "Hard byte cap on returned output, inclusive of the truncation marker.\nMust leave room for that marker; see `helpers::MIN_MAX_BYTES`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 64,
+          "default": null
+        },
+        "tail": {
+          "description": "With `max_lines`, keep the LAST N lines instead of the first N.",
+          "type": "boolean",
+          "default": false
         },
         "router_name": {
           "description": "The name of the device.\n\nAlias for `device`; accepted for backward compatibility.",
@@ -1661,7 +1686,7 @@
   },
   "lookup_junos_api": {
     "name": "lookup_junos_api",
-    "description": "Look up a Junos operational RPC or configuration path in the embedded API catalog. Call this BEFORE issuing an RPC or CLI command (execute_junos_command) or writing configuration, instead of guessing RPC names, arguments or config syntax. Results are per Family (junos-es, junos-ex, junos-evo) and Release train (23.1 or later): pass `router` to use the device's own model and version, or `family` + `release` (e.g. junos-es, 24.4) when no device is reachable. `kind` is `rpc` (default) or `config`; `query` is an RPC name, CLI command, config path or keywords. If the result has a `warning`, the answer comes from a nearby train or a guessed family, so verify against the device. Read-only.",
+    "description": "Look up a Junos operational RPC or configuration path in the embedded API catalog. Call this BEFORE issuing an RPC or CLI command (execute_junos_command) or writing configuration, instead of guessing RPC names, arguments or config syntax. Results are per Family (junos-es, junos-ex, junos-evo) and Release train (23.1 or later): pass `router` to use the device's own model and version, or `family` + `release` (e.g. junos-es, 24.4) when no device is reachable. `kind` is `rpc` (default) or `config`; `query` is an RPC name, CLI command, config path or keywords; an exact RPC name also returns the reply element tree, 3 levels deep. If the result has a `warning`, the answer comes from a nearby train or a guessed family, so verify against the device. Read-only.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$defs": {
