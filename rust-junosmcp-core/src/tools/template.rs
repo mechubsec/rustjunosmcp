@@ -81,6 +81,7 @@ use crate::helpers::{
 use crate::policy::{Policy, RuleSource};
 use crate::tools::TemplateArgs;
 use crate::tools::candidate_transaction::{self, CandidateMode, CandidateRequest, CandidateResult};
+use crate::tools::lookup_api::DeviceTrainCache;
 use serde_json::json;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -115,6 +116,7 @@ pub async fn handle(
         policy,
         allow_plane_owned_writes,
         CancellationToken::new(),
+        &DeviceTrainCache::default(),
     )
     .await
 }
@@ -126,6 +128,7 @@ pub async fn handle_with_cancel(
     policy: Arc<Policy>,
     allow_plane_owned_writes: bool,
     ct: CancellationToken,
+    train_cache: &DeviceTrainCache,
 ) -> Result<serde_json::Value, JmcpError> {
     let devices = resolve_devices(&args)?;
 
@@ -226,7 +229,29 @@ pub async fn handle_with_cancel(
             }
         }
 
-        let row = match commit_one(
+        let catalog_warnings = match train_cache
+            .check_write(
+                &dm,
+                d,
+                std::slice::from_ref(&payload),
+                Duration::from_secs(args.timeout),
+                false,
+            )
+            .await
+        {
+            Ok(warnings) => warnings,
+            Err(e) => {
+                rows.push(json!({
+                    "router": d,
+                    "rendered_template": rendered,
+                    "config_format": format,
+                    "error": e.to_string(),
+                }));
+                continue;
+            }
+        };
+
+        let mut row = match commit_one(
             d,
             (payload.clone(), load_action),
             &args.commit_comment,
@@ -289,6 +314,7 @@ pub async fn handle_with_cancel(
                 "error": e.to_string(),
             }),
         };
+        crate::helpers::add_warnings(&mut row, &catalog_warnings);
         rows.push(row);
     }
     Ok(json!({ "results": rows, "applied": !args.dry_run }))

@@ -14,6 +14,20 @@ pub fn build_config_payload(text: String, fmt: Option<&str>) -> Result<ConfigPay
     }
 }
 
+/// Appends `extra` to a tool result's `warning` string, joined with `; `.
+pub fn add_warnings(result: &mut serde_json::Value, extra: &[String]) {
+    if extra.is_empty() {
+        return;
+    }
+    let mut warnings: Vec<String> = result["warning"]
+        .as_str()
+        .map(str::to_owned)
+        .into_iter()
+        .collect();
+    warnings.extend_from_slice(extra);
+    result["warning"] = serde_json::Value::String(warnings.join("; "));
+}
+
 /// Map the optional load `mode` string from the MCP tool input to a
 /// `rustez::LoadAction`. Default = "merge". Only `merge`, `replace`, and
 /// `override` are caller-facing; `set` and `update` are internal wire
@@ -571,6 +585,16 @@ mod tests {
     fn build_config_payload_rejects_unknown() {
         let r = build_config_payload("x".into(), Some("yaml"));
         assert!(matches!(r, Err(JmcpError::BadFormat(ref s)) if s == "yaml"));
+    }
+
+    #[test]
+    fn add_warnings_appends_to_existing() {
+        let mut result = serde_json::json!({ "success": true });
+        add_warnings(&mut result, &[]);
+        assert!(result.get("warning").is_none());
+        add_warnings(&mut result, &["a".into()]);
+        add_warnings(&mut result, &["b".into(), "c".into()]);
+        assert_eq!(result["warning"], "a; b; c");
     }
 
     #[test]

@@ -1,0 +1,50 @@
+set version 26.2R1.7
+set system host-name bench-vsrx-inet
+set system root-authentication ssh-ed25519 "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIREDACTED lab"
+set system login user netconf uid 2000
+set system login user netconf class super-user
+set system login user netconf authentication ssh-ed25519 "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIREDACTED lab"
+set system services netconf ssh
+set system services ssh
+set system management-instance
+set system name-server 192.0.2.2 routing-instance mgmt_junos
+set system name-server 192.0.2.3 routing-instance mgmt_junos
+set system syslog file interactive-commands interactive-commands any
+set system syslog file messages any any
+set system syslog file messages authorization info
+set system syslog file traffic-log any any
+set system syslog file traffic-log match RT_FLOW
+set system license autoupdate url https://ae1.juniper.net/junos/key_retrieval
+set security log mode event
+set security pki ca-profile ISRG_Root_X1 ca-identity ISRG_Root_X1
+set security pki ca-profile ISRG_Root_X1 pre-load
+set security pki ca-profile Lets_Encrypt ca-identity Lets_Encrypt
+set security pki ca-profile Lets_Encrypt enrollment url https://acme-v02.api.letsencrypt.org/directory
+set security screen ids-option untrust-screen icmp ping-death
+set security screen ids-option untrust-screen ip source-route-option
+set security screen ids-option untrust-screen ip tear-drop
+set security screen ids-option untrust-screen tcp syn-flood alarm-threshold 1024
+set security screen ids-option untrust-screen tcp syn-flood attack-threshold 200
+set security screen ids-option untrust-screen tcp syn-flood source-threshold 1024
+set security screen ids-option untrust-screen tcp syn-flood destination-threshold 2048
+set security screen ids-option untrust-screen tcp syn-flood queue-size 2000
+set security screen ids-option untrust-screen tcp syn-flood timeout 20
+set security screen ids-option untrust-screen tcp land
+set security zones security-zone internet interfaces ge-0/0/0.0 host-inbound-traffic system-services ping
+set security zones security-zone internet interfaces ge-0/0/1.0 host-inbound-traffic system-services ping
+set security zones security-zone internet interfaces ge-0/0/2.0 host-inbound-traffic system-services ping
+set security zones security-zone internet interfaces lo0.0 host-inbound-traffic system-services ping
+set security policies from-zone internet to-zone internet policy intra-permit match source-address any
+set security policies from-zone internet to-zone internet policy intra-permit match destination-address any
+set security policies from-zone internet to-zone internet policy intra-permit match application any
+set security policies from-zone internet to-zone internet policy intra-permit then permit
+set security policies from-zone internet to-zone internet policy intra-permit then log session-close
+set security policies default-policy deny-all
+set security policies pre-id-default-policy then log session-close
+set interfaces ge-0/0/0 unit 0 family inet address 10.66.181.1/24
+set interfaces ge-0/0/1 unit 0 family inet address 10.66.182.1/24
+set interfaces ge-0/0/2 unit 0 family inet address 10.66.183.1/24
+set interfaces fxp0 unit 0 family inet address 192.168.1.134/24
+set interfaces lo0 unit 0 family inet address 127.0.0.1/32
+set interfaces lo0 unit 0 family inet address 203.0.113.10/32
+set routing-instances mgmt_junos routing-options static route 0.0.0.0/0 next-hop 192.168.1.1

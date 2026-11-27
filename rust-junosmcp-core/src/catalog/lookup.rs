@@ -271,14 +271,21 @@ impl Catalog {
                 .and_then(|variants| config_entry(variants, res.used))
         };
         let is_list = |path: &str| node(path).is_some_and(|entry| entry.kind == "list");
-        // Direct list children of `parent`, in catalog order.
-        let list_children = |parent: &str| {
-            let below = format!("{parent} ");
+        // Direct children of `parent` on the train, in catalog order.
+        let direct_children = |parent: &str| {
+            let below = child(parent, "");
+            let start = below.clone();
             data.entries
-                .range(below.clone()..)
-                .take_while(move |(candidate, _)| candidate.starts_with(&below))
-                .filter(|(candidate, _)| !candidate[parent.len() + 1..].contains(' '))
+                .range(start.clone()..)
+                .take_while(move |(candidate, _)| candidate.starts_with(&start))
+                .filter(move |(candidate, variants)| {
+                    !candidate[below.len()..].contains(' ')
+                        && config_entry(variants, res.used).is_some()
+                })
                 .map(|(candidate, _)| candidate.clone())
+        };
+        let list_children = |parent: &str| {
+            direct_children(parent)
                 .filter(|candidate| is_list(candidate))
                 .collect::<Vec<_>>()
         };
@@ -289,7 +296,17 @@ impl Catalog {
             let token = path[index];
             let next = path.get(index + 1).copied();
 
-            let named = child(&current, token);
+            let mut named = child(&current, token);
+            if node(&named).is_none() {
+                // YANG renames some CLI keywords to avoid clashes: CLI `match`
+                // under a NAT rule is `src-nat-rule-match`.
+                let suffix = format!("-{token}");
+                if let Some(renamed) =
+                    direct_children(&current).find(|candidate| candidate.ends_with(&suffix))
+                {
+                    named = renamed;
+                }
+            }
             if let Some(entry) = node(&named) {
                 if entry.kind != "list" && entry.kind != "container" {
                     return true;
@@ -329,11 +346,21 @@ impl Catalog {
                 let next_fits = next.is_none_or(|next| node(&child(&list, next)).is_some());
                 next_fits.then_some((list, 1))
             });
-            let Some((list, consumed)) = elided else {
+            if let Some((list, consumed)) = elided {
+                current = list;
+                index += consumed;
+                continue;
+            }
+            // A positional leaf value: Junos omits the keyword of some leaves
+            // (`storm-control default` for `storm-control profile-name
+            // default`, `traceoptions file f1`, `default-policy deny-all`).
+            let has_leaf = direct_children(&current)
+                .any(|candidate| node(&candidate).is_some_and(|entry| entry.kind == "leaf"));
+            let next_fits = next.is_none_or(|next| node(&child(&current, next)).is_some());
+            if !(has_leaf && next_fits) {
                 return false;
-            };
-            current = list;
-            index += consumed;
+            }
+            index += 1;
         }
         true
     }

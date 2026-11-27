@@ -6,6 +6,7 @@
 
 mod lookup;
 mod version;
+mod write_check;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
@@ -19,6 +20,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub use lookup::{ConfigHit, RpcHit};
 pub use version::{Family, Train, family_for, train_for};
+pub use write_check::check_config_paths;
 
 use crate::error::JmcpError;
 

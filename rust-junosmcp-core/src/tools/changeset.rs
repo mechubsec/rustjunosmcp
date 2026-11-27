@@ -9,6 +9,7 @@ use crate::error::JmcpError;
 use crate::helpers::excerpt;
 use crate::junos_transaction::{JunosAction, JunosTransaction};
 use crate::policy::{BlocklistDomain, Decision, Policy};
+use crate::tools::lookup_api::DeviceTrainCache;
 use mecmcp_audit::Attribution;
 use mecmcp_changeset::{
     ApproverIdentity, ChangesetCoordinator, CommitOptions, DeviceTransaction as _, OwnerSubject,
@@ -18,6 +19,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
+
+/// How long create waits for the device's facts for the API catalog check.
+const CATALOG_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Arguments for `create_junos_change_set`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -528,6 +532,7 @@ pub async fn create_change_set(
         owner_subject,
         CancellationToken::new(),
         false,
+        &DeviceTrainCache::default(),
     )
     .await
 }
@@ -556,6 +561,7 @@ pub async fn create_change_set_with_cancel(
     owner_subject: Option<rust_junosmcp_auth::OidcSubject>,
     _ct: CancellationToken,
     allow_plane_owned_writes: bool,
+    train_cache: &DeviceTrainCache,
 ) -> Result<Value, JmcpError> {
     // Validate the device exists, and capture its config authority for the
     // plane-owned rollback guard below (dropped at the end of this block;
@@ -763,6 +769,26 @@ pub async fn create_change_set_with_cancel(
         // Rollback actions do not need policy checks - they reference pre-existing config.
     }
 
+    // Reject configuration paths the device's release does not have before
+    // anything is persisted or a reviewer spends an approval on them.
+    let config_payloads = args
+        .actions
+        .iter()
+        .filter_map(|action| action.payload.as_ref())
+        .map(|payload| {
+            crate::helpers::build_config_payload(payload.text.clone(), payload.format.as_deref())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let catalog_warnings = train_cache
+        .check_write(
+            &dm,
+            &args.device,
+            &config_payloads,
+            CATALOG_CHECK_TIMEOUT,
+            true,
+        )
+        .await?;
+
     // The coordinator's create_change_set computes the digest over
     // (owner, device, expected_fingerprint, actions). It persists the plan
     // and returns the change_set_id and plan_digest.
@@ -835,6 +861,7 @@ pub async fn create_change_set_with_cancel(
                 .expect("json! macro produces an object here")
                 .insert("commit0_attribution".to_string(), commit0);
         }
+        crate::helpers::add_warnings(&mut waived_result, &catalog_warnings);
         return Ok(waived_result);
     }
 
@@ -850,6 +877,7 @@ pub async fn create_change_set_with_cancel(
             .expect("json! macro produces an object here")
             .insert("commit0_attribution".to_string(), commit0);
     }
+    crate::helpers::add_warnings(&mut created_result, &catalog_warnings);
     Ok(created_result)
 }
 
@@ -3247,6 +3275,7 @@ mod tests {
             None,
             CancellationToken::new(),
             allow_plane_owned_writes,
+            &DeviceTrainCache::default(),
         )
         .await
     }

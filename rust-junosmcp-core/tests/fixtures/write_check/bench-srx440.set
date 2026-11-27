@@ -1,0 +1,155 @@
+set version 25.4X300-D40.2-EVO
+set system host-name bench-srx440
+set system login user netconf uid 2003
+set system login user netconf class super-user
+set system login user netconf authentication ssh-ed25519 "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIREDACTED lab"
+set system syslog file interactive-commands interactive-commands any
+set system syslog file messages any notice
+set system syslog file messages authorization info
+set system syslog file traffic-log any any
+set system syslog file traffic-log match RT_FLOW
+set system services netconf ssh
+set system services ssh root-login allow
+set system management-instance
+set system name-server 192.0.2.2 routing-instance mgmt_junos
+set system name-server 192.0.2.3 routing-instance mgmt_junos
+set security log mode event
+set security pki ca-profile ISRG_Root_X1 ca-identity ISRG_Root_X1
+set security pki ca-profile ISRG_Root_X1 pre-load
+set security pki ca-profile Lets_Encrypt ca-identity Lets_Encrypt
+set security pki ca-profile Lets_Encrypt enrollment url https://acme-v02.api.letsencrypt.org/directory
+set security ike proposal ike-aes256gcm dh-group group20
+set security ike proposal ike-aes256gcm encryption-algorithm aes-256-gcm
+set security ike proposal ike-aes256gcm lifetime-seconds 28800
+set security ike policy ike-pol-hub proposals ike-aes256gcm
+set security ike gateway gw-hub ike-policy ike-pol-hub
+set security ike gateway gw-hub address 10.66.181.2
+set security ike gateway gw-hub dead-peer-detection probe-idle-tunnel
+set security ike gateway gw-hub dead-peer-detection interval 10
+set security ike gateway gw-hub dead-peer-detection threshold 5
+set security ike gateway gw-hub external-interface ge-0/0/0.0
+set security ike gateway gw-hub version v2-only
+set security ipsec proposal esp-aes256gcm protocol esp
+set security ipsec proposal esp-aes256gcm encryption-algorithm aes-256-gcm
+set security ipsec proposal esp-aes256gcm lifetime-seconds 3600
+set security ipsec policy ipsec-pol perfect-forward-secrecy keys group20
+set security ipsec policy ipsec-pol proposals esp-aes256gcm
+set security ipsec vpn vpn-hub bind-interface st0.1
+set security ipsec vpn vpn-hub ike gateway gw-hub
+set security ipsec vpn vpn-hub ike ipsec-policy ipsec-pol
+set security ipsec vpn vpn-hub establish-tunnels immediately
+set security address-book global address hq-servers 10.66.161.0/24
+set security address-book global address hq-dmz 10.66.162.0/24
+set security address-book global address br1-users 10.66.151.0/24
+set security address-book global address br1-iot 10.66.152.0/24
+set security address-book global address br2-users 10.66.171.0/24
+set security address-book global address-set lab-hosts address hq-servers
+set security address-book global address-set lab-hosts address hq-dmz
+set security address-book global address-set lab-hosts address br1-users
+set security address-book global address-set lab-hosts address br2-users
+set security flow tcp-mss ipsec-vpn mss 1350
+set security screen ids-option untrust-screen ip source-route-option
+set security screen ids-option untrust-screen ip tear-drop
+set security screen ids-option untrust-screen tcp syn-flood alarm-threshold 1024
+set security screen ids-option untrust-screen tcp syn-flood attack-threshold 200
+set security screen ids-option untrust-screen tcp syn-flood source-threshold 1024
+set security screen ids-option untrust-screen tcp syn-flood destination-threshold 2048
+set security screen ids-option untrust-screen tcp syn-flood timeout 20
+set security screen ids-option untrust-screen tcp land
+set security nat source rule-set trust-to-untrust from zone trust
+set security nat source rule-set trust-to-untrust to zone untrust
+set security nat source rule-set trust-to-untrust rule snat match source-address 0.0.0.0/0
+set security nat source rule-set trust-to-untrust rule snat then source-nat interface
+set security policies from-zone trust to-zone vpn policy permit-lab match source-address lab-hosts
+set security policies from-zone trust to-zone vpn policy permit-lab match destination-address lab-hosts
+set security policies from-zone trust to-zone vpn policy permit-lab match application lab-apps
+set security policies from-zone trust to-zone vpn policy permit-lab then permit
+set security policies from-zone trust to-zone vpn policy permit-lab then log session-close
+set security policies from-zone trust to-zone vpn policy deny-all match source-address any
+set security policies from-zone trust to-zone vpn policy deny-all match destination-address any
+set security policies from-zone trust to-zone vpn policy deny-all match application any
+set security policies from-zone trust to-zone vpn policy deny-all then deny
+set security policies from-zone trust to-zone vpn policy deny-all then log session-init
+set security policies from-zone vpn to-zone trust policy permit-lab match source-address lab-hosts
+set security policies from-zone vpn to-zone trust policy permit-lab match destination-address lab-hosts
+set security policies from-zone vpn to-zone trust policy permit-lab match application lab-apps
+set security policies from-zone vpn to-zone trust policy permit-lab then permit
+set security policies from-zone vpn to-zone trust policy permit-lab then log session-close
+set security policies from-zone vpn to-zone trust policy deny-all match source-address any
+set security policies from-zone vpn to-zone trust policy deny-all match destination-address any
+set security policies from-zone vpn to-zone trust policy deny-all match application any
+set security policies from-zone vpn to-zone trust policy deny-all then deny
+set security policies from-zone vpn to-zone trust policy deny-all then log session-init
+set security policies from-zone trust to-zone untrust policy permit-inet match source-address any
+set security policies from-zone trust to-zone untrust policy permit-inet match destination-address any
+set security policies from-zone trust to-zone untrust policy permit-inet match application junos-https
+set security policies from-zone trust to-zone untrust policy permit-inet match application junos-icmp-all
+set security policies from-zone trust to-zone untrust policy permit-inet then permit
+set security policies from-zone trust to-zone untrust policy permit-inet then log session-close
+set security policies from-zone trust to-zone untrust policy deny-all match source-address any
+set security policies from-zone trust to-zone untrust policy deny-all match destination-address any
+set security policies from-zone trust to-zone untrust policy deny-all match application any
+set security policies from-zone trust to-zone untrust policy deny-all then deny
+set security policies from-zone trust to-zone untrust policy deny-all then log session-init
+set security policies from-zone trust to-zone trust policy deny-all match source-address any
+set security policies from-zone trust to-zone trust policy deny-all match destination-address any
+set security policies from-zone trust to-zone trust policy deny-all match application any
+set security policies from-zone trust to-zone trust policy deny-all then deny
+set security policies from-zone trust to-zone trust policy deny-all then log session-init
+set security policies from-zone untrust to-zone trust policy deny-all match source-address any
+set security policies from-zone untrust to-zone trust policy deny-all match destination-address any
+set security policies from-zone untrust to-zone trust policy deny-all match application any
+set security policies from-zone untrust to-zone trust policy deny-all then deny
+set security policies from-zone untrust to-zone trust policy deny-all then log session-init
+set security policies from-zone untrust to-zone untrust policy deny-all match source-address any
+set security policies from-zone untrust to-zone untrust policy deny-all match destination-address any
+set security policies from-zone untrust to-zone untrust policy deny-all match application any
+set security policies from-zone untrust to-zone untrust policy deny-all then deny
+set security policies from-zone untrust to-zone untrust policy deny-all then log session-init
+set security policies from-zone untrust to-zone vpn policy deny-all match source-address any
+set security policies from-zone untrust to-zone vpn policy deny-all match destination-address any
+set security policies from-zone untrust to-zone vpn policy deny-all match application any
+set security policies from-zone untrust to-zone vpn policy deny-all then deny
+set security policies from-zone untrust to-zone vpn policy deny-all then log session-init
+set security policies from-zone vpn to-zone untrust policy deny-all match source-address any
+set security policies from-zone vpn to-zone untrust policy deny-all match destination-address any
+set security policies from-zone vpn to-zone untrust policy deny-all match application any
+set security policies from-zone vpn to-zone untrust policy deny-all then deny
+set security policies from-zone vpn to-zone untrust policy deny-all then log session-init
+set security policies from-zone vpn to-zone vpn policy deny-all match source-address any
+set security policies from-zone vpn to-zone vpn policy deny-all match destination-address any
+set security policies from-zone vpn to-zone vpn policy deny-all match application any
+set security policies from-zone vpn to-zone vpn policy deny-all then deny
+set security policies from-zone vpn to-zone vpn policy deny-all then log session-init
+set security policies default-policy deny-all
+set security policies pre-id-default-policy then log session-close
+set security zones security-zone vpn interfaces st0.1 host-inbound-traffic system-services ping
+set security zones security-zone trust interfaces ge-0/0/1.151 host-inbound-traffic system-services ping
+set security zones security-zone trust interfaces ge-0/0/1.152 host-inbound-traffic system-services ping
+set security zones security-zone untrust screen untrust-screen
+set security zones security-zone untrust interfaces ge-0/0/0.0 host-inbound-traffic system-services ike
+set security zones security-zone untrust interfaces ge-0/0/0.0 host-inbound-traffic system-services ping
+set interfaces ge-0/0/0 unit 0 family inet address 10.66.182.2/24
+set interfaces ge-0/0/1 vlan-tagging
+set interfaces ge-0/0/1 unit 151 vlan-id 151
+set interfaces ge-0/0/1 unit 151 family inet address 10.66.151.1/24
+set interfaces ge-0/0/1 unit 152 vlan-id 152
+set interfaces ge-0/0/1 unit 152 family inet address 10.66.152.1/24
+set interfaces ge-0/0/2 unit 0
+set interfaces ge-0/0/4 unit 0
+set interfaces ge-0/0/5 unit 0
+set interfaces ge-0/0/6 unit 0
+set interfaces ge-0/0/7 unit 0
+set interfaces ge-0/0/8 unit 0
+set interfaces ge-0/0/9 unit 0
+set interfaces lo0 unit 0 family inet address 127.0.0.1/32
+set interfaces re0:mgmt-0 unit 0 family inet address 192.168.1.75/24
+set interfaces st0 unit 1 family inet address 10.66.250.2/30
+set routing-instances mgmt_junos routing-options static route 0.0.0.0/0 next-hop 192.168.1.1
+set applications application-set lab-apps application junos-icmp-all
+set applications application-set lab-apps application junos-ssh
+set applications application-set lab-apps application junos-https
+set routing-options static route 0.0.0.0/0 next-hop 10.66.182.1
+set routing-options static route 10.66.161.0/24 next-hop st0.1
+set routing-options static route 10.66.162.0/24 next-hop st0.1
+set routing-options static route 10.66.171.0/24 next-hop st0.1

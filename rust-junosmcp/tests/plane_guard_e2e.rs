@@ -236,10 +236,39 @@ fn declared_sdc_security_diff_is_refused_reverted_and_unlocked() {
     assert!(diff < revert && revert < unlock, "{requests:?}");
 }
 
+/// `script` answering facts as a real SRX345 release the API catalog covers.
+fn srx345_script(diff: &str) -> Script {
+    let mut entries = script(NO_STANZA, diff);
+    entries.insert(
+        0,
+        (
+            "get-software-information",
+            "<software-information><host-name>fake</host-name><product-model>srx345</product-model><junos-version>25.4R1-S2.3</junos-version></software-information>".to_string(),
+        ),
+    );
+    entries
+}
+
+#[test]
+fn a_path_the_release_lacks_is_refused_before_the_candidate_is_touched() {
+    let (fake, mut server, _dir) = start(srx345_script(INTERFACE_DIFF), None, &[]);
+    let resp = call_tool(
+        &mut server,
+        "load_and_commit_config",
+        json!({ "device": "fake", "config_text": "set system name-serverz 192.0.2.53", "config_format": "set" }),
+    );
+    assert_eq!(resp.get("isError"), Some(&json!(true)), "{resp}");
+    assert!(resp.to_string().contains("system name-server"), "{resp}");
+    assert!(!fake.saw("<nc:lock>"), "{:?}", fake.requests());
+    assert!(!fake.saw("<nc:load-configuration"), "{:?}", fake.requests());
+}
+
 #[test]
 fn declared_sdc_interface_diff_commits() {
+    // A real model and release, so the API catalog checks the load and adds
+    // no "not checked" warning.
     let (fake, mut server, _dir) = start(
-        script(NO_STANZA, INTERFACE_DIFF),
+        srx345_script(INTERFACE_DIFF),
         Some("security-director-cloud"),
         &[],
     );

@@ -1,7 +1,7 @@
 //! `lookup_junos_api` — look up an RPC or configuration path in the embedded
 //! Junos API catalog for a device's Family and Release train.
 
-use crate::catalog::{Catalog, Family, Train, family_for, train_for};
+use crate::catalog::{Catalog, Family, Train, check_config_paths, family_for, train_for};
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
 use schemars::JsonSchema;
@@ -127,6 +127,86 @@ impl DeviceTrainCache {
     }
 }
 
+impl DeviceTrainCache {
+    /// Checks the configuration paths of each payload against `router`'s
+    /// Family and train before a write (see [`check_config_paths`]): an
+    /// unknown path is an error on an exact catalog match and a warning
+    /// otherwise.
+    ///
+    /// A device whose facts cannot be read, or whose model or release the
+    /// catalog does not cover, is not blocked: the check is skipped with a
+    /// warning and the device validates the load itself. A device that cannot
+    /// be opened is skipped the same way when `skip_unreachable` (a change-set
+    /// plan, which needs no device); otherwise it fails here with the error the
+    /// write's own open would hit, rather than retrying the connect twice.
+    pub async fn check_write(
+        &self,
+        dm: &Arc<DeviceManager>,
+        router: &str,
+        payloads: &[rustez::ConfigPayload],
+        timeout: Duration,
+        skip_unreachable: bool,
+    ) -> Result<Vec<String>, JmcpError> {
+        // A declared Mist device is refused before any connect by the write's
+        // plane guard; opening it here first would break that promise.
+        if payloads.is_empty()
+            || dm.inventory().get(router)?.config_authority
+                == crate::config_authority::JunosAuthority::Mist
+        {
+            return Ok(Vec::new());
+        }
+        let detected = match self.get(router) {
+            Some(detected) => Ok(detected),
+            None => {
+                let opened = tokio::time::timeout(timeout, dm.open(router))
+                    .await
+                    .map_err(|_| JmcpError::Timeout(timeout))
+                    .and_then(|opened| opened);
+                let mut dev = match opened {
+                    Ok(dev) => dev,
+                    Err(JmcpError::UnknownRouter(name)) => {
+                        return Err(JmcpError::UnknownRouter(name));
+                    }
+                    Err(error) if !skip_unreachable => return Err(error),
+                    Err(error) => return Ok(vec![skipped_warning(router, &error)]),
+                };
+                let facts = match tokio::time::timeout(timeout, dev.facts()).await {
+                    Ok(Ok(facts)) => Ok((facts.model.clone(), facts.version.clone())),
+                    Ok(Err(error)) => Err(JmcpError::from(error)),
+                    Err(_) => Err(JmcpError::Timeout(timeout)),
+                };
+                if facts.is_err() {
+                    // A failed or dropped RPC leaves the session in an unknown state.
+                    dev.prevent_reuse();
+                }
+                facts.and_then(|(model, version)| detect_from_facts(router, &model, &version))
+            }
+        };
+        let (family, train, exact_family) = match detected {
+            Ok(detected) => {
+                self.put(router, detected);
+                detected
+            }
+            Err(error) => return Ok(vec![skipped_warning(router, &error)]),
+        };
+        let catalog = Catalog::embedded();
+        let resolution = catalog.resolve(family, train, exact_family);
+        let mut warnings = Vec::new();
+        for payload in payloads {
+            warnings.extend(check_config_paths(catalog, &resolution, payload)?);
+        }
+        Ok(warnings)
+    }
+}
+
+fn skipped_warning(router: &str, error: &JmcpError) -> String {
+    tracing::warn!(router, %error, "API catalog write check skipped");
+    format!(
+        "configuration paths were not checked against the API catalog: the family and \
+         release of {router} could not be determined"
+    )
+}
+
 /// Maps a device's facts to its `(Family, Train, true)`, or a validation
 /// error when the model or release is outside the catalog.
 pub fn detect_from_facts(router: &str, model: &str, version: &str) -> Result<Detected, JmcpError> {
@@ -232,6 +312,59 @@ mod tests {
         assert_eq!(family("SRX345", "24.4R1.9"), Family::JunosEs);
         assert_eq!(family("EX2300-24T", "23.4R2-S1.3"), Family::JunosEx);
         assert_eq!(family("SRX440", "25.4X300-D40.2-EVO"), Family::JunosEvo);
+    }
+
+    #[tokio::test]
+    async fn check_write_rejects_on_exact_train_and_fails_unreachable_devices() {
+        let payload = [rustez::ConfigPayload::Set("set securty policies".into())];
+        let seeded = DeviceTrainCache::default();
+        seeded.put(
+            "r1",
+            (
+                Family::JunosEs,
+                Train {
+                    major: 25,
+                    minor: 4,
+                },
+                true,
+            ),
+        );
+        let error = seeded
+            .check_write(&manager(), "r1", &payload, Duration::from_secs(5), false)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("set securty policies"), "{error}");
+
+        // An unreachable device fails as the write's own open would.
+        let unseeded = DeviceTrainCache::default();
+        let error = unseeded
+            .check_write(&manager(), "r1", &payload, Duration::from_secs(1), false)
+            .await
+            .unwrap_err();
+        assert!(!matches!(error, JmcpError::Validation(_)), "{error:?}");
+        // A change-set plan needs no device, so it is only warned.
+        let warnings = unseeded
+            .check_write(&manager(), "r1", &payload, Duration::from_secs(1), true)
+            .await
+            .unwrap();
+        assert!(
+            warnings.len() == 1 && warnings[0].contains("not checked"),
+            "{warnings:?}"
+        );
+        assert!(matches!(
+            unseeded
+                .check_write(&manager(), "nope", &payload, Duration::from_secs(5), false)
+                .await,
+            Err(JmcpError::UnknownRouter(_))
+        ));
+        assert!(
+            unseeded
+                .check_write(&manager(), "nope", &[], Duration::from_secs(5), false)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

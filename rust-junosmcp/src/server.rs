@@ -1338,6 +1338,7 @@ impl JmcpHandler {
             self.policy.load_full(),
             self.allow_plane_owned_writes,
             ct,
+            &self.train_cache,
         )
         .await;
         match &result {
@@ -1387,6 +1388,7 @@ impl JmcpHandler {
             self.policy.load_full(),
             self.allow_plane_owned_writes,
             ct,
+            &self.train_cache,
         )
         .await;
         match &result {
@@ -1668,6 +1670,7 @@ impl JmcpHandler {
             self.policy.load_full(),
             self.allow_plane_owned_writes,
             ct,
+            &self.train_cache,
         )
         .await;
         match &result {
@@ -1999,6 +2002,7 @@ impl JmcpHandler {
             owner_subject,
             ct,
             self.allow_plane_owned_writes,
+            &self.train_cache,
         )
         .await;
         match &result {
