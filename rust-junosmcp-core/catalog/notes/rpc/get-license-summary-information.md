@@ -9,7 +9,3 @@
 ## Version gotchas
 
 - None verified.
-
-## Reference
-
-https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-system-license.html

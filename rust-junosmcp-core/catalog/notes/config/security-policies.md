@@ -10,7 +10,3 @@
 ## Version gotchas
 
 - SRX on Junos OS Evolved (SRX440): Juniper publishes no SRX EVO YANG; the server answers from junos-es.
-
-## Reference
-
-https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/policies-security-edit.html

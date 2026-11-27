@@ -14,4 +14,4 @@
 
 ## Reference
 
-https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/management-instance.html
+https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/management-instance-edit-system.html

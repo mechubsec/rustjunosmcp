@@ -14,4 +14,4 @@
 
 ## Reference
 
-https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces.html
+https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/command/show-interfaces-terse.html
