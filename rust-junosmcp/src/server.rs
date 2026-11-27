@@ -20,11 +20,11 @@ use rust_junosmcp_core::{
     tools::{
         AddDeviceArgs, CommitCheckArgs, ConfigDiffArgs, ConfirmCommitArgs, DiscardCandidateArgs,
         ExecuteBatchArgs, ExecuteCommandArgs, ExecutePfeArgs, FetchFileArgs, GatherFactsArgs,
-        GetConfigArgs, ListStagedFilesArgs, LoadCommitArgs, ReloadDevicesArgs, RollbackConfigArgs,
-        TemplateArgs, TransferFileArgs, UpgradeJunosArgs, add_device, batch, changeset,
-        commit_check, config_diff, confirm_commit, discard_candidate, execute_command, facts,
-        fetch_file, get_config, list_staged_files, load_commit, pfe, reload_devices,
-        rollback_config, router_list, template, transfer_file, upgrade_junos,
+        GetConfigArgs, ListStagedFilesArgs, LoadCommitArgs, LookupApiArgs, ReloadDevicesArgs,
+        RollbackConfigArgs, TemplateArgs, TransferFileArgs, UpgradeJunosArgs, add_device, batch,
+        changeset, commit_check, config_diff, confirm_commit, discard_candidate, execute_command,
+        facts, fetch_file, get_config, list_staged_files, load_commit, lookup_api, pfe,
+        reload_devices, rollback_config, router_list, template, transfer_file, upgrade_junos,
     },
 };
 use serde_json::Value;
@@ -235,6 +235,7 @@ const RETRY_SAFE_TOOLS: &[&str] = &[
     "get_srx_security_services_status",
     "junos_config_diff",
     "list_staged_files",
+    "lookup_junos_api",
     "srx_flow_sessions",
     "srx_list_nat_rules",
     "srx_list_policies",
@@ -655,6 +656,8 @@ pub struct JmcpHandler {
     upgrade_cfg: rust_junosmcp_core::UpgradeConfig,
     coordinator: Arc<mecmcp_changeset::ChangesetCoordinator>,
     tool_router: ToolRouter<Self>,
+    /// Family and train of routers, shared by the API-catalog tools.
+    train_cache: Arc<rust_junosmcp_core::tools::lookup_api::DeviceTrainCache>,
     /// Whether to allow destructive operations on plane-owned devices.
     /// Defaults to false (refuse). Set via --allow-plane-owned-writes CLI flag.
     allow_plane_owned_writes: bool,
@@ -721,6 +724,7 @@ impl JmcpHandler {
             upgrade_cfg,
             coordinator,
             tool_router,
+            train_cache: Arc::default(),
             allow_plane_owned_writes,
             web_enabled_approver,
             direct_commit,
@@ -917,6 +921,7 @@ const SERVER_TOOLS: &[&str] = &[
     "get_junos_change_set_status",
     "list_junos_change_sets",
     "get_junos_candidate_fingerprint",
+    "lookup_junos_api",
 ];
 
 #[cfg(test)]
@@ -928,11 +933,12 @@ mod server_tools_const_tests {
     /// Tripwire: changing tool count without updating `SERVER_TOOLS` breaks
     /// the build. Bump this number deliberately when adding/removing tools.
     #[test]
-    fn server_tools_len_is_28() {
+    fn server_tools_len_is_29() {
         // 23 before the candidate-fingerprint tool (#231); 25 with the
         // confirming-commit tool (#239); 26 with list_junos_change_sets (#255);
-        // 27 with cancel_junos_change_set; 28 with confirm_commit (MEC-45).
-        assert_eq!(SERVER_TOOLS.len(), 28);
+        // 27 with cancel_junos_change_set; 28 with confirm_commit (MEC-45);
+        // 29 with lookup_junos_api.
+        assert_eq!(SERVER_TOOLS.len(), 29);
     }
 
     #[test]
@@ -1057,6 +1063,45 @@ impl JmcpHandler {
         }
 
         let result = facts::handle(args, self.dm.clone()).await;
+        match &result {
+            Ok(v) => {
+                audit.meta("output_bytes", v.to_string().len() as u64);
+                audit.succeed();
+            }
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
+        }
+        Self::to_call_result(result)
+    }
+
+    #[tool(
+        name = "lookup_junos_api",
+        description = "Look up a Junos operational RPC or configuration path in the embedded API catalog. Call this BEFORE issuing an RPC or CLI command (execute_junos_command) or writing configuration, instead of guessing RPC names, arguments or config syntax. Results are per Family (junos-es, junos-ex, junos-evo) and Release train (23.1 or later): pass `router` to use the device's own model and version, or `family` + `release` (e.g. junos-es, 24.4) when no device is reachable. `kind` is `rpc` (default) or `config`; `query` is an RPC name, CLI command, config path or keywords. If the result has a `warning`, the answer comes from a nearby train or a guessed family, so verify against the device. Read-only."
+    )]
+    async fn lookup_junos_api(
+        &self,
+        Parameters(args): Parameters<LookupApiArgs>,
+        extensions: Extensions,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let ctx = caller_ctx(&extensions);
+        let mut audit = audit_scope(
+            ctx,
+            "lookup_junos_api",
+            "read",
+            args.router.iter().cloned().collect(),
+        );
+
+        if let Err(e) = self.check_tool_scope(ctx, "lookup_junos_api") {
+            audit.deny("tool_scope");
+            return Self::scope_to_call_result(e);
+        }
+        if let Some(router) = args.router.as_deref()
+            && let Err(e) = self.check_router_scope(ctx, "lookup_junos_api", router)
+        {
+            audit.deny("router_scope");
+            return Self::scope_to_call_result(e);
+        }
+
+        let result = lookup_api::handle(args, self.dm.clone(), &self.train_cache).await;
         match &result {
             Ok(v) => {
                 audit.meta("output_bytes", v.to_string().len() as u64);
@@ -2825,8 +2870,9 @@ mod scope_tests {
         // MEC-54's four SRX policy-read tools (srx_list_policies,
         // srx_resolve_address, srx_resolve_application, srx_list_nat_rules)
         // make 41, and `srx_flow_sessions` + `srx_policy_match` make 43 (MEC-55).
-        // `confirm_commit` makes 44 (MEC-45), `get_srx_feed_status` makes 45 (#528).
-        assert_eq!(names.len(), 45);
+        // `confirm_commit` makes 44 (MEC-45), `get_srx_feed_status` makes 45 (#528),
+        // `lookup_junos_api` makes 46.
+        assert_eq!(names.len(), 46);
     }
 
     #[test]
@@ -2836,8 +2882,8 @@ mod scope_tests {
         // `confirm_junos_change_set` makes 25 (#239),
         // `list_junos_change_sets` makes 26 (#255), and
         // `cancel_junos_change_set` makes 27 (#293), `confirm_commit` makes
-        // 28 (MEC-45).
-        assert_eq!(JmcpHandler::junos_tool_router().list_all().len(), 28);
+        // 28 (MEC-45), `lookup_junos_api` makes 29.
+        assert_eq!(JmcpHandler::junos_tool_router().list_all().len(), 29);
     }
 
     #[test]

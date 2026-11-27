@@ -1571,6 +1571,87 @@
       "additionalProperties": false
     }
   },
+  "lookup_junos_api": {
+    "name": "lookup_junos_api",
+    "description": "Look up a Junos operational RPC or configuration path in the embedded API catalog. Call this BEFORE issuing an RPC or CLI command (execute_junos_command) or writing configuration, instead of guessing RPC names, arguments or config syntax. Results are per Family (junos-es, junos-ex, junos-evo) and Release train (23.1 or later): pass `router` to use the device's own model and version, or `family` + `release` (e.g. junos-es, 24.4) when no device is reachable. `kind` is `rpc` (default) or `config`; `query` is an RPC name, CLI command, config path or keywords. If the result has a `warning`, the answer comes from a nearby train or a guessed family, so verify against the device. Read-only.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "LookupKind": {
+          "description": "What to look up.",
+          "oneOf": [
+            {
+              "description": "An operational RPC (the default).",
+              "type": "string",
+              "const": "rpc"
+            },
+            {
+              "description": "A configuration path.",
+              "type": "string",
+              "const": "config"
+            }
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object",
+      "properties": {
+        "router": {
+          "description": "Inventory name of a device whose model and version select the Family\nand Release train. Use this or `family` + `release`, not both.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "family": {
+          "description": "`junos-es` (SRX), `junos-ex` (EX) or `junos-evo`. Requires `release`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "release": {
+          "description": "A Junos version or train, such as `24.4` or `24.4R2-S1`. Requires `family`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "query": {
+          "description": "An RPC name (`get-arp-table-information`), CLI command (`show arp`),\nconfiguration path (`security policies`) or keywords.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "`rpc` (default) or `config`.",
+          "$ref": "#/$defs/LookupKind"
+        },
+        "limit": {
+          "description": "Maximum hits (default 10, max 50).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "default": null
+        },
+        "timeout": {
+          "description": "Device connection timeout in seconds; only used with `router`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 360
+        }
+      },
+      "additionalProperties": false
+    }
+  },
   "reload_devices": {
     "name": "reload_devices",
     "description": "Reload the inventory. With no args, re-reads the current --device-mapping. With file_name, swaps to a new inventory file. Reports added/removed/changed device names.",

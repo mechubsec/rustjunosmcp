@@ -46,6 +46,7 @@ const JUNOS_TOOLS: &[&str] = &[
     "get_junos_change_set_status",
     "list_junos_change_sets",
     "get_junos_candidate_fingerprint",
+    "lookup_junos_api",
 ];
 
 #[cfg(feature = "srx")]
@@ -194,11 +195,11 @@ fn lists_expected_tools() {
     // `cancel_junos_change_set` adds one more (#293), then execute adds one.
     // MEC-54's four SRX policy-read tools add four more, and
     // `srx_flow_sessions` + `srx_policy_match` add two more (MEC-55), and
-    // `confirm_commit` adds one more (MEC-45), and `get_srx_feed_status` one (#528).
+    // `confirm_commit` adds one more (MEC-45), and `get_srx_feed_status` one (#528), and `lookup_junos_api` one.
     #[cfg(feature = "srx")]
-    assert_eq!(names.len(), 45);
+    assert_eq!(names.len(), 46);
     #[cfg(not(feature = "srx"))]
-    assert_eq!(names.len(), 29);
+    assert_eq!(names.len(), 30);
 }
 
 #[cfg(feature = "srx")]
