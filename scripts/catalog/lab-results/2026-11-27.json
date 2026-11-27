@@ -1,0 +1,784 @@
+{
+  "bench-csrx": {
+    "checks": [
+      {
+        "catalog_output_roots": [
+          "flow-session-information",
+          "multi-routing-engine-results"
+        ],
+        "cli": "show security flow session",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-flow-session-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "multi-routing-engine-results",
+          "security-policies"
+        ],
+        "cli": "show security policies",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-firewall-policies",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "multi-routing-engine-results",
+          "security-associations-information"
+        ],
+        "cli": "show security ipsec security-associations",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-security-associations-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "multi-routing-engine-results",
+          "software-information"
+        ],
+        "cli": "show version",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-software-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "interface-information",
+          "multi-routing-engine-results"
+        ],
+        "cli": "show interfaces",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-interface-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "arp-table-information",
+          "multi-routing-engine-results"
+        ],
+        "cli": "show arp",
+        "display_xml": "error: Tool execution failed: netconf error: RPC error: server error: [OperationFailed] syntax error, expecting <command>",
+        "rpc": "get-arp-table-information",
+        "rpc_error": "Tool execution failed: netconf error: RPC error: server error: [OperationFailed] syntax error, expecting <command>",
+        "rpc_name_got": null,
+        "rpc_name_ok": false,
+        "unsupported_on_device": true
+      },
+      {
+        "catalog_output_roots": [
+          "multi-routing-engine-results",
+          "route-information"
+        ],
+        "cli": "show route",
+        "display_xml": "error: Tool execution failed: netconf error: RPC error: server error: [OperationFailed] syntax error, expecting <command>",
+        "rpc": "get-route-information",
+        "rpc_error": "Tool execution failed: netconf error: RPC error: server error: [OperationFailed] syntax error, expecting <command>",
+        "rpc_name_got": null,
+        "rpc_name_ok": false,
+        "unsupported_on_device": true
+      },
+      {
+        "catalog_output_roots": [
+          "multi-routing-engine-results",
+          "system-uptime-information"
+        ],
+        "cli": "show system uptime",
+        "display_xml": "error: Tool execution failed: netconf error: RPC error: server error: [OperationFailed] \ncommand is not valid on the csrx\n",
+        "rpc": "get-system-uptime-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "chassis-inventory",
+          "multi-routing-engine-results"
+        ],
+        "cli": "show chassis hardware",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-chassis-inventory",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "multi-routing-engine-results",
+          "system-storage-information"
+        ],
+        "cli": "show system storage",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-system-storage",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      }
+    ],
+    "family": "junos-es",
+    "train": "26.2",
+    "version": "26.2R1.7"
+  },
+  "bench-ex2300": {
+    "checks": [
+      {
+        "catalog_output_roots": [
+          "l2ng-l2ald-rtb-macdb"
+        ],
+        "cli": "show ethernet-switching table",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-ethernet-switching-table-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "l2ng-l2ald-vlan-instance-information"
+        ],
+        "cli": "show vlans",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-vlan-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "software-information"
+        ],
+        "cli": "show version",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-software-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "interface-information"
+        ],
+        "cli": "show interfaces",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-interface-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "arp-table-information"
+        ],
+        "cli": "show arp",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-arp-table-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "route-information"
+        ],
+        "cli": "show route",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-route-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "system-uptime-information"
+        ],
+        "cli": "show system uptime",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-system-uptime-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "chassis-inventory"
+        ],
+        "cli": "show chassis hardware",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-chassis-inventory",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "system-storage-information"
+        ],
+        "cli": "show system storage",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-system-storage",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "commit-information"
+        ],
+        "cli": "show system commit",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-commit-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      }
+    ],
+    "family": "junos-ex",
+    "train": "23.4",
+    "version": "23.4R2-S2.1"
+  },
+  "bench-srx1600": {
+    "checks": [
+      {
+        "catalog_output_roots": [
+          "flow-session-information"
+        ],
+        "cli": "show security flow session",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-flow-session-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "security-policies"
+        ],
+        "cli": "show security policies",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-firewall-policies",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "security-associations-information"
+        ],
+        "cli": "show security ipsec security-associations",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-security-associations-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "software-information"
+        ],
+        "cli": "show version",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-software-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "interface-information"
+        ],
+        "cli": "show interfaces",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-interface-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "arp-table-information"
+        ],
+        "cli": "show arp",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-arp-table-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "route-information"
+        ],
+        "cli": "show route",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-route-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "system-uptime-information"
+        ],
+        "cli": "show system uptime",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-system-uptime-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "chassis-inventory"
+        ],
+        "cli": "show chassis hardware",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-chassis-inventory",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "system-storage-information"
+        ],
+        "cli": "show system storage",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-system-storage",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      }
+    ],
+    "family": "junos-es",
+    "train": "25.4",
+    "version": "25.4R1.12"
+  },
+  "bench-srx345": {
+    "checks": [
+      {
+        "catalog_output_roots": [
+          "flow-session-information"
+        ],
+        "cli": "show security flow session",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-flow-session-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "security-policies"
+        ],
+        "cli": "show security policies",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-firewall-policies",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "security-associations-information"
+        ],
+        "cli": "show security ipsec security-associations",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-security-associations-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "software-information"
+        ],
+        "cli": "show version",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-software-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "interface-information"
+        ],
+        "cli": "show interfaces",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-interface-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "arp-table-information"
+        ],
+        "cli": "show arp",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-arp-table-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "route-information"
+        ],
+        "cli": "show route",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-route-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "system-uptime-information"
+        ],
+        "cli": "show system uptime",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-system-uptime-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "chassis-inventory"
+        ],
+        "cli": "show chassis hardware",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-chassis-inventory",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "system-storage-information"
+        ],
+        "cli": "show system storage",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-system-storage",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      }
+    ],
+    "family": "junos-es",
+    "train": "25.4",
+    "version": "25.4R1-S2.3"
+  },
+  "bench-srx440": {
+    "checks": [
+      {
+        "catalog_output_roots": [
+          "flow-session-information"
+        ],
+        "cli": "show security flow session",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-flow-session-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "security-policies"
+        ],
+        "cli": "show security policies",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-firewall-policies",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "security-associations-information"
+        ],
+        "cli": "show security ipsec security-associations",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-security-associations-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "software-information"
+        ],
+        "cli": "show version",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-software-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "interface-information"
+        ],
+        "cli": "show interfaces",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-interface-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "arp-table-information"
+        ],
+        "cli": "show arp",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-arp-table-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "route-information"
+        ],
+        "cli": "show route",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-route-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "system-uptime-information"
+        ],
+        "cli": "show system uptime",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-system-uptime-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "chassis-inventory"
+        ],
+        "cli": "show chassis hardware",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-chassis-inventory",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "system-storage-information"
+        ],
+        "cli": "show system storage",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-system-storage",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      }
+    ],
+    "family": "junos-es",
+    "train": "25.4",
+    "version": "25.4X300-D40.2-EVO"
+  },
+  "bench-vsrx-inet": {
+    "checks": [
+      {
+        "catalog_output_roots": [
+          "flow-session-information",
+          "multi-routing-engine-results"
+        ],
+        "cli": "show security flow session",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-flow-session-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "multi-routing-engine-results",
+          "security-policies"
+        ],
+        "cli": "show security policies",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-firewall-policies",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "multi-routing-engine-results",
+          "security-associations-information"
+        ],
+        "cli": "show security ipsec security-associations",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-security-associations-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "multi-routing-engine-results",
+          "software-information"
+        ],
+        "cli": "show version",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-software-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "interface-information",
+          "multi-routing-engine-results"
+        ],
+        "cli": "show interfaces",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-interface-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "arp-table-information",
+          "multi-routing-engine-results"
+        ],
+        "cli": "show arp",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-arp-table-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "multi-routing-engine-results",
+          "route-information"
+        ],
+        "cli": "show route",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-route-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "multi-routing-engine-results",
+          "system-uptime-information"
+        ],
+        "cli": "show system uptime",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-system-uptime-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "chassis-inventory",
+          "multi-routing-engine-results"
+        ],
+        "cli": "show chassis hardware",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-chassis-inventory",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "multi-routing-engine-results",
+          "system-storage-information"
+        ],
+        "cli": "show system storage",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-system-storage",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      }
+    ],
+    "family": "junos-es",
+    "train": "26.2",
+    "version": "26.2R1.7"
+  }
+}

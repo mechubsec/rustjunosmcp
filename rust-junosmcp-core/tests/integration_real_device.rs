@@ -23,7 +23,10 @@ use rust_junosmcp_core::{
     policy::Policy,
     tools::{
         ConfigDiffArgs, ExecuteBatchArgs, ExecuteCommandArgs, ExecutePfeArgs, GatherFactsArgs,
-        GetConfigArgs, TransferFileArgs, batch, config_diff, execute_command, facts, get_config,
+        GetConfigArgs, TransferFileArgs, batch, config_diff, execute_command,
+        execute_rpc::{self, ExecuteRpcArgs},
+        facts, get_config,
+        lookup_api::DeviceTrainCache,
         pfe, router_list,
     },
 };
@@ -527,4 +530,79 @@ async fn transfer_file_force_false_rejects_diff() {
         ),
         "expected DestExistsDiffers, got: {res:?}"
     );
+}
+
+// --- API catalog lab verification ----------------------------------------
+
+/// Catalog RPCs with a plain `show` CLI that every Junos class answers.
+const CATALOG_PROBES: &[(&str, &str, &str)] = &[
+    (
+        "show version",
+        "get-software-information",
+        "software-information",
+    ),
+    (
+        "show system uptime",
+        "get-system-uptime-information",
+        "system-uptime-information",
+    ),
+    (
+        "show chassis hardware",
+        "get-chassis-inventory",
+        "chassis-inventory",
+    ),
+];
+
+#[tokio::test]
+#[ignore]
+async fn catalog_cli_maps_to_the_catalog_rpc_name() {
+    let inv = build_inv();
+    let dm = Arc::new(DeviceManager::new(inv.clone()));
+    let pol = Arc::new(Policy::build(&inv).unwrap());
+    for (cli, rpc, _) in CATALOG_PROBES {
+        let reply = execute_command::handle(
+            ExecuteCommandArgs {
+                device: "lab".into(),
+                command: format!("{cli} | display xml rpc"),
+                timeout: 30,
+                max_lines: None,
+                max_bytes: None,
+                tail: false,
+            },
+            dm.clone(),
+            pol.clone(),
+        )
+        .await
+        .unwrap();
+        let text = reply.as_str().unwrap();
+        assert!(text.contains(&format!("<{rpc}")), "{cli}: {text}");
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn execute_junos_rpc_reply_root_matches_the_catalog_output() {
+    let inv = build_inv();
+    let dm = Arc::new(DeviceManager::new(inv.clone()));
+    let pol = Arc::new(Policy::build(&inv).unwrap());
+    let cache = DeviceTrainCache::default();
+    for (_, rpc, root) in CATALOG_PROBES {
+        let mut commands = Vec::new();
+        let reply = execute_rpc::handle(
+            ExecuteRpcArgs {
+                device: "lab".into(),
+                rpc: (*rpc).into(),
+                args: Default::default(),
+                timeout: 30,
+            },
+            dm.clone(),
+            pol.clone(),
+            &cache,
+            &mut commands,
+        )
+        .await
+        .unwrap();
+        let xml = reply["output"].as_str().unwrap();
+        assert!(xml.contains(&format!("<{root}")), "{rpc}: {xml}");
+    }
 }

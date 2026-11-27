@@ -9,7 +9,7 @@
 
 ## Version gotchas
 
-- None verified.
+- cSRX 26.2R1.7 (lab-verified 2026-11-27): the CLI has no `show arp` command (`syntax error, expecting <command>`); the RPC is not available on cSRX.
 
 ## Reference
 
