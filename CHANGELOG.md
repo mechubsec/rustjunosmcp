@@ -6,6 +6,8 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+## [2.9.1] - 2026-11-27
+
 ### Fixed
 
 - A confirmed-commit apply that was never confirmed no longer wedges its
