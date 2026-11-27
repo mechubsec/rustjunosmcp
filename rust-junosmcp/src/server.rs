@@ -2169,7 +2169,7 @@ impl JmcpHandler {
 
     #[tool(
         name = "get_junos_change_set_status",
-        description = "Get the status of a change set. 'Applied' means the apply was executed and staged - NOT that the configuration is still live on the device. commit_confirmation, when present, reports awaiting_confirmation (a confirm window is open; rollback_deadline_unix carries the deadline), presumed_auto_reverted (it closed with no confirmation recorded here - only the device settles this), discarded (an operator reconciled it with state resolve), indeterminate (reconciled AS COMMITTED but the window has since closed, which stored state cannot resolve - check the device), or committed. committed means the configuration is live and is also what an ordinary commit reports, so it is not evidence that a confirm window was used."
+        description = "Get the status of a change set. 'Applied' means the apply was executed and staged - NOT that the configuration is still live on the device. commit_confirmation, when present, reports awaiting_confirmation (a confirm window is open; rollback_deadline_unix carries the deadline), presumed_auto_reverted (it closed with no confirmation recorded here and the device has not yet shown the outcome), auto_reverted (the device showed the revert: the commit is superseded and no longer pending, and the candidate is back at its pre-apply fingerprint; operation_state is then discarded and the device is free for the next apply), discarded (an operator reconciled it with state resolve), indeterminate (reconciled AS COMMITTED but the window has since closed, which stored state cannot resolve - check the device), or committed. committed means the configuration is live and is also what an ordinary commit reports, so it is not evidence that a confirm window was used."
     )]
     async fn get_junos_change_set_status(
         &self,
@@ -2192,6 +2192,19 @@ impl JmcpHandler {
             audit.deny("router_scope");
             return Self::scope_to_call_result(e);
         }
+
+        // Settle an expired confirm window from the device before the verdict
+        // is derived, so a verified revert reads `auto_reverted`. Read-only.
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
+        rust_junosmcp_core::changeset_recovery::settle_expired_confirm_windows(
+            &self.dm,
+            &self.coordinator,
+            &args.device,
+            now_unix,
+        )
+        .await;
 
         let result = if self.web_enabled_approver {
             changeset::get_change_set_status_with_actions(args, self.coordinator.clone()).await
