@@ -1692,6 +1692,8 @@ impl JmcpHandler {
         }
 
         let result = reload_devices::handle(args, self.dm.clone(), self.policy.clone()).await;
+        // Inventory may now point names at different devices.
+        self.train_cache.clear();
         let result = match result {
             Ok(v) => {
                 if let Some(added) = v.get("added").and_then(|a| a.as_array())
@@ -1822,6 +1824,7 @@ impl JmcpHandler {
         audit.meta("basename", args.source_path.clone());
         audit.meta("target_version", args.target_version.clone());
         let correlation_id = mint_request_id();
+        let upgraded_device = args.device.clone();
 
         let result = upgrade_junos::handle(
             args,
@@ -1832,6 +1835,8 @@ impl JmcpHandler {
             &mut audit,
         )
         .await;
+        // The device's version changes (or may have, if the upgrade failed late).
+        self.train_cache.invalidate(&[upgraded_device]);
         match &result {
             Ok(_) => audit.succeed(),
             Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),

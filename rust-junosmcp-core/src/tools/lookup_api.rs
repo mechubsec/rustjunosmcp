@@ -79,6 +79,22 @@ impl DeviceTrainCache {
         entries.insert(router.to_owned(), (Instant::now(), detected));
     }
 
+    /// Drops the cached detection for each named router.
+    pub fn invalidate(&self, routers: &[String]) {
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        for router in routers {
+            entries.remove(router);
+        }
+    }
+
+    /// Drops every cached detection.
+    pub fn clear(&self) {
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+
     /// Family and train of `router`, from the cache or else from the device's
     /// facts (model and version), under `timeout`.
     ///
@@ -105,19 +121,25 @@ impl DeviceTrainCache {
             Ok(Err(e)) => return Err(unreachable_error(router, &e.to_string())),
             Err(_) => return Err(unreachable_error(router, "timed out")),
         };
-        let unsupported = || {
-            JmcpError::Validation(format!(
-                "device {router} reports model {model:?} version {version:?}, which the API catalog \
-                 does not cover: families are junos-es, junos-ex, junos-evo and releases are 23.1 or \
-                 later. Pass `family` and `release` to look up a nearby one."
-            ))
-        };
-        let family = family_for(&model, &version).ok_or_else(unsupported)?;
-        let train = train_for(&version).ok_or_else(unsupported)?;
-        let detected = (family, train, true);
+        let detected = detect_from_facts(router, &model, &version)?;
         self.put(router, detected);
         Ok(detected)
     }
+}
+
+/// Maps a device's facts to its `(Family, Train, true)`, or a validation
+/// error when the model or release is outside the catalog.
+pub fn detect_from_facts(router: &str, model: &str, version: &str) -> Result<Detected, JmcpError> {
+    let unsupported = || {
+        JmcpError::Validation(format!(
+            "device {router} reports model {model:?} version {version:?}, which the API catalog \
+             does not cover: families are junos-es, junos-ex, junos-evo and releases are 23.1 or \
+             later. Pass `family` and `release` to look up a nearby one."
+        ))
+    };
+    let family = family_for(model, version).ok_or_else(unsupported)?;
+    let train = train_for(version).ok_or_else(unsupported)?;
+    Ok((family, train, true))
 }
 
 fn unreachable_error(router: &str, why: &str) -> JmcpError {
@@ -200,6 +222,29 @@ mod tests {
         Arc::new(DeviceManager::new(Arc::new(
             Inventory::load(f.path()).unwrap(),
         )))
+    }
+
+    #[test]
+    fn detect_from_facts_maps_models_and_releases() {
+        assert!(detect_from_facts("r", "MX204", "24.4R1.9").is_err());
+        assert!(detect_from_facts("r", "SRX345", "22.4R3.25").is_err());
+        let family = |model, version| detect_from_facts("r", model, version).unwrap().0;
+        assert_eq!(family("SRX345", "24.4R1.9"), Family::JunosEs);
+        assert_eq!(family("EX2300-24T", "23.4R2-S1.3"), Family::JunosEx);
+        assert_eq!(family("SRX440", "25.4X300-D40.2-EVO"), Family::JunosEvo);
+    }
+
+    #[test]
+    fn invalidate_and_clear_drop_entries() {
+        let cache = DeviceTrainCache::default();
+        let detected = detect_from_facts("a", "SRX345", "24.4R1.9").unwrap();
+        for name in ["a", "b", "c"] {
+            cache.put(name, detected);
+        }
+        cache.invalidate(&["a".to_string()]);
+        assert!(cache.get("a").is_none() && cache.get("b").is_some());
+        cache.clear();
+        assert!(cache.get("b").is_none() && cache.get("c").is_none());
     }
 
     fn args(router: Option<&str>, family: Option<&str>, release: Option<&str>) -> LookupApiArgs {
