@@ -6,6 +6,20 @@ All notable user-facing changes are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A confirmed-commit apply that was never confirmed no longer wedges its
+  device. Once the window has been closed for 300 s, `get_junos_change_set_status`
+  and the next `apply_junos_change_set` on the device read the device (commit
+  log and candidate fingerprint, read-only) and settle the operation:
+  `Discarded` when the commit is superseded, no longer pending and the
+  candidate is back at its pre-apply fingerprint, reported as the new
+  `commit_confirmation` value `auto_reverted`; `Committed` when the log shows
+  it confirmed. Anything else is left as it was, so `presumed_auto_reverted`
+  still covers the window before the device has shown the outcome. Previously
+  the operation stayed `committing` and every later apply was refused until
+  `state resolve` was run with the server stopped.
+
 ## [2.9.0] - 2026-11-26
 
 ### Added
