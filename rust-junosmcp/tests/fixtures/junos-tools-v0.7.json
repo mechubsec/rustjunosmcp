@@ -947,6 +947,86 @@
       "additionalProperties": false
     }
   },
+  "execute_junos_rpc": {
+    "name": "execute_junos_rpc",
+    "description": "Call a read-only Junos RPC (name starting with `get-`) known to the API catalog, instead of parsing CLI text. Find the RPC name and its arguments first with lookup_junos_api. `args` maps argument names to a string, or to true for an `empty` flag. Unknown arguments, non-`get-` RPCs and values containing `<`, `>`, `&`, quotes or control characters are refused. The RPC's CLI equivalent (e.g. `show arp`) plus the arguments is checked against the same command allow/blocklist as execute_junos_command. Returns the XML reply, redacted like execute_junos_command output; `warning` is set when the catalog train differs from the device's.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "RpcArgValue": {
+          "description": "One RPC argument: `true`/`false` for an `empty`-typed flag, else text.",
+          "anyOf": [
+            {
+              "description": "A flag argument; `false` is the same as leaving it out.",
+              "type": "boolean"
+            },
+            {
+              "description": "A text argument.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "required": [
+                "device"
+              ]
+            },
+            {
+              "required": [
+                "router_name"
+              ]
+            },
+            {
+              "required": [
+                "router"
+              ]
+            }
+          ]
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "device": {
+          "description": "The name of the device.",
+          "type": "string"
+        },
+        "rpc": {
+          "description": "A read-only RPC name starting with `get-`, such as\n`get-arp-table-information`. Find names and arguments with `lookup_junos_api`.",
+          "type": "string"
+        },
+        "args": {
+          "description": "RPC arguments by element name: `true` for an `empty` flag, a string\nfor the rest. Only arguments the catalog lists for the RPC are accepted.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/RpcArgValue"
+          }
+        },
+        "timeout": {
+          "description": "RPC timeout in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 360
+        },
+        "router_name": {
+          "description": "The name of the device.\n\nAlias for `device`; accepted for backward compatibility.",
+          "type": "string"
+        },
+        "router": {
+          "description": "The name of the device.\n\nAlias for `device`; accepted for backward compatibility.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rpc"
+      ]
+    }
+  },
   "fetch_file": {
     "name": "fetch_file",
     "description": "Download a file from a Junos device's /var/tmp/<basename> to the host staging directory, with sha256 verification. Mirror of transfer_file.",

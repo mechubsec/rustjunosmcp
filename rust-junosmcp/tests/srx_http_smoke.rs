@@ -217,7 +217,7 @@ fn lists_all_known_tools() {
         .filter(|name| !rust_junosmcp_auth::PSEUDO_TOOLS.contains(name))
         .collect();
     assert_eq!(names, expected);
-    assert_eq!(tools.len(), 46);
+    assert_eq!(tools.len(), 47);
     // 28 before Phase 5; the change-set tools took it to 33,
     // `confirm_junos_change_set` makes 34 (#239),
     // `list_junos_change_sets` makes 35 (#255), and
@@ -225,8 +225,8 @@ fn lists_all_known_tools() {
     // MEC-54's four SRX policy-read tools make 41, and
     // `srx_flow_sessions` + `srx_policy_match` make 43 (MEC-55), and
     // `confirm_commit` makes 44 (MEC-45), `get_srx_feed_status` makes 45 (#528),
-    // `lookup_junos_api` makes 46.
-    assert_eq!(names.len(), 46);
+    // `lookup_junos_api` makes 46, `execute_junos_rpc` 47.
+    assert_eq!(names.len(), 47);
 }
 
 #[test]

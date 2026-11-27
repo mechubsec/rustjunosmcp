@@ -10,6 +10,7 @@ pub(crate) mod candidate_transaction;
 pub use candidate_transaction::{
     DEFAULT_CLEANUP_TIMEOUT_SECS, set_cleanup_timeout_secs, worst_case_duration,
 };
+pub use execute_rpc::{ExecuteRpcArgs, RpcArgValue};
 pub use lookup_api::LookupApiArgs;
 pub mod changeset;
 pub mod commit_check;
@@ -17,6 +18,7 @@ pub mod config_diff;
 pub mod confirm_commit;
 pub mod discard_candidate;
 pub mod execute_command;
+pub mod execute_rpc;
 pub mod facts;
 pub mod fetch_file;
 pub mod get_config;

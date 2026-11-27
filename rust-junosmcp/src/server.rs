@@ -19,12 +19,13 @@ use rust_junosmcp_core::{
     progress::ProgressHeartbeat,
     tools::{
         AddDeviceArgs, CommitCheckArgs, ConfigDiffArgs, ConfirmCommitArgs, DiscardCandidateArgs,
-        ExecuteBatchArgs, ExecuteCommandArgs, ExecutePfeArgs, FetchFileArgs, GatherFactsArgs,
-        GetConfigArgs, ListStagedFilesArgs, LoadCommitArgs, LookupApiArgs, ReloadDevicesArgs,
-        RollbackConfigArgs, TemplateArgs, TransferFileArgs, UpgradeJunosArgs, add_device, batch,
-        changeset, commit_check, config_diff, confirm_commit, discard_candidate, execute_command,
-        facts, fetch_file, get_config, list_staged_files, load_commit, lookup_api, pfe,
-        reload_devices, rollback_config, router_list, template, transfer_file, upgrade_junos,
+        ExecuteBatchArgs, ExecuteCommandArgs, ExecutePfeArgs, ExecuteRpcArgs, FetchFileArgs,
+        GatherFactsArgs, GetConfigArgs, ListStagedFilesArgs, LoadCommitArgs, LookupApiArgs,
+        ReloadDevicesArgs, RollbackConfigArgs, TemplateArgs, TransferFileArgs, UpgradeJunosArgs,
+        add_device, batch, changeset, commit_check, config_diff, confirm_commit, discard_candidate,
+        execute_command, execute_rpc, facts, fetch_file, get_config, list_staged_files,
+        load_commit, lookup_api, pfe, reload_devices, rollback_config, router_list, template,
+        transfer_file, upgrade_junos,
     },
 };
 use serde_json::Value;
@@ -922,6 +923,7 @@ const SERVER_TOOLS: &[&str] = &[
     "list_junos_change_sets",
     "get_junos_candidate_fingerprint",
     "lookup_junos_api",
+    "execute_junos_rpc",
 ];
 
 #[cfg(test)]
@@ -933,12 +935,12 @@ mod server_tools_const_tests {
     /// Tripwire: changing tool count without updating `SERVER_TOOLS` breaks
     /// the build. Bump this number deliberately when adding/removing tools.
     #[test]
-    fn server_tools_len_is_29() {
+    fn server_tools_len_is_30() {
         // 23 before the candidate-fingerprint tool (#231); 25 with the
         // confirming-commit tool (#239); 26 with list_junos_change_sets (#255);
         // 27 with cancel_junos_change_set; 28 with confirm_commit (MEC-45);
-        // 29 with lookup_junos_api.
-        assert_eq!(SERVER_TOOLS.len(), 29);
+        // 29 with lookup_junos_api; 30 with execute_junos_rpc.
+        assert_eq!(SERVER_TOOLS.len(), 30);
     }
 
     #[test]
@@ -1102,6 +1104,57 @@ impl JmcpHandler {
         }
 
         let result = lookup_api::handle(args, self.dm.clone(), &self.train_cache).await;
+        match &result {
+            Ok(v) => {
+                audit.meta("output_bytes", v.to_string().len() as u64);
+                audit.succeed();
+            }
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
+        }
+        Self::to_call_result(result)
+    }
+
+    #[tool(
+        name = "execute_junos_rpc",
+        description = "Call a read-only Junos RPC (name starting with `get-`) known to the API catalog, instead of parsing CLI text. Find the RPC name and its arguments first with lookup_junos_api. `args` maps argument names to a string, or to true for an `empty` flag. Unknown arguments, non-`get-` RPCs and values containing `<`, `>`, `&`, quotes or control characters are refused. The RPC's CLI equivalent (e.g. `show arp`) plus the arguments is checked against the same command allow/blocklist as execute_junos_command. Returns the XML reply, redacted like execute_junos_command output; `warning` is set when the catalog train differs from the device's."
+    )]
+    async fn execute_junos_rpc(
+        &self,
+        Parameters(args): Parameters<ExecuteRpcArgs>,
+        extensions: Extensions,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let ctx = caller_ctx(&extensions);
+        let mut audit = audit_scope(
+            ctx,
+            "execute_junos_rpc",
+            "execute",
+            vec![args.device.clone()],
+        );
+
+        if let Err(e) = self.check_tool_scope(ctx, "execute_junos_rpc") {
+            audit.deny("tool_scope");
+            return Self::scope_to_call_result(e);
+        }
+        if let Err(e) = self.check_router_scope(ctx, "execute_junos_rpc", &args.device) {
+            audit.deny("router_scope");
+            return Self::scope_to_call_result(e);
+        }
+        audit.meta("command", args.rpc.clone());
+
+        let result = execute_rpc::handle(
+            args,
+            self.dm.clone(),
+            self.policy.load_full(),
+            &self.train_cache,
+        )
+        .await
+        .map(|mut value| {
+            // The reply is device output: redact it as execute_junos_command does.
+            if let Some(Value::String(xml)) = value.get_mut("output") {
+                *xml = redact_body(xml);
+            }
+            value
+        });
         match &result {
             Ok(v) => {
                 audit.meta("output_bytes", v.to_string().len() as u64);
@@ -2876,8 +2929,8 @@ mod scope_tests {
         // srx_resolve_address, srx_resolve_application, srx_list_nat_rules)
         // make 41, and `srx_flow_sessions` + `srx_policy_match` make 43 (MEC-55).
         // `confirm_commit` makes 44 (MEC-45), `get_srx_feed_status` makes 45 (#528),
-        // `lookup_junos_api` makes 46.
-        assert_eq!(names.len(), 46);
+        // `lookup_junos_api` makes 46, `execute_junos_rpc` 47.
+        assert_eq!(names.len(), 47);
     }
 
     #[test]
@@ -2887,8 +2940,8 @@ mod scope_tests {
         // `confirm_junos_change_set` makes 25 (#239),
         // `list_junos_change_sets` makes 26 (#255), and
         // `cancel_junos_change_set` makes 27 (#293), `confirm_commit` makes
-        // 28 (MEC-45), `lookup_junos_api` makes 29.
-        assert_eq!(JmcpHandler::junos_tool_router().list_all().len(), 29);
+        // 28 (MEC-45), `lookup_junos_api` makes 29, `execute_junos_rpc` 30.
+        assert_eq!(JmcpHandler::junos_tool_router().list_all().len(), 30);
     }
 
     #[test]

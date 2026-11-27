@@ -45,6 +45,12 @@ fn start(script: Script) -> (FakeNetconf, StdioChild, tempfile::TempDir) {
         "netconf",
         key.to_str().unwrap(),
     )]);
+    // Commands are fail-closed by default; `show version` is the CLI form of
+    // the one RPC the tests call.
+    let mut devices: Value =
+        serde_json::from_slice(&std::fs::read(inventory.path()).unwrap()).unwrap();
+    devices["_blocklist_defaults"] = json!({ "mode": "allowlist", "allow": ["show version"] });
+    std::fs::write(inventory.path(), devices.to_string()).unwrap();
     let server = spawn_stdio_server_with_protocol(
         &[
             "-f",
@@ -144,4 +150,34 @@ fn commit_rpc_error_is_an_error() {
     let rollback = position(r#"<nc:load-configuration rollback="0"/>"#);
     let unlock = position("<nc:unlock>");
     assert!(commit < rollback && rollback < unlock, "{requests:?}");
+}
+
+/// Facts reply that the API catalog can place: an SRX on 24.4.
+const SRX_VERSION_REPLY: &str = "<software-information><host-name>fake</host-name><product-model>SRX345</product-model><junos-version>24.4R1.9</junos-version></software-information>";
+
+#[test]
+fn rpc_get_software_information_returns_reply() {
+    let (fake, mut server, _dir) = start(script(vec![(
+        "get-software-information",
+        SRX_VERSION_REPLY.to_string(),
+    )]));
+    let resp = call_tool(
+        &mut server,
+        "execute_junos_rpc",
+        json!({ "device": "fake", "rpc": "get-software-information" }),
+    );
+    assert_ne!(resp.get("isError"), Some(&json!(true)), "{resp}");
+    assert_eq!(resp["rpc"], "get-software-information", "{resp}");
+    assert_eq!(resp["train_used"], "24.4", "{resp}");
+    assert!(
+        resp["output"]
+            .as_str()
+            .is_some_and(|xml| xml.contains("<junos-version>24.4R1.9</junos-version>")),
+        "{resp}"
+    );
+    assert!(
+        fake.saw("<get-software-information"),
+        "{:?}",
+        fake.requests()
+    );
 }

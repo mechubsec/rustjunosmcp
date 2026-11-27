@@ -34,6 +34,7 @@ pub const JUNOS_TOOLS: &[&str] = &[
     "execute_junos_command",
     "execute_junos_command_batch",
     "execute_junos_pfe_command",
+    "execute_junos_rpc",
     "fetch_file",
     "gather_device_facts",
     "get_device_list",
@@ -105,6 +106,7 @@ pub const KNOWN_TOOLS: &[&str] = &[
     "execute_junos_command",
     "execute_junos_command_batch",
     "execute_junos_pfe_command",
+    "execute_junos_rpc",
     "fetch_file",
     "gather_device_facts",
     "get_chassis_cluster_status",
@@ -200,7 +202,7 @@ mod tests {
             JUNOS_TOOLS.len() + SRX_TOOLS.len() + FACADE_TOOLS.len() + PSEUDO_TOOLS.len(),
             "tool registries must not contain duplicate tool names"
         );
-        assert_eq!(KNOWN_TOOLS.len(), 47);
+        assert_eq!(KNOWN_TOOLS.len(), 48);
     }
 
     #[test]
