@@ -46,8 +46,9 @@ class JunosCatalogPlugin(plugin.PyangPlugin):
                 if rpc.keyword == "rpc":
                     result["rpcs"][rpc.arg] = _rpc_entry(rpc)
             if module.arg.endswith("-conf-root"):
-                configuration = next(c for c in module.i_children if c.arg == "configuration")
-                _walk_config(configuration, [], result["config"])
+                configuration = next((c for c in module.i_children if c.arg == "configuration"), None)
+                if configuration is not None:
+                    _walk_config(configuration, [], result["config"])
         json.dump(result, fd, sort_keys=True)
 
 

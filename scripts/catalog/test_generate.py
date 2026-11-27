@@ -7,25 +7,36 @@ import gzip
 import json
 import pathlib
 
+import shutil
+
 import pytest
 
 import generate
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
+FAKE_SHA = "0123456789abcdef0123456789abcdef01234567"
+BROKEN_YANG = "module broken {\n  this is not yang\n"
 
 
 def _load(out_dir, stem):
-    plain = out_dir / f"{stem}.json"
-    if plain.exists():
-        return json.loads(plain.read_text())
     return json.loads(gzip.decompress((out_dir / f"{stem}.json.gz").read_bytes()))
+
+
+def _generate(checkout, out_dir, commit=FAKE_SHA):
+    return generate.main([str(checkout), str(out_dir), "--notes", str(FIXTURES / "notes"), "--commit", commit])
+
+
+def _fixture_copy(tmp_path):
+    checkout = tmp_path / "yang"
+    shutil.copytree(FIXTURES, checkout)
+    return checkout
 
 
 @pytest.fixture(scope="module")
 def catalog(tmp_path_factory):
     out_dir = tmp_path_factory.mktemp("catalog")
-    result = generate.main([str(FIXTURES), str(out_dir), "--notes", str(FIXTURES / "notes"), "--commit", "fixture"])
-    assert result.skipped == [], "fixtures must resolve cleanly"
+    result = _generate(FIXTURES, out_dir)
+    assert result.gaps == [], "fixtures must resolve cleanly"
     files = sorted(path.name for path in out_dir.iterdir())
     families = ("junos-es", "junos-evo")
     return {
@@ -101,7 +112,7 @@ def test_config_paths_flattened(catalog):
     assert not any(path.startswith("groups") for path in paths)
     assert "apply-groups" in paths and "system apply-groups" not in paths
     assert "system legacy" in paths  # deprecated grouping use does not skip the module
-    assert catalog["config"]["junos-es"]["source"] == {"repo": "Juniper/yang", "commit": "fixture"}
+    assert catalog["config"]["junos-es"]["source"] == {"repo": "Juniper/yang", "commit": FAKE_SHA}
 
 
 def test_note_attached(catalog):
@@ -137,12 +148,53 @@ def test_logical_systems_collapsed(catalog):
 
 def test_one_file_per_family(catalog):
     assert catalog["files"] == [
-        "config-junos-es.json",
-        "config-junos-evo.json",
-        "rpc-junos-es.json",
-        "rpc-junos-evo.json",
+        "config-junos-es.json.gz",
+        "config-junos-evo.json.gz",
+        "rpc-junos-es.json.gz",
+        "rpc-junos-evo.json.gz",
     ]
     for kind in ("rpc", "config"):
         for family, document in catalog[kind].items():
             assert list(document["families"]) == [family]
             assert document["trains"] == ["23.1", "23.4", "25.4"]
+
+
+def test_files_are_gzip_json(tmp_path):
+    out_dir = tmp_path / "out"
+    _generate(FIXTURES, out_dir)
+    for path in out_dir.iterdir():
+        assert path.read_bytes()[:2] == b"\x1f\x8b", path.name
+        assert json.loads(gzip.decompress(path.read_bytes()))["gaps"] == []
+
+
+def test_skipped_module_recorded_as_gap(tmp_path):
+    checkout = _fixture_copy(tmp_path)
+    route = checkout / "23.4/23.4R2/native/conf-and-rpcs/junos-es/rpc-with-extensions/models"
+    (route / "junos-es-rpc-route@2023-01-01.yang").write_text(BROKEN_YANG)
+    result = _generate(checkout, tmp_path / "out")
+    document = _load(tmp_path / "out", "rpc-junos-es")
+    (gap,) = document["gaps"]
+    assert gap["train"] == "23.4" and gap["family"] == "junos-es" and gap["kind"] == "rpc"
+    assert gap["module"] == "junos-es-rpc-route" and gap["reason"]
+    assert result.gaps == [gap]
+    # Absent only because its module was skipped: the range runs through the gap train.
+    (variant,) = document["families"]["junos-es"]["get-route-summary-information"]
+    assert variant["trains"] == ["23.1", "23.4"]
+    assert _load(tmp_path / "out", "config-junos-es")["gaps"] == []
+
+
+def test_unexpected_job_failure_exits_nonzero(tmp_path):
+    checkout = _fixture_copy(tmp_path)
+    models = checkout / "23.4/23.4R2/native/conf-and-rpcs/junos-es/rpc-with-extensions/models"
+    for path in models.iterdir():
+        path.write_text(BROKEN_YANG)
+    with pytest.raises(SystemExit) as exit_info:
+        _generate(checkout, tmp_path / "out")
+    assert exit_info.value.code not in (0, None)
+    assert not (tmp_path / "out").exists()
+
+
+def test_commit_must_be_sha(tmp_path):
+    with pytest.raises(SystemExit) as exit_info:
+        _generate(FIXTURES, tmp_path / "out", commit="unknown")
+    assert exit_info.value.code != 0
