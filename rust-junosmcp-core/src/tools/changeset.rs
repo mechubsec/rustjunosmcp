@@ -1208,6 +1208,7 @@ pub async fn apply_change_set_with_cancel(
         &dm,
         &coordinator,
         &args.device,
+        None,
         now_unix,
     )
     .await;

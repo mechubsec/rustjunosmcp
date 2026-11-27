@@ -702,23 +702,26 @@ fn is_expired_window(record: &OperationRecord, now_unix: u64) -> bool {
 /// newer entry above it — the log shape of both an automatic rollback and an
 /// out-of-band confirming commit, which only further evidence separates.
 fn superseded_and_not_pending(entry: &str) -> bool {
-    let sequence = entry
-        .split_whitespace()
-        .next()
-        .and_then(|first| first.parse::<u32>().ok());
     entry_is_confirmed_commit(entry)
         && !crate::commit_attribution::commit_confirm_pending(entry)
-        && sequence.is_some_and(|sequence| sequence > 0)
+        && entry_sequence(entry).is_some_and(|sequence| sequence > 0)
 }
 
-/// Whether the newest log entry has the shape Junos gives an automatic
-/// rollback: `by root via other` with no comment. A confirming commit from this
-/// server is `via netconf` with a `Confirming commit:` comment, and an
-/// operator's commit names its login, so neither matches.
-fn newest_is_automatic_rollback(commit_log: &str) -> bool {
-    crate::commit_attribution::parse_newest_entry(commit_log).is_some_and(|newest| {
-        newest.user == "root" && newest.client == "other" && newest.comment.is_none()
-    })
+/// The entry's number in the log, 0 being the newest.
+fn entry_sequence(entry: &str) -> Option<u32> {
+    entry.split_whitespace().next()?.parse().ok()
+}
+
+/// Whether `entry` is directly below an entry with the shape Junos gives an
+/// automatic rollback: `by root via other` with no comment. A confirming commit
+/// from this server is `via netconf` with a `Confirming commit:` comment, and
+/// an operator's commit names its login, so neither matches. Directly below,
+/// because a rollback further up could be reverting a later commit.
+fn reverted_by_newest_entry(commit_log: &str, entry: &str) -> bool {
+    entry_sequence(entry) == Some(1)
+        && crate::commit_attribution::parse_newest_entry(commit_log).is_some_and(|newest| {
+            newest.user == "root" && newest.client == "other" && newest.comment.is_none()
+        })
 }
 
 /// Read the device and decide; `None` leaves the record as it is.
@@ -759,7 +762,7 @@ async fn expired_window_verdict<P: ConfirmWindowProbe>(
     .filter(|fingerprint| *fingerprint != record.current);
 
     let Some(pre_apply) = pre_apply else {
-        return newest_is_automatic_rollback(&commit_log).then_some(WindowVerdict::AutoReverted);
+        return reverted_by_newest_entry(&commit_log, entry).then_some(WindowVerdict::AutoReverted);
     };
     let live = tokio::time::timeout(
         REPROBE_DEVICE_TIMEOUT,
@@ -771,7 +774,7 @@ async fn expired_window_verdict<P: ConfirmWindowProbe>(
     (live == pre_apply).then_some(WindowVerdict::AutoReverted)
 }
 
-/// Settle every operation on `device` whose confirm window closed with no
+/// Settle every operation on `device` (or only `operation_id`) whose confirm window closed with no
 /// confirmation recorded, from what the device shows. Returns how many were
 /// settled.
 ///
@@ -794,13 +797,18 @@ pub async fn settle_expired_confirm_windows<P: ConfirmWindowProbe>(
     probe: &P,
     coordinator: &mecmcp_changeset::ChangesetCoordinator,
     device: &str,
+    operation_id: Option<&str>,
     now_unix: u64,
 ) -> usize {
     let candidates: Vec<OperationRecord> = coordinator
         .operations()
         .await
         .into_iter()
-        .filter(|record| record.device == device && is_expired_window(record, now_unix))
+        .filter(|record| {
+            record.device == device
+                && operation_id.is_none_or(|id| record.id == id)
+                && is_expired_window(record, now_unix)
+        })
         .collect();
     let mut settled = 0;
     for record in candidates {
@@ -1632,7 +1640,8 @@ mod tests {
 
         let probe = FakeProbe::new(REVERTED_LOG, PRE_APPLY_FP);
         let settled =
-            settle_expired_confirm_windows(&probe, &coordinator, "test-device", AFTER_GRACE).await;
+            settle_expired_confirm_windows(&probe, &coordinator, "test-device", None, AFTER_GRACE)
+                .await;
 
         assert_eq!(settled, 1);
         let record = state_of(&coordinator).await;
@@ -1659,7 +1668,8 @@ mod tests {
         )
         .await;
         let probe = FakeProbe::new(REVERTED_LOG, PRE_APPLY_FP);
-        settle_expired_confirm_windows(&probe, &coordinator, "test-device", AFTER_GRACE).await;
+        settle_expired_confirm_windows(&probe, &coordinator, "test-device", None, AFTER_GRACE)
+            .await;
 
         let status = crate::tools::changeset::get_change_set_status(
             crate::tools::changeset::GetChangeSetStatusArgs {
@@ -1683,7 +1693,8 @@ mod tests {
         .await;
         let probe = FakeProbe::new(REVERTED_LOG, OTHER_FP);
         let settled =
-            settle_expired_confirm_windows(&probe, &coordinator, "test-device", AFTER_GRACE).await;
+            settle_expired_confirm_windows(&probe, &coordinator, "test-device", None, AFTER_GRACE)
+                .await;
 
         assert_eq!(settled, 0);
         assert_eq!(
@@ -1706,9 +1717,14 @@ mod tests {
         )
         .await;
         let probe = FakeProbe::new(REVERTED_LOG, PRE_APPLY_FP);
-        let settled =
-            settle_expired_confirm_windows(&probe, &coordinator, "test-device", AFTER_GRACE - 1)
-                .await;
+        let settled = settle_expired_confirm_windows(
+            &probe,
+            &coordinator,
+            "test-device",
+            None,
+            AFTER_GRACE - 1,
+        )
+        .await;
 
         assert_eq!(settled, 0);
         assert_eq!(
@@ -1731,6 +1747,7 @@ mod tests {
             &probe,
             &coordinator,
             "test-device",
+            None,
             CHANGESET_DEADLINE + ROLLBACK_SETTLE_GRACE,
         )
         .await;
@@ -1755,6 +1772,7 @@ mod tests {
             &probe,
             &coordinator,
             "test-device",
+            None,
             CHANGESET_DEADLINE + ROLLBACK_SETTLE_GRACE,
         )
         .await;
@@ -1779,7 +1797,8 @@ mod tests {
 
         let probe = FakeProbe::new(REVERTED_LOG, OTHER_FP);
         let settled =
-            settle_expired_confirm_windows(&probe, &coordinator, "test-device", AFTER_GRACE).await;
+            settle_expired_confirm_windows(&probe, &coordinator, "test-device", None, AFTER_GRACE)
+                .await;
 
         assert_eq!(settled, 1);
         assert_eq!(
@@ -1808,7 +1827,48 @@ mod tests {
 
         let probe = FakeProbe::new(REAL_LOG, PRE_APPLY_FP);
         let settled =
-            settle_expired_confirm_windows(&probe, &coordinator, "test-device", AFTER_GRACE).await;
+            settle_expired_confirm_windows(&probe, &coordinator, "test-device", None, AFTER_GRACE)
+                .await;
+
+        assert_eq!(settled, 0);
+        assert_eq!(
+            state_of(&coordinator).await.state,
+            LifecycleState::Committing
+        );
+    }
+
+    /// Spliced from captured lines: the automatic rollback at entry 0 is
+    /// reverting entry 1, not our commit at entry 2, so the log alone must not
+    /// settle ours. Without a fingerprint there is nothing else to go on.
+    #[tokio::test]
+    async fn a_rollback_further_up_is_not_evidence_without_a_fingerprint() {
+        let captured: Vec<&str> = CHANGESET_ROLLED_BACK_LOG.lines().collect();
+        // REVERTED_LOG's rollback entry, then the 11-11 capture renumbered so
+        // our confirmed commit sits at entry 2.
+        let log = [
+            REVERTED_LOG.lines().next().unwrap().to_owned(),
+            captured[4].replacen('2', "1", 1),
+            captured[2].replacen('1', "2", 1),
+            captured[3].to_owned(),
+        ]
+        .join("\n");
+        let entry = commit_entry_for_request_id(&log, CHANGESET_REQUEST_ID).unwrap();
+        assert!(entry.starts_with("2 "), "entry was: {entry:?}");
+        let operation = OperationRecord {
+            change_set_id: None,
+            ..window_operation(CHANGESET_REQUEST_ID, CHANGESET_DEADLINE)
+        };
+        let (_dir, coordinator) = window_coordinator(operation, false).await;
+
+        let probe = FakeProbe::new(&log, PRE_APPLY_FP);
+        let settled = settle_expired_confirm_windows(
+            &probe,
+            &coordinator,
+            "test-device",
+            None,
+            CHANGESET_DEADLINE + ROLLBACK_SETTLE_GRACE,
+        )
+        .await;
 
         assert_eq!(settled, 0);
         assert_eq!(

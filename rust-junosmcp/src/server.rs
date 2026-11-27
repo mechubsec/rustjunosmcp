@@ -2193,18 +2193,29 @@ impl JmcpHandler {
             return Self::scope_to_call_result(e);
         }
 
-        // Settle an expired confirm window from the device before the verdict
-        // is derived, so a verified revert reads `auto_reverted`. Read-only.
-        let now_unix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.as_secs());
-        rust_junosmcp_core::changeset_recovery::settle_expired_confirm_windows(
-            &self.dm,
-            &self.coordinator,
-            &args.device,
-            now_unix,
-        )
-        .await;
+        // Settle this change set's expired confirm window from the device
+        // before the verdict is derived, so a verified revert reads
+        // `auto_reverted`. Read-only, and only for a change set that exists, so
+        // an unknown id costs no device I/O.
+        if let Some(operation_id) = self
+            .coordinator
+            .change_set(&args.change_set_id, &args.device)
+            .await
+            .ok()
+            .and_then(|change_set| change_set.operation_id)
+        {
+            let now_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_secs());
+            rust_junosmcp_core::changeset_recovery::settle_expired_confirm_windows(
+                &self.dm,
+                &self.coordinator,
+                &args.device,
+                Some(&operation_id),
+                now_unix,
+            )
+            .await;
+        }
 
         let result = if self.web_enabled_approver {
             changeset::get_change_set_status_with_actions(args, self.coordinator.clone()).await
