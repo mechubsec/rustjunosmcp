@@ -1199,6 +1199,19 @@ pub async fn apply_change_set_with_cancel(
     // and deterministic for a given device entry.
     let endpoint = format!("junos://{device_ip}:{device_port}");
 
+    // A confirmed commit the device reverted is otherwise never terminal, and
+    // the coordinator would refuse this apply for it. Read-only.
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    crate::changeset_recovery::settle_expired_confirm_windows(
+        &dm,
+        &coordinator,
+        &args.device,
+        now_unix,
+    )
+    .await;
+
     let result = coordinator
         .apply_change_set(
             args.change_set_id.clone(),
@@ -1652,7 +1665,11 @@ pub async fn confirm_change_set(
 /// - `awaiting_confirmation` — a rollback deadline is set and still in the
 ///   future. `rollback_deadline_unix` carries it.
 /// - `presumed_auto_reverted` — the deadline passed with no confirmation
-///   recorded here.
+///   recorded here, and the device has not (yet) shown what happened.
+/// - `auto_reverted` — the device showed the revert: after the window closed,
+///   `settle_expired_confirm_windows` found the commit superseded, no longer
+///   pending, and the candidate back at its pre-apply fingerprint, and settled
+///   the operation `Discarded`.
 /// - `committed` — the operation reached `Committed`.
 /// - `discarded` — a record that *did* carry a deadline was reconciled as
 ///   `Discarded` by `state resolve`, an operator saying the change is not on
@@ -1737,7 +1754,19 @@ async fn derive_commit_confirmation(
         // timer. `AS DISCARDED` is an operator saying the change is not on the
         // device; the timer only reverts it further, so the assertion stands.
         if operation.state == mecmcp_changeset::LifecycleState::Discarded {
-            fields.insert("commit_confirmation".to_owned(), json!("discarded"));
+            // Same record shape as `state resolve`; the details say whether the
+            // device showed the revert or an operator asserted it.
+            let verified_revert = operation.details.as_deref().is_some_and(|details| {
+                details.starts_with(crate::changeset_recovery::AUTO_REVERTED_DETAILS)
+            });
+            fields.insert(
+                "commit_confirmation".to_owned(),
+                json!(if verified_revert {
+                    "auto_reverted"
+                } else {
+                    "discarded"
+                }),
+            );
             return fields;
         }
 

@@ -645,6 +645,233 @@ pub async fn sweep_crashed_commits(
     summary
 }
 
+/// Opening words of the `details` an evidence-backed auto-revert settle writes.
+///
+/// `state resolve ... AS DISCARDED` produces the same record shape (terminal
+/// `Discarded`, deadline left behind), so this prefix is what lets status tell a
+/// revert the device showed apart from an operator's assertion. Only this
+/// module writes it.
+pub const AUTO_REVERTED_DETAILS: &str = "auto-reverted:";
+
+/// The two reads an expired confirm window is settled from. Neither writes to
+/// the device or takes the candidate lock.
+#[async_trait::async_trait]
+pub trait ConfirmWindowProbe: Send + Sync {
+    /// The device's `show system commit` output.
+    async fn commit_log(&self, device: &str) -> Result<String, JmcpError>;
+    /// The live candidate fingerprint, as `DeviceTransaction::fingerprint` reads it.
+    async fn candidate_fingerprint(&self, device: &str) -> Result<String, JmcpError>;
+}
+
+#[async_trait::async_trait]
+impl ConfirmWindowProbe for Arc<DeviceManager> {
+    async fn commit_log(&self, device: &str) -> Result<String, JmcpError> {
+        self.run_cli(device, "show system commit").await
+    }
+
+    async fn candidate_fingerprint(&self, device: &str) -> Result<String, JmcpError> {
+        crate::junos_transaction::JunosTransaction::new(self.clone(), device.to_owned())
+            .fingerprint()
+            .await
+    }
+}
+
+/// What the device showed about one expired confirm window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowVerdict {
+    AutoReverted,
+    Confirmed,
+}
+
+/// Whether `record` is a confirmed commit whose window closed long enough ago
+/// for the commit log to be trusted.
+///
+/// The margin is [`ROLLBACK_SETTLE_GRACE`]: it already covers Junos writing
+/// the rollback entry late, and it also covers Junos rounding the window up —
+/// on 2026-11-27 a 1-minute window on 26.2R1.7 reverted 120 s after the commit,
+/// 60 s past the deadline this server recorded.
+fn is_expired_window(record: &OperationRecord, now_unix: u64) -> bool {
+    !record.state.terminal()
+        && record.attribution.is_some()
+        && record
+            .rollback_deadline_unix
+            .is_some_and(|deadline| now_unix >= deadline.saturating_add(ROLLBACK_SETTLE_GRACE))
+}
+
+/// Whether `entry` is a confirmed commit that is no longer pending and has a
+/// newer entry above it — the log shape of both an automatic rollback and an
+/// out-of-band confirming commit, which only further evidence separates.
+fn superseded_and_not_pending(entry: &str) -> bool {
+    let sequence = entry
+        .split_whitespace()
+        .next()
+        .and_then(|first| first.parse::<u32>().ok());
+    entry_is_confirmed_commit(entry)
+        && !crate::commit_attribution::commit_confirm_pending(entry)
+        && sequence.is_some_and(|sequence| sequence > 0)
+}
+
+/// Whether the newest log entry has the shape Junos gives an automatic
+/// rollback: `by root via other` with no comment. A confirming commit from this
+/// server is `via netconf` with a `Confirming commit:` comment, and an
+/// operator's commit names its login, so neither matches.
+fn newest_is_automatic_rollback(commit_log: &str) -> bool {
+    crate::commit_attribution::parse_newest_entry(commit_log).is_some_and(|newest| {
+        newest.user == "root" && newest.client == "other" && newest.comment.is_none()
+    })
+}
+
+/// Read the device and decide; `None` leaves the record as it is.
+async fn expired_window_verdict<P: ConfirmWindowProbe>(
+    probe: &P,
+    coordinator: &mecmcp_changeset::ChangesetCoordinator,
+    record: &OperationRecord,
+    now_unix: u64,
+) -> Option<WindowVerdict> {
+    let deadline = record.rollback_deadline_unix?;
+    let request_id = &record.attribution.as_ref()?.request_id;
+    let commit_log = tokio::time::timeout(REPROBE_DEVICE_TIMEOUT, probe.commit_log(&record.device))
+        .await
+        .ok()?
+        .ok()?;
+    // A miss is not evidence: the entry may have aged out of the bounded log.
+    let entry = commit_entry_for_request_id(&commit_log, request_id)?;
+    if confirmed_commit_outcome(entry, Some(deadline), now_unix) == ReprobeOutcome::Committed {
+        return Some(WindowVerdict::Confirmed);
+    }
+    if !superseded_and_not_pending(entry) {
+        return None;
+    }
+
+    // The change set's `expected_candidate_fingerprint` is the pre-apply
+    // candidate (apply refuses any other value), so a candidate back at it
+    // means the change is gone. It proves nothing when the apply left the
+    // fingerprint unchanged, and a record whose change set has been purged
+    // has none; both fall back to the log alone.
+    let pre_apply = match record.change_set_id.as_deref() {
+        Some(id) => coordinator
+            .change_set(id, &record.device)
+            .await
+            .ok()
+            .map(|change_set| change_set.expected_candidate_fingerprint),
+        None => None,
+    }
+    .filter(|fingerprint| *fingerprint != record.current);
+
+    let Some(pre_apply) = pre_apply else {
+        return newest_is_automatic_rollback(&commit_log).then_some(WindowVerdict::AutoReverted);
+    };
+    let live = tokio::time::timeout(
+        REPROBE_DEVICE_TIMEOUT,
+        probe.candidate_fingerprint(&record.device),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    (live == pre_apply).then_some(WindowVerdict::AutoReverted)
+}
+
+/// Settle every operation on `device` whose confirm window closed with no
+/// confirmation recorded, from what the device shows. Returns how many were
+/// settled.
+///
+/// Without this, a confirmed commit that the device reverted stays non-terminal
+/// for ever, and the coordinator refuses every later apply on the device until
+/// an operator stops the server and runs `state resolve`. It runs before status
+/// derives `commit_confirmation` and before an apply asks the coordinator for a
+/// new operation.
+///
+/// Read-only: it never writes to the device or takes the lock, so the record's
+/// `config_lock_held` is left as it was. Only a positive reading settles:
+/// `Committed` when the log shows our commit confirmed (the same rule the
+/// startup sweep uses), `Discarded` when our entry is no longer pending, a newer
+/// entry exists, and the candidate is back at the pre-apply fingerprint. Any
+/// miss, timeout or unreachable device leaves the record alone.
+// shortcut: matches operations by device name only, not by endpoint, so an
+// alias inventory name for the same box is not settled here; match endpoints
+// too if aliases are in use.
+pub async fn settle_expired_confirm_windows<P: ConfirmWindowProbe>(
+    probe: &P,
+    coordinator: &mecmcp_changeset::ChangesetCoordinator,
+    device: &str,
+    now_unix: u64,
+) -> usize {
+    let candidates: Vec<OperationRecord> = coordinator
+        .operations()
+        .await
+        .into_iter()
+        .filter(|record| record.device == device && is_expired_window(record, now_unix))
+        .collect();
+    let mut settled = 0;
+    for record in candidates {
+        let Some(verdict) = expired_window_verdict(probe, coordinator, &record, now_unix).await
+        else {
+            continue;
+        };
+        // Re-read: the probe took time, and anything that settled the record
+        // meanwhile is the newer truth.
+        let Ok(mut current) = coordinator
+            .record(&record.id, &record.owner, &record.device)
+            .await
+        else {
+            continue;
+        };
+        if current.state.terminal()
+            || current.rollback_deadline_unix != record.rollback_deadline_unix
+        {
+            continue;
+        }
+        let previous = current.state.as_str().to_owned();
+        let request_id = record
+            .attribution
+            .as_ref()
+            .map_or("<none>", |attribution| attribution.request_id.as_str())
+            .to_owned();
+        match verdict {
+            WindowVerdict::AutoReverted => {
+                current.state = LifecycleState::Discarded;
+                // The deadline stays: it is what tells status this was a
+                // confirmed commit, as it does after `state resolve`.
+                current.details = Some(format!(
+                    "{AUTO_REVERTED_DETAILS} settled from {previous} after the confirm window \
+                     closed: the device's commit log shows request.id={request_id} superseded \
+                     and no longer pending, and the candidate is back at its pre-apply state; \
+                     read-only probe, no device write"
+                ));
+            }
+            WindowVerdict::Confirmed => {
+                current.state = LifecycleState::Committed;
+                current.rollback_deadline_unix = None;
+                current.details = Some(format!(
+                    "confirm window settled from {previous}: the device's commit log shows \
+                     request.id={request_id} confirmed; read-only probe, no device write"
+                ));
+            }
+        }
+        if let Err(error) = coordinator.update(current).await {
+            tracing::warn!(
+                event = "changeset_confirm_window_write_failed",
+                operation_id = %record.id,
+                device = %record.device,
+                error = %error,
+                "the device settled the confirm window but the record could not be updated"
+            );
+            continue;
+        }
+        settled += 1;
+        // Not on `target: "audit"`, for the reason the sweep gives: this
+        // has no caller of its own. The tool call that triggered it is audited.
+        tracing::info!(
+            event = "changeset_confirm_window_settled",
+            operation_id = %record.id,
+            device = %record.device,
+            outcome = ?verdict,
+            "settled an expired confirm window from the device's commit log"
+        );
+    }
+    settled
+}
+
 #[cfg(test)]
 mod tests {
     /// Captured verbatim from vSRX 24.4R1.9 during the #370 hardware run, so
@@ -761,7 +988,7 @@ mod tests {
     use mecmcp_changeset::records::{
         OperationRecord, PersistedAgentIdentity, PersistedAttribution, PersistedPrincipal,
     };
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     const TEST_UUID: &str = "550e8400-e29b-41d4-a716-446655440000";
     const DIFFERENT_UUID: &str = "123e4567-e89b-12d3-a456-426614174000";
@@ -1260,6 +1487,333 @@ mod tests {
         assert_eq!(
             confirmed_commit_outcome(entry, None, DEADLINE),
             ReprobeOutcome::Committed
+        );
+    }
+
+    // ---- an expired confirm window is settled from the device ----
+
+    /// Captured verbatim from a lab vSRX on 26.2R1.7 on 2026-11-27: a 1-minute
+    /// `apply_junos_change_set` that was never confirmed, after Junos reverted it.
+    const REVERTED_REQUEST_ID: &str = "f424c678-40aa-4b71-abc3-d744be0185dc";
+    /// 21:22:14 UTC commit plus the 60 s window this server records.
+    const REVERTED_DEADLINE: u64 = 1_795_814_594;
+    const REVERTED_LOG: &str = "\
+0   2026-11-27 21:24:14 UTC by root via other
+1   2026-11-27 21:22:14 UTC by netconf via netconf commit confirmed, rollback in 1mins
+    no-change-ref by claude-fullscope (unknown) on-behalf-of=self via unknown-public request.id=f424c678-40aa-4b71-abc3-d744be0185dc change-set=2dbe8e7eca248fc2
+2   2026-11-27 14:03:40 UTC by netconf via netconf
+    mechubbench restore to baseline
+";
+
+    const PRE_APPLY_FP: &str =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const STAGED_FP: &str =
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const OTHER_FP: &str =
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    const WINDOW_CHANGE_SET: &str =
+        "2dbe8e7eca248fc2000000000000000000000000000000000000000000000000";
+
+    /// Replays captured replies; it has no way to write to a device.
+    struct FakeProbe {
+        log: String,
+        fingerprint: String,
+        fingerprint_reads: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FakeProbe {
+        fn new(log: &str, fingerprint: &str) -> Self {
+            Self {
+                log: log.to_owned(),
+                fingerprint: fingerprint.to_owned(),
+                fingerprint_reads: Default::default(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ConfirmWindowProbe for FakeProbe {
+        async fn commit_log(&self, _device: &str) -> Result<String, JmcpError> {
+            Ok(self.log.clone())
+        }
+        async fn candidate_fingerprint(&self, _device: &str) -> Result<String, JmcpError> {
+            self.fingerprint_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.fingerprint.clone())
+        }
+    }
+
+    fn window_change_set() -> mecmcp_changeset::ChangeSetRecord {
+        mecmcp_changeset::ChangeSetRecord {
+            id: WINDOW_CHANGE_SET.to_owned(),
+            owner: "test-owner".to_owned(),
+            owner_subject: None,
+            owner_verified: false,
+            device: "test-device".to_owned(),
+            expected_candidate_fingerprint: PRE_APPLY_FP.to_owned(),
+            actions: vec![json!({"op": "set"})],
+            digest: format!("sha256:{}", "d".repeat(64)),
+            state: mecmcp_changeset::ChangeSetState::Applied,
+            approver: None,
+            approval: None,
+            expires_at_unix: u64::MAX,
+            operation_id: Some("0".repeat(64)),
+            policy_signature: String::new(),
+            targets: Vec::new(),
+            preview: None,
+            task_id: None,
+            apply_without_handle: false,
+        }
+    }
+
+    /// The record the 2026-11-27 apply left: still `Committing`, deadline set.
+    fn window_operation(request_id: &str, deadline: u64) -> OperationRecord {
+        OperationRecord {
+            change_set_id: Some(WINDOW_CHANGE_SET.to_owned()),
+            current: STAGED_FP.to_owned(),
+            rollback_deadline_unix: Some(deadline),
+            ..test_record(
+                LifecycleState::Committing,
+                Some(test_attribution(request_id)),
+            )
+        }
+    }
+
+    async fn window_coordinator(
+        operation: OperationRecord,
+        with_change_set: bool,
+    ) -> (tempfile::TempDir, mecmcp_changeset::ChangesetCoordinator) {
+        let dir = tempfile::tempdir().unwrap();
+        let coordinator = mecmcp_changeset::ChangesetCoordinator::load(
+            Some(&dir.path().join("state.json")),
+            mecmcp_changeset::OperationLimits::default(),
+            Duration::from_secs(900),
+            false,
+        )
+        .unwrap();
+        if with_change_set {
+            coordinator
+                .seed_change_set_for_test(window_change_set())
+                .await
+                .unwrap();
+        }
+        coordinator.insert(operation).await.unwrap();
+        (dir, coordinator)
+    }
+
+    async fn state_of(coordinator: &mecmcp_changeset::ChangesetCoordinator) -> OperationRecord {
+        coordinator
+            .record(&"0".repeat(64), "test-owner", "test-device")
+            .await
+            .unwrap()
+    }
+
+    /// A second apply on the device, as the coordinator would be asked for it.
+    fn next_apply() -> OperationRecord {
+        OperationRecord {
+            id: "1".repeat(64),
+            ..test_record(LifecycleState::Staging, None)
+        }
+    }
+
+    const AFTER_GRACE: u64 = REVERTED_DEADLINE + ROLLBACK_SETTLE_GRACE;
+
+    #[tokio::test]
+    async fn a_verified_revert_settles_discarded_and_frees_the_device() {
+        let (_dir, coordinator) = window_coordinator(
+            window_operation(REVERTED_REQUEST_ID, REVERTED_DEADLINE),
+            true,
+        )
+        .await;
+        assert!(
+            coordinator.insert(next_apply()).await.is_err(),
+            "precondition: the unsettled record blocks the device"
+        );
+
+        let probe = FakeProbe::new(REVERTED_LOG, PRE_APPLY_FP);
+        let settled =
+            settle_expired_confirm_windows(&probe, &coordinator, "test-device", AFTER_GRACE).await;
+
+        assert_eq!(settled, 1);
+        let record = state_of(&coordinator).await;
+        assert_eq!(record.state, LifecycleState::Discarded);
+        assert_eq!(record.rollback_deadline_unix, Some(REVERTED_DEADLINE));
+        assert!(
+            record
+                .details
+                .as_deref()
+                .unwrap()
+                .starts_with(AUTO_REVERTED_DETAILS)
+        );
+        coordinator
+            .insert(next_apply())
+            .await
+            .expect("the next apply on the device is accepted");
+    }
+
+    #[tokio::test]
+    async fn status_reports_auto_reverted_after_a_verified_revert() {
+        let (_dir, coordinator) = window_coordinator(
+            window_operation(REVERTED_REQUEST_ID, REVERTED_DEADLINE),
+            true,
+        )
+        .await;
+        let probe = FakeProbe::new(REVERTED_LOG, PRE_APPLY_FP);
+        settle_expired_confirm_windows(&probe, &coordinator, "test-device", AFTER_GRACE).await;
+
+        let status = crate::tools::changeset::get_change_set_status(
+            crate::tools::changeset::GetChangeSetStatusArgs {
+                change_set_id: WINDOW_CHANGE_SET.to_owned(),
+                device: "test-device".to_owned(),
+            },
+            Arc::new(coordinator),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status["operation_state"], "discarded");
+        assert_eq!(status["commit_confirmation"], "auto_reverted");
+    }
+
+    #[tokio::test]
+    async fn a_candidate_not_back_at_pre_apply_is_not_settled() {
+        let (_dir, coordinator) = window_coordinator(
+            window_operation(REVERTED_REQUEST_ID, REVERTED_DEADLINE),
+            true,
+        )
+        .await;
+        let probe = FakeProbe::new(REVERTED_LOG, OTHER_FP);
+        let settled =
+            settle_expired_confirm_windows(&probe, &coordinator, "test-device", AFTER_GRACE).await;
+
+        assert_eq!(settled, 0);
+        assert_eq!(
+            probe
+                .fingerprint_reads
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(
+            state_of(&coordinator).await.state,
+            LifecycleState::Committing
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_is_settled_inside_the_grace_window() {
+        let (_dir, coordinator) = window_coordinator(
+            window_operation(REVERTED_REQUEST_ID, REVERTED_DEADLINE),
+            true,
+        )
+        .await;
+        let probe = FakeProbe::new(REVERTED_LOG, PRE_APPLY_FP);
+        let settled =
+            settle_expired_confirm_windows(&probe, &coordinator, "test-device", AFTER_GRACE - 1)
+                .await;
+
+        assert_eq!(settled, 0);
+        assert_eq!(
+            state_of(&coordinator).await.state,
+            LifecycleState::Committing
+        );
+    }
+
+    /// Still pending at entry 0: the device has not reverted it yet, whatever
+    /// this server's clock says.
+    #[tokio::test]
+    async fn a_pending_commit_is_not_settled() {
+        let (_dir, coordinator) = window_coordinator(
+            window_operation(CHANGESET_REQUEST_ID, CHANGESET_DEADLINE),
+            true,
+        )
+        .await;
+        let probe = FakeProbe::new(CHANGESET_PENDING_LOG, PRE_APPLY_FP);
+        let settled = settle_expired_confirm_windows(
+            &probe,
+            &coordinator,
+            "test-device",
+            CHANGESET_DEADLINE + ROLLBACK_SETTLE_GRACE,
+        )
+        .await;
+
+        assert_eq!(settled, 0);
+        assert_eq!(
+            state_of(&coordinator).await.state,
+            LifecycleState::Committing
+        );
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_commit_settles_committed() {
+        let (_dir, coordinator) = window_coordinator(
+            window_operation(CHANGESET_REQUEST_ID, CHANGESET_DEADLINE),
+            true,
+        )
+        .await;
+        let confirmed_log = CHANGESET_PENDING_LOG.replace("    rollback pending\n", "");
+        let probe = FakeProbe::new(&confirmed_log, OTHER_FP);
+        let settled = settle_expired_confirm_windows(
+            &probe,
+            &coordinator,
+            "test-device",
+            CHANGESET_DEADLINE + ROLLBACK_SETTLE_GRACE,
+        )
+        .await;
+
+        assert_eq!(settled, 1);
+        let record = state_of(&coordinator).await;
+        assert_eq!(record.state, LifecycleState::Committed);
+        assert_eq!(record.rollback_deadline_unix, None);
+    }
+
+    /// A record whose change set is gone carries no pre-apply fingerprint, so
+    /// only the log can settle it: the commit superseded by the comment-less
+    /// `root via other` entry an automatic rollback writes. Deserialised from
+    /// the on-disk shape, which has no field this change added.
+    #[tokio::test]
+    async fn a_record_without_a_pre_apply_fingerprint_settles_from_the_log() {
+        let mut stored =
+            serde_json::to_value(window_operation(REVERTED_REQUEST_ID, REVERTED_DEADLINE)).unwrap();
+        stored["change_set_id"] = Value::Null;
+        let operation: OperationRecord = serde_json::from_value(stored).unwrap();
+        let (_dir, coordinator) = window_coordinator(operation, false).await;
+
+        let probe = FakeProbe::new(REVERTED_LOG, OTHER_FP);
+        let settled =
+            settle_expired_confirm_windows(&probe, &coordinator, "test-device", AFTER_GRACE).await;
+
+        assert_eq!(settled, 1);
+        assert_eq!(
+            probe
+                .fingerprint_reads
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "with nothing to compare against, the fingerprint is not evidence"
+        );
+        assert_eq!(
+            state_of(&coordinator).await.state,
+            LifecycleState::Discarded
+        );
+    }
+
+    /// The same record superseded by an ordinary commit with a comment, as an
+    /// out-of-band confirm would be: the log alone cannot call that a revert.
+    #[tokio::test]
+    async fn a_record_without_a_pre_apply_fingerprint_needs_the_rollback_shape() {
+        let request_id = "11111111-2222-4333-8444-555555555555";
+        let operation = OperationRecord {
+            change_set_id: None,
+            ..window_operation(request_id, REVERTED_DEADLINE)
+        };
+        let (_dir, coordinator) = window_coordinator(operation, false).await;
+
+        let probe = FakeProbe::new(REAL_LOG, PRE_APPLY_FP);
+        let settled =
+            settle_expired_confirm_windows(&probe, &coordinator, "test-device", AFTER_GRACE).await;
+
+        assert_eq!(settled, 0);
+        assert_eq!(
+            state_of(&coordinator).await.state,
+            LifecycleState::Committing
         );
     }
 }
