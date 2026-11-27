@@ -102,6 +102,19 @@ const RENAMED_KEYWORDS: &[(&str, &[&str])] = &[(
     ],
 )];
 
+/// Lists whose keyword the CLI omits, field-verified on the bench-lab
+/// baselines: `interfaces ge-0/0/0` for `interfaces interface ge-0/0/0`,
+/// `vlans v1` (EX), `routing-instances mgmt_junos`, and the syslog facility
+/// in `system syslog file messages any any`. Add an entry when a real line
+/// is rejected; never accept any list.
+const ELIDED_LISTS: &[&str] = &[
+    "interfaces interface",
+    "vlans vlan",
+    "routing-instances instance",
+    "system syslog file contents",
+    "system syslog user contents",
+];
+
 /// Leaves whose keyword the CLI omits, field-verified on the bench-lab
 /// baselines (`storm-control default`, `traceoptions file f1`,
 /// `default-policy deny-all`, `address a1 10.0.0.0/8`). Add an entry when a
@@ -281,8 +294,8 @@ impl Catalog {
     ///
     /// Walks left to right. Tokens after a leaf or leaf-list are its value.
     /// The token after a list is its key value. Junos CLI shorthands are
-    /// accepted: an elided list keyword (`interfaces ge-0/0/0` for
-    /// `interfaces interface ge-0/0/0`), keyword-named keys (`from-zone X
+    /// accepted: the elided keywords of [`ELIDED_LISTS`] (`interfaces
+    /// ge-0/0/0` for `interfaces interface ge-0/0/0`), keyword-named keys (`from-zone X
     /// to-zone Y` for the `from-zone-name`/`to-zone-name` keys), the values of
     /// [`POSITIONAL_LEAVES`] without their keyword, the CLI names in
     /// [`RENAMED_KEYWORDS`], and the
@@ -367,8 +380,10 @@ impl Catalog {
                 if node(&child(&list, &format!("{token}-name"))).is_some() {
                     return Some((list, 2));
                 }
+                // Only a field-verified list may drop its keyword, and then
+                // the key value must be last or followed by a child.
                 let next_fits = next.is_none_or(|next| node(&child(&list, next)).is_some());
-                next_fits.then_some((list, 1))
+                (ELIDED_LISTS.contains(&list.as_str()) && next_fits).then_some((list, 1))
             });
             if let Some((list, consumed)) = elided {
                 current = list;

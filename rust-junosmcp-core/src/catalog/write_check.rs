@@ -6,8 +6,9 @@ use rustez::ConfigPayload;
 use super::{Catalog, Resolution};
 use crate::error::JmcpError;
 
-/// `set`-format verbs whose argument is a configuration path. Other verbs
-/// (`insert`, `rename`, `annotate`, `copy`, `edit`, ...) are left to the device.
+/// `set`-format verbs whose argument is a configuration path. `edit`, `top`,
+/// `up` and `exit` move the level (see `set_paths`); other verbs (`insert`,
+/// `rename`, `annotate`, `copy`, ...) are left to the device.
 const PATH_VERBS: [&str; 6] = [
     "set",
     "delete",
@@ -860,6 +861,9 @@ mod tests {
                 "set interfaces ge-0/0/0 disabel",
                 "set system services ssh login allow",
                 "set interfaces ge-0/0/0 mode trunk",
+                "set security zones security-zone trust tcp-rstt",
+                "set protocols ospf area 0 interfacee",
+                "set interfaces ge-0/0/0 unit 0 disabel",
             ] {
                 assert!(
                     check_config_paths(catalog, &res, &set(line)).is_err(),
