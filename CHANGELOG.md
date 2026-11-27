@@ -44,9 +44,9 @@ All notable user-facing changes are recorded here. Format loosely follows
   `docs/REFERENCE.md` for known upstream gaps.
 - Skills over MCP (SEP-2640) from `--skills-dir` / `JMCP_SKILLS_DIR` (default
   `/usr/share/rust-junosmcp/skills`): four skills ship in `skills/` and the LXC
-  package and the Docker image install them. `skills/*` and `resources/*` need a valid token but
-  are not tool-scoped. New dependencies via rmcp `skills-fs`: the cap-std family (Apache-2.0 / MIT) and
-  `yaml_serde` + `libyaml-rs`; see the dependency review in
+  package and the Docker image install them. `skills/*` and `resources/*`
+  need a valid token but are not tool-scoped. New dependencies via rmcp
+  `skills-fs`: the cap-std family (Apache-2.0 / MIT) and `yaml_serde` + `libyaml-rs`; see the dependency review in
   `docs/REFERENCE.md`.
 
 ### Changed

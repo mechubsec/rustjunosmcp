@@ -323,8 +323,8 @@ Calls a catalog RPC and returns the XML reply, redacted like
 or `true` for an `empty` flag, by catalog argument name) and `timeout`.
 
 - Only `get-*` RPCs whose CLI equivalent is `show …` are accepted. Unknown
-  arguments, and values containing `<`, `>`, `&`, quotes or control
-  characters, are refused.
+  arguments are refused, as is any value that is not printable ASCII or
+  that contains `<`, `>`, `&`, `'`, `"` or `;`.
 - The CLI equivalent is checked against the same command allow/blocklist as
   `execute_junos_command`, in every form it can take: the named form
   (`show log filename messages`) and the positional
@@ -342,7 +342,7 @@ configuration path with the catalog for the device's family and train.
 | Catalog match | Unknown `set` path | Unknown `delete`/`deactivate` path |
 |---|---|---|
 | Exact family and train | rejected (`invalid_argument`, with the 3 nearest paths) | warning |
-| Nearest-train fallback, a gap train (`junos-es` 24.2; `junos-ex` 24.2 and later), or SRX on Junos OS Evolved | warning | warning |
+| Nearest-train fallback, a gap train (`junos-es` 23.1 and 24.2; `junos-ex` 24.2 and later), or SRX on Junos OS Evolved | warning | warning |
 
 If facts cannot be read, the model is not covered, or the budget runs out,
 the check is skipped and `warning` says so. `create_junos_change_set` may now
