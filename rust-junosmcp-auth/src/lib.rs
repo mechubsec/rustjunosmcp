@@ -44,9 +44,11 @@ pub const JUNOS_TOOLS: &[&str] = &[
     "get_router_list",
     "junos_config_diff",
     "list_junos_change_sets",
+    "list_junos_skills",
     "list_staged_files",
     "load_and_commit_config",
     "lookup_junos_api",
+    "read_junos_skill",
     "reload_devices",
     "render_and_apply_j2_template",
     "rollback_config",
@@ -120,11 +122,13 @@ pub const KNOWN_TOOLS: &[&str] = &[
     "get_srx_security_services_status",
     "junos_config_diff",
     "list_junos_change_sets",
+    "list_junos_skills",
     "list_staged_files",
     "load_and_commit_config",
     "lookup_junos_api",
     "manage_appid_signature_package",
     "manage_idp_security_package",
+    "read_junos_skill",
     "reload_devices",
     "render_and_apply_j2_template",
     "rollback_config",
@@ -202,7 +206,7 @@ mod tests {
             JUNOS_TOOLS.len() + SRX_TOOLS.len() + FACADE_TOOLS.len() + PSEUDO_TOOLS.len(),
             "tool registries must not contain duplicate tool names"
         );
-        assert_eq!(KNOWN_TOOLS.len(), 48);
+        assert_eq!(KNOWN_TOOLS.len(), 50);
     }
 
     #[test]

@@ -299,6 +299,12 @@ pub struct Cli {
     #[command(flatten)]
     pub tool_mode: mecmcp_runtime::cli::ToolModeArgs,
 
+    /// Directory of Junos skills served over MCP (SEP-2640) and through
+    /// `list_junos_skills` / `read_junos_skill` (env `JMCP_SKILLS_DIR`). A
+    /// missing directory starts the server without skills.
+    #[arg(long, default_value = "/usr/share/rust-junosmcp/skills")]
+    pub skills_dir: PathBuf,
+
     /// File containing the HMAC key for the change-set approval digest.
     ///
     /// Required by `--require-verified-approver`, which signs the

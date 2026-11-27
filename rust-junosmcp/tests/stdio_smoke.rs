@@ -48,6 +48,8 @@ const JUNOS_TOOLS: &[&str] = &[
     "get_junos_candidate_fingerprint",
     "lookup_junos_api",
     "execute_junos_rpc",
+    "list_junos_skills",
+    "read_junos_skill",
 ];
 
 #[cfg(feature = "srx")]
@@ -198,9 +200,9 @@ fn lists_expected_tools() {
     // `srx_flow_sessions` + `srx_policy_match` add two more (MEC-55), and
     // `confirm_commit` adds one more (MEC-45), and `get_srx_feed_status` one (#528), and `lookup_junos_api` one.
     #[cfg(feature = "srx")]
-    assert_eq!(names.len(), 47);
+    assert_eq!(names.len(), 49);
     #[cfg(not(feature = "srx"))]
-    assert_eq!(names.len(), 31);
+    assert_eq!(names.len(), 33);
 }
 
 #[cfg(feature = "srx")]

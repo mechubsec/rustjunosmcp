@@ -7,10 +7,13 @@
 use mecmcp_audit::AuditScope;
 use mecmcp_server::{ToolErrorCode, tool_error_coded};
 use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::skill_catalog::SkillCatalog;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ContentBlock, Extensions, Implementation,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
+    CallToolRequestParams, CallToolResult, ContentBlock, Extensions, GetSkillRequestParams,
+    GetSkillResult, Implementation, ListResourcesResult, ListSkillsResult, ListToolsResult,
+    PaginatedRequestParams, ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult,
+    ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler, tool, tool_handler, tool_router};
@@ -236,7 +239,9 @@ const RETRY_SAFE_TOOLS: &[&str] = &[
     "get_srx_security_services_status",
     "junos_config_diff",
     "list_staged_files",
+    "list_junos_skills",
     "lookup_junos_api",
+    "read_junos_skill",
     "srx_flow_sessions",
     "srx_list_nat_rules",
     "srx_list_policies",
@@ -659,6 +664,8 @@ pub struct JmcpHandler {
     tool_router: ToolRouter<Self>,
     /// Family and train of routers, shared by the API-catalog tools.
     train_cache: Arc<rust_junosmcp_core::tools::lookup_api::DeviceTrainCache>,
+    /// Junos skills served over MCP (SEP-2640); `None` when no skills loaded.
+    skills: Option<Arc<SkillCatalog>>,
     /// Whether to allow destructive operations on plane-owned devices.
     /// Defaults to false (refuse). Set via --allow-plane-owned-writes CLI flag.
     allow_plane_owned_writes: bool,
@@ -726,6 +733,7 @@ impl JmcpHandler {
             coordinator,
             tool_router,
             train_cache: Arc::default(),
+            skills: None,
             allow_plane_owned_writes,
             web_enabled_approver,
             direct_commit,
@@ -924,6 +932,8 @@ const SERVER_TOOLS: &[&str] = &[
     "get_junos_candidate_fingerprint",
     "lookup_junos_api",
     "execute_junos_rpc",
+    "list_junos_skills",
+    "read_junos_skill",
 ];
 
 #[cfg(test)]
@@ -935,12 +945,12 @@ mod server_tools_const_tests {
     /// Tripwire: changing tool count without updating `SERVER_TOOLS` breaks
     /// the build. Bump this number deliberately when adding/removing tools.
     #[test]
-    fn server_tools_len_is_30() {
+    fn server_tools_len_is_32() {
         // 23 before the candidate-fingerprint tool (#231); 25 with the
         // confirming-commit tool (#239); 26 with list_junos_change_sets (#255);
         // 27 with cancel_junos_change_set; 28 with confirm_commit (MEC-45);
-        // 29 with lookup_junos_api; 30 with execute_junos_rpc.
-        assert_eq!(SERVER_TOOLS.len(), 30);
+        // 29 with lookup_junos_api; 30 with execute_junos_rpc; 32 with the skill tools.
+        assert_eq!(SERVER_TOOLS.len(), 32);
     }
 
     #[test]
@@ -1167,6 +1177,68 @@ impl JmcpHandler {
             Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         Self::to_call_result(result)
+    }
+
+    #[tool(
+        name = "list_junos_skills",
+        description = "List the Junos skills this server carries: workflow and judgement guidance (API lookup, config paths, EX switching, NETCONF) that goes with the tools. Returns [{name, description, uri}]. Read one with read_junos_skill. Use this when your client does not surface MCP skills itself. Read-only."
+    )]
+    async fn list_junos_skills(
+        &self,
+        extensions: Extensions,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let ctx = caller_ctx(&extensions);
+        let mut audit = audit_scope(ctx, "list_junos_skills", "read", Vec::new());
+        if let Err(e) = self.check_tool_scope(ctx, "list_junos_skills") {
+            audit.deny("tool_scope");
+            return Self::scope_to_call_result(e);
+        }
+        let listed: Vec<Value> = self
+            .skills
+            .iter()
+            .flat_map(|catalog| catalog.skills())
+            .map(|skill| {
+                serde_json::json!({
+                    "name": skill.frontmatter.name,
+                    "description": skill.frontmatter.description,
+                    "uri": skill.uri,
+                })
+            })
+            .collect();
+        audit.succeed();
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            serde_json::to_string_pretty(&listed).unwrap_or_else(|e| e.to_string()),
+        )]))
+    }
+
+    #[tool(
+        name = "read_junos_skill",
+        description = "Read a file of a Junos skill by name (see list_junos_skills). `path` is relative to the skill directory and defaults to SKILL.md; a skill's SKILL.md names its reference files. Absolute paths and `..` are refused. Read-only."
+    )]
+    async fn read_junos_skill(
+        &self,
+        Parameters(args): Parameters<ReadSkillArgs>,
+        extensions: Extensions,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let ctx = caller_ctx(&extensions);
+        let mut audit = audit_scope(ctx, "read_junos_skill", "read", Vec::new());
+        if let Err(e) = self.check_tool_scope(ctx, "read_junos_skill") {
+            audit.deny("tool_scope");
+            return Self::scope_to_call_result(e);
+        }
+        let result = self.read_skill_file(&args);
+        match &result {
+            Ok(text) => {
+                audit.meta("output_bytes", text.len() as u64);
+                audit.succeed();
+            }
+            Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
+        }
+        match result {
+            // Static skill text, not device output: no secret redaction.
+            Ok(text) => Ok(CallToolResult::success(vec![ContentBlock::text(text)])),
+            Err(e) => Ok(coded_error_result(&e)),
+        }
     }
 
     #[tool(
@@ -2539,18 +2611,93 @@ fn listed_tools(tools: Vec<rmcp::model::Tool>, cache_hints: bool) -> ListToolsRe
     }
 }
 
+/// Arguments for `read_junos_skill`.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadSkillArgs {
+    /// Skill name from `list_junos_skills`, such as `junos-api-lookup`.
+    pub name: String,
+    /// File inside the skill, relative to its directory (default `SKILL.md`).
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// Whether `part` can be one segment of a skill name or file path.
+fn is_plain_segment(part: &str) -> bool {
+    !part.is_empty() && part != "." && part != ".." && !part.contains(['\\', '\0'])
+}
+
+impl JmcpHandler {
+    /// Serve skills from `catalog` over MCP and through the skill tools.
+    pub fn with_skills(mut self, catalog: Arc<SkillCatalog>) -> Self {
+        self.skills = Some(catalog);
+        self
+    }
+
+    /// Text of one skill file. Resolves through the catalog's own `skill://`
+    /// map, so nothing outside the loaded skills is reachable; the segment
+    /// check only gives a clear error for `..` and absolute paths.
+    fn read_skill_file(
+        &self,
+        args: &ReadSkillArgs,
+    ) -> Result<String, rust_junosmcp_core::JmcpError> {
+        use rust_junosmcp_core::JmcpError;
+        let relative = args.path.as_deref().unwrap_or("SKILL.md");
+        let well_formed =
+            args.name.split('/').all(is_plain_segment) && relative.split('/').all(is_plain_segment);
+        if !well_formed {
+            return Err(JmcpError::Validation(
+                "skill name and path must be relative, without `..`, empty segments or backslashes"
+                    .into(),
+            ));
+        }
+        let uri = format!("skill://{}/{relative}", args.name);
+        let found = self
+            .skills
+            .as_ref()
+            .and_then(|catalog| catalog.read_resource(&uri))
+            .ok_or_else(|| {
+                JmcpError::Validation(format!(
+                    "no skill file {uri}; list skills with list_junos_skills"
+                ))
+            })?;
+        match found.contents.into_iter().next() {
+            Some(rmcp::model::ResourceContents::TextResourceContents { text, .. }) => Ok(text),
+            _ => Err(JmcpError::Validation(format!("{uri} is not a text file"))),
+        }
+    }
+}
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for JmcpHandler {
     fn get_info(&self) -> ServerConfig {
         #[cfg(feature = "srx")]
-        let instructions = "Junos and SRX MCP server. Use get_router_list to enumerate \
+        let base = "Junos and SRX MCP server. Use get_router_list to enumerate \
              visible routers, then select generic Junos primitives or \
              SRX-specific operational workflows.";
         #[cfg(not(feature = "srx"))]
-        let instructions = "Junos MCP server. Use get_router_list to enumerate visible \
+        let base = "Junos MCP server. Use get_router_list to enumerate visible \
              routers, then select a Junos operational primitive.";
+        let instructions = if self.skills.is_some() {
+            format!(
+                "{base} Skills (workflow and field-verified Junos gotchas) are served over \
+                 MCP skills; if your client does not show them, call list_junos_skills and \
+                 read_junos_skill. Read junos-config-paths before writing configuration."
+            )
+        } else {
+            base.to_owned()
+        };
 
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        let capabilities = if self.skills.is_some() {
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .enable_skills_with_directory_read()
+                .build()
+        } else {
+            ServerCapabilities::builder().enable_tools().build()
+        };
+        ServerConfig::new(capabilities)
             .with_server_info(Implementation::new(
                 "jmcp-server",
                 env!("CARGO_PKG_VERSION"),
@@ -2642,6 +2789,69 @@ impl ServerHandler for JmcpHandler {
         result
     }
 
+    async fn list_skills(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListSkillsResult, rmcp::ErrorData> {
+        Ok(self.skills.as_ref().map_or_else(
+            || ListSkillsResult::with_all_items(Vec::new()),
+            |c| c.list_skills(),
+        ))
+    }
+
+    async fn get_skill(
+        &self,
+        request: GetSkillRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetSkillResult, rmcp::ErrorData> {
+        match &self.skills {
+            Some(catalog) => catalog.get_skill(&request.uri),
+            None => Err(rmcp::ErrorData::invalid_params(
+                format!("unknown skill {}", request.uri),
+                None,
+            )),
+        }
+    }
+
+    async fn read_resource_directory(
+        &self,
+        request: ReadResourceDirectoryRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceDirectoryResult, rmcp::ErrorData> {
+        match &self.skills {
+            Some(catalog) => catalog.read_resource_directory(&request.uri),
+            None => Err(rmcp::ErrorData::invalid_params(
+                format!("not a directory: {}", request.uri),
+                None,
+            )),
+        }
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, rmcp::ErrorData> {
+        let resources = self
+            .skills
+            .as_ref()
+            .map_or_else(Vec::new, |c| c.resources());
+        Ok(ListResourcesResult::with_all_items(resources))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, rmcp::ErrorData> {
+        self.skills
+            .as_ref()
+            .and_then(|catalog| catalog.read_resource(&request.uri))
+            .map(Into::into)
+            .ok_or_else(|| rmcp::ErrorData::resource_not_found(request.uri, None))
+    }
+
     /// Advertise only the tools this caller may invoke.
     ///
     /// Defining this by hand suppresses the one `#[tool_handler]` would
@@ -2721,7 +2931,7 @@ mod scope_tests {
         Arc::new(rust_junosmcp_core::DeviceLeaseManager::for_directory(path).unwrap())
     }
 
-    fn make_handler() -> JmcpHandler {
+    pub(super) fn make_handler() -> JmcpHandler {
         let inv = Arc::new(rust_junosmcp_core::Inventory::empty());
         let dm = Arc::new(DeviceManager::new(inv.clone()));
         let policy = Arc::new(arc_swap::ArcSwap::from(Arc::new(
@@ -2937,8 +3147,8 @@ mod scope_tests {
         // srx_resolve_address, srx_resolve_application, srx_list_nat_rules)
         // make 41, and `srx_flow_sessions` + `srx_policy_match` make 43 (MEC-55).
         // `confirm_commit` makes 44 (MEC-45), `get_srx_feed_status` makes 45 (#528),
-        // `lookup_junos_api` makes 46, `execute_junos_rpc` 47.
-        assert_eq!(names.len(), 47);
+        // `lookup_junos_api` makes 46, `execute_junos_rpc` 47, the skill tools 49.
+        assert_eq!(names.len(), 49);
     }
 
     #[test]
@@ -2948,8 +3158,8 @@ mod scope_tests {
         // `confirm_junos_change_set` makes 25 (#239),
         // `list_junos_change_sets` makes 26 (#255), and
         // `cancel_junos_change_set` makes 27 (#293), `confirm_commit` makes
-        // 28 (MEC-45), `lookup_junos_api` makes 29, `execute_junos_rpc` 30.
-        assert_eq!(JmcpHandler::junos_tool_router().list_all().len(), 30);
+        // 28 (MEC-45), `lookup_junos_api` makes 29, `execute_junos_rpc` 30, the skill tools 32.
+        assert_eq!(JmcpHandler::junos_tool_router().list_all().len(), 32);
     }
 
     #[test]
@@ -4621,5 +4831,151 @@ mod list_count_audit_tests {
         // `device_count=0` is always present; strip it so only the meta can match.
         let out = audited_count(json!([])).replace("device_count=", "");
         assert!(out.contains("count=0"), "output: {out}");
+    }
+}
+
+#[cfg(test)]
+mod skill_tests {
+    use super::*;
+
+    fn skills_dir() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["alpha", "beta"] {
+            let skill = dir.path().join(name);
+            std::fs::create_dir_all(skill.join("references")).unwrap();
+            std::fs::write(
+                skill.join("SKILL.md"),
+                format!(
+                    "---\nname: {name}\ndescription: The {name} skill.\n---\nBody of {name}.\n"
+                ),
+            )
+            .unwrap();
+            std::fs::write(skill.join("references/note.md"), "a note").unwrap();
+        }
+        // A file next to the skills must never be reachable through them.
+        std::fs::write(dir.path().join("outside.md"), "outside").unwrap();
+        dir
+    }
+
+    fn handler_with(dir: &std::path::Path) -> JmcpHandler {
+        let catalog = SkillCatalog::from_dir(dir).unwrap();
+        super::scope_tests::make_handler().with_skills(Arc::new(catalog))
+    }
+
+    fn text_of(result: CallToolResult) -> String {
+        let value = serde_json::to_value(&result).unwrap();
+        value["content"][0]["text"].as_str().unwrap().to_owned()
+    }
+
+    #[tokio::test]
+    async fn fallback_tools_match_skills() {
+        let dir = skills_dir();
+        let handler = handler_with(dir.path());
+        let listed = handler
+            .list_junos_skills(Extensions::default())
+            .await
+            .unwrap();
+        let listed: Vec<Value> = serde_json::from_str(&text_of(listed)).unwrap();
+        let catalog_names: Vec<String> = handler
+            .skills
+            .as_ref()
+            .unwrap()
+            .skills()
+            .into_iter()
+            .map(|skill| skill.frontmatter.name)
+            .collect();
+        let tool_names: Vec<String> = listed
+            .iter()
+            .map(|item| item["name"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(tool_names, catalog_names);
+        assert_eq!(listed[0]["uri"], "skill://alpha/SKILL.md");
+        assert_eq!(listed[0]["description"], "The alpha skill.");
+
+        let read = |name: &str, path: Option<&str>| {
+            handler.read_skill_file(&ReadSkillArgs {
+                name: name.into(),
+                path: path.map(str::to_owned),
+            })
+        };
+        let via_tool = read("alpha", None).unwrap();
+        let via_catalog = handler
+            .skills
+            .as_ref()
+            .unwrap()
+            .read_resource("skill://alpha/SKILL.md")
+            .unwrap();
+        let rmcp::model::ResourceContents::TextResourceContents { text, .. } =
+            &via_catalog.contents[0]
+        else {
+            panic!("SKILL.md must be text");
+        };
+        assert_eq!(&via_tool, text);
+        assert_eq!(read("beta", Some("references/note.md")).unwrap(), "a note");
+    }
+
+    #[test]
+    fn read_junos_skill_cannot_leave_the_skill_directory() {
+        let dir = skills_dir();
+        let handler = handler_with(dir.path());
+        let attempts = [
+            ("alpha", "../outside.md"),
+            ("alpha", "../../outside.md"),
+            ("alpha", "/etc/passwd"),
+            ("alpha", "references/../../outside.md"),
+            ("alpha", "references\\..\\..\\outside.md"),
+            ("..", "outside.md"),
+            ("alpha/..", "outside.md"),
+            ("", "SKILL.md"),
+            ("alpha", ""),
+            ("alpha", "missing.md"),
+            ("nope", "SKILL.md"),
+        ];
+        for (name, path) in attempts {
+            let result = handler.read_skill_file(&ReadSkillArgs {
+                name: name.into(),
+                path: Some(path.into()),
+            });
+            assert!(result.is_err(), "{name} {path} must be refused");
+        }
+    }
+
+    #[test]
+    fn skills_capability_is_only_declared_when_skills_loaded() {
+        let without = serde_json::to_value(super::scope_tests::make_handler().get_info()).unwrap();
+        assert!(
+            !without.to_string().contains("skills"),
+            "no catalog, no extension: {without}"
+        );
+        assert!(without["capabilities"].get("resources").is_none());
+
+        let dir = skills_dir();
+        let with = serde_json::to_value(handler_with(dir.path()).get_info()).unwrap();
+        assert!(with["capabilities"].get("resources").is_some(), "{with}");
+        assert!(with.to_string().contains("skills"), "{with}");
+        assert!(
+            with["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("list_junos_skills")
+        );
+    }
+
+    #[tokio::test]
+    async fn no_catalog_means_empty_tool_answers() {
+        let handler = super::scope_tests::make_handler();
+        let listed = handler
+            .list_junos_skills(Extensions::default())
+            .await
+            .unwrap();
+        assert_eq!(text_of(listed), "[]");
+        assert!(
+            handler
+                .read_skill_file(&ReadSkillArgs {
+                    name: "alpha".into(),
+                    path: None
+                })
+                .is_err()
+        );
     }
 }

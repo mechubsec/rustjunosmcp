@@ -203,6 +203,13 @@ where
         parse_path,
     )?;
     resolver.resolve(
+        &mut cli.skills_dir,
+        "skills_dir",
+        "JMCP_SKILLS_DIR",
+        None,
+        parse_path,
+    )?;
+    resolver.resolve(
         &mut cli.device_lease_dir,
         "device_lease_dir",
         "JMCP_DEVICE_LEASE_DIR",

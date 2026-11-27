@@ -1499,6 +1499,14 @@
       }
     }
   },
+  "list_junos_skills": {
+    "name": "list_junos_skills",
+    "description": "List the Junos skills this server carries: workflow and judgement guidance (API lookup, config paths, EX switching, NETCONF) that goes with the tools. Returns [{name, description, uri}]. Read one with read_junos_skill. Use this when your client does not surface MCP skills itself. Read-only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
   "list_staged_files": {
     "name": "list_staged_files",
     "description": "List host-staging files (always); also lists /var/tmp/ on a Junos device when device is supplied",
@@ -1730,6 +1738,32 @@
         }
       },
       "additionalProperties": false
+    }
+  },
+  "read_junos_skill": {
+    "name": "read_junos_skill",
+    "description": "Read a file of a Junos skill by name (see list_junos_skills). `path` is relative to the skill directory and defaults to SKILL.md; a skill's SKILL.md names its reference files. Absolute paths and `..` are refused. Read-only.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Skill name from `list_junos_skills`, such as `junos-api-lookup`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "File inside the skill, relative to its directory (default `SKILL.md`).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
     }
   },
   "reload_devices": {
