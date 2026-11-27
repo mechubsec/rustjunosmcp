@@ -91,6 +91,32 @@ fn cli_prefix_len(cli: &str, query: &str) -> Option<usize> {
     (matched > 0).then_some(matched)
 }
 
+/// CLI keywords the YANG renames to avoid clashes, field-verified on the
+/// bench-lab baselines: CLI `match` under a NAT rule.
+const RENAMED_KEYWORDS: &[(&str, &[&str])] = &[(
+    "match",
+    &[
+        "src-nat-rule-match",
+        "dest-nat-rule-match",
+        "static-nat-rule-match",
+    ],
+)];
+
+/// Leaves whose keyword the CLI omits, field-verified on the bench-lab
+/// baselines (`storm-control default`, `traceoptions file f1`,
+/// `default-policy deny-all`, `address a1 10.0.0.0/8`). Add an entry when a
+/// real line is rejected; never accept any leaf.
+const POSITIONAL_LEAVES: &[&str] = &["profile-name", "filename", "default-action", "ip-prefix"];
+
+/// Whether `value` fits a leaf type: any value unless it is an enumeration
+/// (`enumeration: deny-all | permit-all`), which must list it.
+fn enum_allows(type_name: Option<&str>, value: &str) -> bool {
+    match type_name.and_then(|name| name.strip_prefix("enumeration:")) {
+        Some(values) => values.split('|').any(|allowed| allowed.trim() == value),
+        None => true,
+    }
+}
+
 fn child(parent: &str, token: &str) -> String {
     if parent.is_empty() {
         token.to_owned()
@@ -257,8 +283,9 @@ impl Catalog {
     /// The token after a list is its key value. Junos CLI shorthands are
     /// accepted: an elided list keyword (`interfaces ge-0/0/0` for
     /// `interfaces interface ge-0/0/0`), keyword-named keys (`from-zone X
-    /// to-zone Y` for the `from-zone-name`/`to-zone-name` keys), a trailing
-    /// positional value after a list entry (`address a1 10.0.0.0/8`), and the
+    /// to-zone Y` for the `from-zone-name`/`to-zone-name` keys), the values of
+    /// [`POSITIONAL_LEAVES`] without their keyword, the CLI names in
+    /// [`RENAMED_KEYWORDS`], and the
     /// root hierarchy repeated under `logical-systems <name>` and
     /// `tenants <name>`.
     pub fn config_path_exists(&self, res: &Resolution, path: &[&str]) -> bool {
@@ -297,15 +324,15 @@ impl Catalog {
             let next = path.get(index + 1).copied();
 
             let mut named = child(&current, token);
-            if node(&named).is_none() {
-                // YANG renames some CLI keywords to avoid clashes: CLI `match`
-                // under a NAT rule is `src-nat-rule-match`.
-                let suffix = format!("-{token}");
-                if let Some(renamed) =
-                    direct_children(&current).find(|candidate| candidate.ends_with(&suffix))
-                {
-                    named = renamed;
-                }
+            if node(&named).is_none()
+                && let Some((_, renamed)) = RENAMED_KEYWORDS.iter().find(|(cli, _)| *cli == token)
+                && let Some(found) = direct_children(&current).find(|candidate| {
+                    renamed
+                        .iter()
+                        .any(|name| candidate.rsplit(' ').next() == Some(*name))
+                })
+            {
+                named = found;
             }
             if let Some(entry) = node(&named) {
                 if entry.kind != "list" && entry.kind != "container" {
@@ -333,9 +360,6 @@ impl Catalog {
                 index += 2;
                 continue;
             }
-            if in_list && next.is_none() {
-                return true;
-            }
             if current.is_empty() {
                 return false;
             }
@@ -351,13 +375,18 @@ impl Catalog {
                 index += consumed;
                 continue;
             }
-            // A positional leaf value: Junos omits the keyword of some leaves
-            // (`storm-control default` for `storm-control profile-name
-            // default`, `traceoptions file f1`, `default-policy deny-all`).
-            let has_leaf = direct_children(&current)
-                .any(|candidate| node(&candidate).is_some_and(|entry| entry.kind == "leaf"));
+            // A positional leaf value: the CLI omits the keyword of a few
+            // leaves (`storm-control default`, `traceoptions file f1`,
+            // `default-policy deny-all`, `address a1 10.0.0.0/8`).
+            let positional = direct_children(&current).any(|candidate| {
+                let name = candidate.rsplit(' ').next().unwrap_or_default();
+                POSITIONAL_LEAVES.contains(&name)
+                    && node(&candidate).is_some_and(|entry| {
+                        entry.kind == "leaf" && enum_allows(entry.type_name.as_deref(), token)
+                    })
+            });
             let next_fits = next.is_none_or(|next| node(&child(&current, next)).is_some());
-            if !(has_leaf && next_fits) {
+            if !(positional && next_fits) {
                 return false;
             }
             index += 1;

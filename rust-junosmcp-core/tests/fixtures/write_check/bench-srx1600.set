@@ -159,10 +159,10 @@ set security address-book global address-set lab-hosts address br2-users
 set security flow tcp-mss ipsec-vpn mss 1350
 set interfaces ge-0/0/0 unit 0 family inet address 10.66.181.2/24
 set interfaces ge-0/0/1 unit 0 family inet address 10.66.161.1/24
-set interfaces fxp0 unit 0 family inet address 192.168.1.133/24
+set interfaces fxp0 unit 0 family inet address 198.51.100.133/24
 set interfaces st0 unit 1 family inet address 10.66.250.1/30
 set interfaces st0 unit 2 family inet address 10.66.250.5/30
-set routing-instances mgmt_junos routing-options static route 0.0.0.0/0 next-hop 192.168.1.1
+set routing-instances mgmt_junos routing-options static route 0.0.0.0/0 next-hop 198.51.100.1
 set applications application-set lab-apps application junos-icmp-all
 set applications application-set lab-apps application junos-ssh
 set applications application-set lab-apps application junos-https

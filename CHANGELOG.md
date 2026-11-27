@@ -42,15 +42,26 @@ All notable user-facing changes are recorded here. Format loosely follows
   the candidate (or persisting the plan). When the catalog matches the release
   exactly, an unknown path is an `invalid_argument` error naming each bad line
   and up to 3 nearest catalog paths. When it does not (nearest-train fallback,
-  guessed family, or a train with catalog gaps), unknown paths are returned in
-  `warning` instead. `set` lines are checked in full; text and XML loads only
-  at the first two levels. `groups`, `apply-groups` and wildcards are skipped.
-  The family and release come from the device's facts, cached for 15 minutes.
-  If the facts cannot be read, or the model is not covered, the check is
-  skipped and `warning` says so. A device that cannot be opened fails before
-  the load, as it did before but without a second connect. A change-set
-  create has no device step of its own, so for an unreachable device it
-  only warns. It now connects to the device once (up to 15 s) to read facts.
+  a train with catalog gaps, or an SRX, vSRX or cSRX on a Junos OS Evolved
+  release, which is answered from junos-es because Juniper publishes no SRX
+  EVO YANG), unknown paths are returned in `warning` instead. So are unknown
+  `delete`/`deactivate` paths, and `set` lines after `up` or `exit`. `set`
+  lines are checked in full, relative to any `edit`; text and XML loads only
+  at the first two levels. `groups`, `apply-groups`, wildcards and XML
+  `comment`/`undocumented` wrappers are skipped. The family and release come
+  from the device's facts, cached for 15 minutes. On a cache miss, opening the
+  device and reading facts share one budget: the smaller of the tool's
+  `timeout` and 15 s. The write keeps the rest of its `timeout`. If the facts
+  cannot be read, the model is not covered, or the budget runs out, the check
+  is skipped and `warning` says so. A device that refuses the connection fails
+  before the load, as before but without a second connect. Cancelling the
+  call cancels the check. A change-set create has no device step of its own:
+  it now connects once (within the same 15 s budget) to read facts, and for
+  an unreachable device it only warns.
+- `lookup_junos_api` and `execute_junos_rpc` answer an SRX, vSRX or cSRX on a
+  Junos OS Evolved release from junos-es, with the warning "SRX on Junos OS
+  Evolved: Juniper publishes no SRX EVO YANG; answered from junos-es".
+  Before, they answered from junos-evo, which has no SRX security hierarchy.
 
 ### Fixed
 

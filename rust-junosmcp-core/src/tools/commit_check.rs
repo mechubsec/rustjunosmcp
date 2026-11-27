@@ -104,16 +104,19 @@ pub async fn handle_with_cancel(
     // configuration-set payload).
     let load_action = resolve_load_action(&args.config_format, rustez::LoadAction::Merge)?;
     let payload = build_config_payload(args.config_text, Some(&args.config_format))?;
-    let timeout_dur = Duration::from_secs(args.timeout);
+    let started = std::time::Instant::now();
     let catalog_warnings = train_cache
         .check_write(
             &dm,
             &args.device,
             std::slice::from_ref(&payload),
-            timeout_dur,
+            Duration::from_secs(args.timeout),
             false,
+            &ct,
         )
         .await?;
+    // One budget for the whole call: the write gets what the check left.
+    let timeout_dur = Duration::from_secs(args.timeout).saturating_sub(started.elapsed());
 
     let (result, warning) = candidate_transaction::run(
         &dm,

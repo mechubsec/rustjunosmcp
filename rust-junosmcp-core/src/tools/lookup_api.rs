@@ -10,7 +10,11 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
 
+/// The most a write's catalog check spends opening the device and reading
+/// its facts; the write keeps the rest of its timeout.
+pub const CATALOG_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a router's detected Family and train are trusted.
 const CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 /// A router's detected Family, train and whether the Family is certain.
@@ -139,6 +143,9 @@ impl DeviceTrainCache {
     /// be opened is skipped the same way when `skip_unreachable` (a change-set
     /// plan, which needs no device); otherwise it fails here with the error the
     /// write's own open would hit, rather than retrying the connect twice.
+    /// Open and facts share one budget, the smaller of `timeout` and
+    /// [`CATALOG_CHECK_TIMEOUT`]; running out of it skips the check with a
+    /// warning. Cancelling `ct` returns [`JmcpError::Cancelled`].
     pub async fn check_write(
         &self,
         dm: &Arc<DeviceManager>,
@@ -146,6 +153,7 @@ impl DeviceTrainCache {
         payloads: &[rustez::ConfigPayload],
         timeout: Duration,
         skip_unreachable: bool,
+        ct: &CancellationToken,
     ) -> Result<Vec<String>, JmcpError> {
         // A declared Mist device is refused before any connect by the write's
         // plane guard; opening it here first would break that promise.
@@ -158,28 +166,40 @@ impl DeviceTrainCache {
         let detected = match self.get(router) {
             Some(detected) => Ok(detected),
             None => {
-                let opened = tokio::time::timeout(timeout, dm.open(router))
-                    .await
-                    .map_err(|_| JmcpError::Timeout(timeout))
-                    .and_then(|opened| opened);
-                let mut dev = match opened {
-                    Ok(dev) => dev,
-                    Err(JmcpError::UnknownRouter(name)) => {
+                // One budget for open + facts, so the write keeps the rest.
+                let budget = timeout.min(CATALOG_CHECK_TIMEOUT);
+                let opened = std::sync::atomic::AtomicBool::new(false);
+                let detection = async {
+                    let mut dev = dm.open(router).await?;
+                    opened.store(true, std::sync::atomic::Ordering::Relaxed);
+                    // Pooled only once the facts RPC completes: a dropped
+                    // future would otherwise pool a session mid-RPC.
+                    dev.prevent_reuse();
+                    let facts = dev.facts().await?;
+                    let detected = detect_from_facts(router, &facts.model, &facts.version);
+                    dev.allow_reuse();
+                    detected
+                };
+                let outcome = tokio::select! {
+                    biased;
+                    _ = ct.cancelled() => return Err(JmcpError::Cancelled),
+                    outcome = tokio::time::timeout(budget, detection) => outcome,
+                };
+                match outcome {
+                    Ok(Err(JmcpError::UnknownRouter(name))) => {
                         return Err(JmcpError::UnknownRouter(name));
                     }
-                    Err(error) if !skip_unreachable => return Err(error),
-                    Err(error) => return Ok(vec![skipped_warning(router, &error)]),
-                };
-                let facts = match tokio::time::timeout(timeout, dev.facts()).await {
-                    Ok(Ok(facts)) => Ok((facts.model.clone(), facts.version.clone())),
-                    Ok(Err(error)) => Err(JmcpError::from(error)),
-                    Err(_) => Err(JmcpError::Timeout(timeout)),
-                };
-                if facts.is_err() {
-                    // A failed or dropped RPC leaves the session in an unknown state.
-                    dev.prevent_reuse();
+                    // The write's own open would fail the same way.
+                    Ok(Err(error))
+                        if !opened.load(std::sync::atomic::Ordering::Relaxed)
+                            && !skip_unreachable =>
+                    {
+                        return Err(error);
+                    }
+                    Ok(result) => result,
+                    // Slow, not refused: leave the rest of the budget to the write.
+                    Err(_) => Err(JmcpError::Timeout(budget)),
                 }
-                facts.and_then(|(model, version)| detect_from_facts(router, &model, &version))
             }
         };
         let (family, train, exact_family) = match detected {
@@ -207,7 +227,7 @@ fn skipped_warning(router: &str, error: &JmcpError) -> String {
     )
 }
 
-/// Maps a device's facts to its `(Family, Train, true)`, or a validation
+/// Maps a device's facts to its `(Family, Train, exact_family)`, or a validation
 /// error when the model or release is outside the catalog.
 pub fn detect_from_facts(router: &str, model: &str, version: &str) -> Result<Detected, JmcpError> {
     let unsupported = || {
@@ -217,9 +237,9 @@ pub fn detect_from_facts(router: &str, model: &str, version: &str) -> Result<Det
              later. Pass `family` and `release` to look up a nearby one."
         ))
     };
-    let family = family_for(model, version).ok_or_else(unsupported)?;
+    let (family, exact_family) = family_for(model, version).ok_or_else(unsupported)?;
     let train = train_for(version).ok_or_else(unsupported)?;
-    Ok((family, train, true))
+    Ok((family, train, exact_family))
 }
 
 fn unreachable_error(router: &str, why: &str) -> JmcpError {
@@ -311,7 +331,17 @@ mod tests {
         let family = |model, version| detect_from_facts("r", model, version).unwrap().0;
         assert_eq!(family("SRX345", "24.4R1.9"), Family::JunosEs);
         assert_eq!(family("EX2300-24T", "23.4R2-S1.3"), Family::JunosEx);
-        assert_eq!(family("SRX440", "25.4X300-D40.2-EVO"), Family::JunosEvo);
+        assert_eq!(
+            detect_from_facts("r", "SRX440", "25.4X300-D40.2-EVO").unwrap(),
+            (
+                Family::JunosEs,
+                Train {
+                    major: 25,
+                    minor: 4
+                },
+                false
+            )
+        );
     }
 
     #[tokio::test]
@@ -330,7 +360,14 @@ mod tests {
             ),
         );
         let error = seeded
-            .check_write(&manager(), "r1", &payload, Duration::from_secs(5), false)
+            .check_write(
+                &manager(),
+                "r1",
+                &payload,
+                Duration::from_secs(5),
+                false,
+                &CancellationToken::new(),
+            )
             .await
             .unwrap_err()
             .to_string();
@@ -339,13 +376,27 @@ mod tests {
         // An unreachable device fails as the write's own open would.
         let unseeded = DeviceTrainCache::default();
         let error = unseeded
-            .check_write(&manager(), "r1", &payload, Duration::from_secs(1), false)
+            .check_write(
+                &manager(),
+                "r1",
+                &payload,
+                Duration::from_secs(30),
+                false,
+                &CancellationToken::new(),
+            )
             .await
             .unwrap_err();
         assert!(!matches!(error, JmcpError::Validation(_)), "{error:?}");
         // A change-set plan needs no device, so it is only warned.
         let warnings = unseeded
-            .check_write(&manager(), "r1", &payload, Duration::from_secs(1), true)
+            .check_write(
+                &manager(),
+                "r1",
+                &payload,
+                Duration::from_secs(1),
+                true,
+                &CancellationToken::new(),
+            )
             .await
             .unwrap();
         assert!(
@@ -354,17 +405,49 @@ mod tests {
         );
         assert!(matches!(
             unseeded
-                .check_write(&manager(), "nope", &payload, Duration::from_secs(5), false)
+                .check_write(
+                    &manager(),
+                    "nope",
+                    &payload,
+                    Duration::from_secs(5),
+                    false,
+                    &CancellationToken::new()
+                )
                 .await,
             Err(JmcpError::UnknownRouter(_))
         ));
         assert!(
             unseeded
-                .check_write(&manager(), "nope", &[], Duration::from_secs(5), false)
+                .check_write(
+                    &manager(),
+                    "nope",
+                    &[],
+                    Duration::from_secs(5),
+                    false,
+                    &CancellationToken::new()
+                )
                 .await
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn check_write_honours_cancellation() {
+        let payload = [rustez::ConfigPayload::Set("set system host-name r1".into())];
+        let ct = CancellationToken::new();
+        ct.cancel();
+        let result = DeviceTrainCache::default()
+            .check_write(
+                &manager(),
+                "r1",
+                &payload,
+                Duration::from_secs(30),
+                false,
+                &ct,
+            )
+            .await;
+        assert!(matches!(result, Err(JmcpError::Cancelled)), "{result:?}");
     }
 
     #[test]

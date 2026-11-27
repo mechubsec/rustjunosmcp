@@ -19,7 +19,7 @@ use serde::de::{DeserializeOwned, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub use lookup::{ConfigHit, RpcHit};
-pub use version::{Family, Train, family_for, train_for};
+pub use version::{Family, SRX_EVO_WARNING, Train, family_for, train_for};
 pub use write_check::check_config_paths;
 
 use crate::error::JmcpError;
@@ -320,8 +320,8 @@ impl Catalog {
 
     /// Picks the catalog train to answer for `requested` on `family`.
     ///
-    /// `exact_family` is false when the Family was guessed rather than
-    /// detected from the device. Loads both the RPC and configuration data
+    /// `exact_family` is false when the Family was inferred rather than
+    /// matched to the device (SRX on Junos OS Evolved, see [`family_for`]). Loads both the RPC and configuration data
     /// of `family`, since the warning covers gaps in either.
     pub fn resolve(&self, family: Family, requested: Train, exact_family: bool) -> Resolution {
         let rpc = self.rpc_data(family);
@@ -347,9 +347,14 @@ impl Catalog {
             ));
         }
         if !exact_family {
-            warnings.push(format!(
-                "family {family} was not detected from the device; results are unverified for this device"
-            ));
+            // An inexact junos-es is only ever inferred for SRX on EVO.
+            warnings.push(if family == Family::JunosEs {
+                SRX_EVO_WARNING.to_owned()
+            } else {
+                format!(
+                    "family {family} was not detected from the device; results are unverified for this device"
+                )
+            });
         }
         let gaps: Vec<String> = rpc
             .map(|data| data.gaps.as_slice())
@@ -425,7 +430,7 @@ mod tests {
     fn resolve_guessed_family_warns() {
         let res = fixture_catalog().resolve(Family::JunosEs, train(25, 4), false);
         assert_eq!(res.used, train(25, 4));
-        assert!(res.warning.unwrap().contains("unverified for this device"));
+        assert_eq!(res.warning.unwrap(), SRX_EVO_WARNING);
     }
 
     #[test]

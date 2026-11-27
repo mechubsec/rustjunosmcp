@@ -3,7 +3,7 @@
 
 use rustez::ConfigPayload;
 
-use super::{Catalog, Family, Resolution};
+use super::{Catalog, Resolution};
 use crate::error::JmcpError;
 
 /// `set`-format verbs whose argument is a configuration path. Other verbs
@@ -20,25 +20,50 @@ const PATH_VERBS: [&str; 6] = [
 const MAX_REPORTED: usize = 20;
 const MAX_SUGGESTIONS: usize = 3;
 /// Paths devices accept that Juniper's published YANG lacks, found by loading
-/// real configurations (the bench-lab baselines). Add to this when a real
-/// configuration line is falsely rejected.
+/// real configurations (the bench-lab baselines). Matching is by prefix: an
+/// entry accepts every path below it; `*` matches any one token (a list key).
+/// Add to this when a real configuration line is falsely rejected.
 const KNOWN_OMISSIONS: &[&[&str]] = &[
     // SRX branch factory default (SRX345, SRX1600 on 25.4).
     &["system", "phone-home"],
+    // The preloaded CA bundle (SRX1600, SRX345, SRX440 on 25.4; vSRX 26.2).
+    &["security", "pki", "ca-profile", "*", "pre-load"],
 ];
+
+/// Whether `tokens` starts with a [`KNOWN_OMISSIONS`] entry.
+fn known_omission(tokens: &[&str]) -> bool {
+    KNOWN_OMISSIONS.iter().any(|omitted| {
+        omitted.len() <= tokens.len()
+            && omitted
+                .iter()
+                .zip(tokens)
+                .all(|(want, have)| *want == "*" || want == have)
+    })
+}
 
 /// Whether a token path exists on a resolved train.
 type PathCheck = fn(&Catalog, &Resolution, &[&str]) -> bool;
 
+/// One path to check: the line it came from, its tokens, and whether an
+/// unknown path may be an error (`false` only ever warns).
+struct Checked {
+    line: String,
+    tokens: Vec<String>,
+    strict: bool,
+}
+
 /// Checks every configuration path in `payload` against the resolved train.
 ///
-/// `set` lines check the path after the verb; text and XML check top-level and
-/// second-level statement names only. Skips `groups`, `apply-groups`,
-/// comments, blank lines and wildcard (`<*>`) or `replace:`-style markers.
+/// `set` lines check the path after the verb, relative to any `edit`; text
+/// and XML check top-level and second-level statement names only. Skips
+/// `groups`, `apply-groups`, comments, blank lines and wildcard (`<*>`) or
+/// `replace:`-style markers.
 ///
 /// On an exact resolution (`res.warning.is_none()`) unknown paths are an
-/// error naming each bad line and up to 3 nearest catalog paths; otherwise
-/// they come back as warnings, since the catalog may not match the device.
+/// error naming each bad line and up to 3 nearest catalog paths. They are
+/// warnings instead on any other resolution, since the catalog may not match
+/// the device, and for `delete`/`deactivate` lines and lines after `up` or
+/// `exit` (whose hierarchy level is not tracked).
 pub fn check_config_paths(
     catalog: &Catalog,
     res: &Resolution,
@@ -49,54 +74,53 @@ pub fn check_config_paths(
         ConfigPayload::Text(text) => (text_paths(text), Catalog::config_path_exists),
         ConfigPayload::Xml(text) => (xml_paths(text), xml_path_exists),
     };
-    // Juniper's junos-evo YANG omits the SRX security hierarchy that SRX
-    // models running Junos OS Evolved (SRX4xx) accept, so an EVO path also
-    // passes when junos-es has it.
-    let es = (res.family == Family::JunosEvo)
-        .then(|| catalog.resolve(Family::JunosEs, res.requested, true));
-    let bad: Vec<(String, Vec<String>)> = paths
+    let (errors, warnings): (Vec<Checked>, Vec<Checked>) = paths
         .into_iter()
-        .filter(|(_, tokens)| !skipped(tokens))
-        .filter(|(_, tokens)| {
-            let tokens: Vec<&str> = tokens.iter().map(String::as_str).collect();
-            !(exists(catalog, res, &tokens)
-                || es.as_ref().is_some_and(|es| exists(catalog, es, &tokens))
-                || KNOWN_OMISSIONS
-                    .iter()
-                    .any(|omitted| tokens.starts_with(omitted)))
+        .filter(|path| !skipped(&path.tokens))
+        .filter(|path| {
+            let tokens: Vec<&str> = path.tokens.iter().map(String::as_str).collect();
+            !(exists(catalog, res, &tokens) || known_omission(&tokens))
         })
-        .collect();
-    if bad.is_empty() {
+        .partition(|path| path.strict && res.warning.is_none());
+
+    let target = format!("{} {}", res.family, res.used);
+    if !errors.is_empty() {
+        return Err(JmcpError::Validation(format!(
+            "configuration paths not in the {target} API catalog: {}. Use lookup_junos_api \
+             (kind=config) to find the right path.",
+            describe(catalog, res, &errors)
+        )));
+    }
+    if warnings.is_empty() {
         return Ok(Vec::new());
     }
+    let why = res.warning.as_deref().unwrap_or(
+        "they delete or deactivate, or follow an `up` or `exit` whose level is not tracked",
+    );
+    Ok(vec![format!(
+        "configuration paths not in the {target} API catalog were not rejected because {why}: {}",
+        describe(catalog, res, &warnings)
+    )])
+}
 
+/// Bad lines with their nearest catalog paths, the first 20 by name.
+fn describe(catalog: &Catalog, res: &Resolution, bad: &[Checked]) -> String {
     let mut lines: Vec<String> = bad
         .iter()
         .take(MAX_REPORTED)
-        .map(|(line, tokens)| {
-            let nearest = nearest(catalog, res, tokens);
+        .map(|path| {
+            let nearest = nearest(catalog, res, &path.tokens);
             if nearest.is_empty() {
-                format!("`{line}`")
+                format!("`{}`", path.line)
             } else {
-                format!("`{line}` (nearest: {})", nearest.join(", "))
+                format!("`{}` (nearest: {})", path.line, nearest.join(", "))
             }
         })
         .collect();
     if bad.len() > MAX_REPORTED {
         lines.push(format!("and {} more", bad.len() - MAX_REPORTED));
     }
-    let target = format!("{} {}", res.family, res.used);
-    match &res.warning {
-        None => Err(JmcpError::Validation(format!(
-            "configuration paths not in the {target} API catalog: {}. Use lookup_junos_api \
-             (kind=config) to find the right path.",
-            lines.join("; ")
-        ))),
-        Some(why) => Ok(vec![format!(
-            "configuration paths not in the {target} API catalog were not rejected because {why}: {}",
-            lines.join("; ")
-        )]),
-    }
+    lines.join("; ")
 }
 
 /// True for paths the catalog cannot judge: group definitions and references,
@@ -142,20 +166,66 @@ fn tokenize(line: &str) -> Vec<String> {
     tokens
 }
 
-/// `(line, path tokens)` for each path-verb line of a `set`-format load.
-fn set_paths(text: &str) -> Vec<(String, Vec<String>)> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("/*"))
-        .filter_map(|line| {
-            let mut tokens = tokenize(line);
-            if tokens.len() < 2 || !PATH_VERBS.contains(&tokens[0].as_str()) {
-                return None;
-            }
+/// Each path-verb line of a `set`-format load, with its `edit` level
+/// prepended. `top` returns to the root; after `up` or `exit` the level is
+/// unknown, so later lines only warn.
+fn set_paths(text: &str) -> Vec<Checked> {
+    let mut paths = Vec::new();
+    let mut level: Vec<String> = Vec::new();
+    let mut level_known = true;
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') || line.starts_with("/*") {
+            continue;
+        }
+        let mut tokens = tokenize(line);
+        // `top <command>` runs one command from the root.
+        let rooted = tokens.first().is_some_and(|verb| verb == "top");
+        if rooted {
             tokens.remove(0);
-            Some((line.to_owned(), tokens))
-        })
-        .collect()
+            if tokens.is_empty() {
+                level.clear();
+                level_known = true;
+                continue;
+            }
+        }
+        let Some(verb) = tokens.first().cloned() else {
+            continue;
+        };
+        let base: Vec<String> = if rooted { Vec::new() } else { level.clone() };
+        let known = level_known || rooted;
+        match verb.as_str() {
+            "up" | "exit" => {
+                level_known = false;
+                continue;
+            }
+            "edit" => {
+                let mut path = base.clone();
+                path.extend(tokens.drain(1..));
+                if path.len() > base.len() {
+                    paths.push(Checked {
+                        line: line.to_owned(),
+                        tokens: path.clone(),
+                        strict: known,
+                    });
+                }
+                level = path;
+                level_known = known;
+                continue;
+            }
+            _ => {}
+        }
+        if tokens.len() < 2 || !PATH_VERBS.contains(&verb.as_str()) {
+            continue;
+        }
+        let mut path = base.clone();
+        path.extend(tokens.drain(1..));
+        paths.push(Checked {
+            line: line.to_owned(),
+            tokens: path,
+            strict: known && !matches!(verb.as_str(), "delete" | "deactivate"),
+        });
+    }
+    paths
 }
 
 /// Strips `/* ... */` and `#` comments outside quoted strings.
@@ -200,7 +270,7 @@ fn strip_comments(text: &str) -> String {
 
 /// `(statement, path tokens)` for each top-level and second-level statement
 /// of a curly-brace load.
-fn text_paths(text: &str) -> Vec<(String, Vec<String>)> {
+fn text_paths(text: &str) -> Vec<Checked> {
     let text = strip_comments(text);
     let mut paths = Vec::new();
     // Tokens of the open top-level statement while at depth >= 1.
@@ -235,13 +305,21 @@ fn text_paths(text: &str) -> Vec<(String, Vec<String>)> {
                 if !tokens.is_empty() {
                     match depth {
                         0 => {
-                            paths.push((tokens.join(" "), tokens.clone()));
+                            paths.push(Checked {
+                                line: tokens.join(" "),
+                                tokens: tokens.clone(),
+                                strict: true,
+                            });
                             top = tokens;
                         }
                         1 => {
                             let mut path = top.clone();
                             path.extend(tokens);
-                            paths.push((path.join(" "), path));
+                            paths.push(Checked {
+                                line: path.join(" "),
+                                tokens: path,
+                                strict: true,
+                            });
                         }
                         _ => {}
                     }
@@ -260,7 +338,7 @@ fn text_paths(text: &str) -> Vec<(String, Vec<String>)> {
 
 /// `(element path, names)` for each top-level and second-level element of an
 /// XML load, below an optional `<configuration>` wrapper.
-fn xml_paths(text: &str) -> Vec<(String, Vec<String>)> {
+fn xml_paths(text: &str) -> Vec<Checked> {
     let mut paths = Vec::new();
     let mut stack: Vec<String> = Vec::new();
     let mut rest = text;
@@ -292,12 +370,27 @@ fn xml_paths(text: &str) -> Vec<(String, Vec<String>)> {
             .unwrap_or_default();
         // Namespace prefixes (`junos:`) are not part of the path.
         let name = name.rsplit(':').next().unwrap_or_default().to_owned();
+        // `<undocumented>` wraps statements without adding a level, and
+        // `<junos:comment>` is an annotation, not a statement.
         let wrapped = stack.first().is_some_and(|first| first == "configuration");
-        let depth = stack.len() - usize::from(wrapped);
-        if !(stack.is_empty() && name == "configuration") && depth < 2 {
-            let mut path: Vec<String> = stack.iter().skip(usize::from(wrapped)).cloned().collect();
+        let ancestors: Vec<String> = stack
+            .iter()
+            .skip(usize::from(wrapped))
+            .filter(|ancestor| *ancestor != "undocumented")
+            .cloned()
+            .collect();
+        let statement = !(stack.is_empty() && name == "configuration")
+            && name != "undocumented"
+            && name != "comment"
+            && !ancestors.iter().any(|ancestor| ancestor == "comment");
+        if statement && ancestors.len() < 2 {
+            let mut path = ancestors;
             path.push(name.clone());
-            paths.push((path.join(" "), path));
+            paths.push(Checked {
+                line: path.join(" "),
+                tokens: path,
+                strict: true,
+            });
         }
         if !tag.ends_with('/') {
             stack.push(name);
@@ -439,7 +532,7 @@ fn nearest(catalog: &Catalog, res: &Resolution, tokens: &[String]) -> Vec<String
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Train, fixture_catalog};
+    use super::super::{Family, Train, fixture_catalog};
     use super::*;
 
     fn resolution(major: u16, minor: u16) -> Resolution {
@@ -590,6 +683,101 @@ mod tests {
         assert!(error.contains("`system host-nam`"), "{error}");
     }
 
+    #[test]
+    fn write_check_tracks_edit_levels() {
+        let catalog = fixture_catalog();
+        let res = resolution(25, 4);
+        let relative = "edit system\nset host-name r1\nset name-server 1.1.1.2\ntop\n\
+                        set interfaces ge-0/0/0 unit 0 description x\n\
+                        edit security policies\ntop set system host-name r2";
+        assert!(
+            check_config_paths(&catalog, &res, &set(relative))
+                .unwrap()
+                .is_empty()
+        );
+
+        let error = check_config_paths(&catalog, &res, &set("edit system\nset host-nam r1"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("`set host-nam r1`"), "{error}");
+        let error = check_config_paths(&catalog, &res, &set("edit securty"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("`edit securty`"), "{error}");
+
+        // After `up` the level is unknown: unknown paths only warn, until `top`.
+        let warnings = check_config_paths(
+            &catalog,
+            &res,
+            &set("edit system name-server\nup\nset host-name r1"),
+        )
+        .unwrap();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("`up`"), "{warnings:?}");
+        let error = check_config_paths(&catalog, &res, &set("edit system\nup\ntop\nset securty x"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("securty"), "{error}");
+    }
+
+    #[test]
+    fn write_check_delete_and_deactivate_only_warn() {
+        let catalog = fixture_catalog();
+        let res = resolution(25, 4);
+        let warnings = check_config_paths(
+            &catalog,
+            &res,
+            &set("delete system host-nam r1\ndeactivate securty policies"),
+        )
+        .unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("delete system host-nam") && warnings[0].contains("securty"),
+            "{warnings:?}"
+        );
+        assert!(check_config_paths(&catalog, &res, &set("activate securty policies")).is_err());
+    }
+
+    #[test]
+    fn write_check_xml_skips_comment_and_undocumented() {
+        let catalog = fixture_catalog();
+        let res = resolution(25, 4);
+        let xml = "<configuration><junos:comment>/* lab */</junos:comment>\
+                   <system><undocumented><host-name>r1</host-name></undocumented>\
+                   <junos:comment>note</junos:comment></system>\
+                   <undocumented><security><policies/></security></undocumented></configuration>";
+        assert!(
+            check_config_paths(&catalog, &res, &ConfigPayload::Xml(xml.into()))
+                .unwrap()
+                .is_empty()
+        );
+        let bad = "<system><undocumented><host-nam>r1</host-nam></undocumented></system>";
+        let error = check_config_paths(&catalog, &res, &ConfigPayload::Xml(bad.into()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("`system host-nam`"), "{error}");
+    }
+
+    #[test]
+    fn known_omissions_match_by_prefix_with_wildcards() {
+        assert!(known_omission(&["system", "phone-home", "server", "x"]));
+        assert!(known_omission(&[
+            "security",
+            "pki",
+            "ca-profile",
+            "CA1",
+            "pre-load"
+        ]));
+        assert!(!known_omission(&[
+            "security",
+            "pki",
+            "ca-profile",
+            "CA1",
+            "pre-lod"
+        ]));
+        assert!(!known_omission(&["system", "phone"]));
+    }
+
     /// The bench-lab baselines (`tests/fixtures/write_check/`, secrets and
     /// public addresses replaced) must load without a single rejection, even
     /// when the resolution is forced exact.
@@ -610,7 +798,7 @@ mod tests {
             ),
             (
                 "bench-srx440",
-                Family::JunosEvo,
+                Family::JunosEs,
                 "25.4X300-D40.2-EVO",
                 include_str!("../../tests/fixtures/write_check/bench-srx440.set"),
             ),
@@ -667,6 +855,11 @@ mod tests {
                 "set firewal family inet",
                 "set interfaces ge-0/0/0 unti 0 family inet",
                 "set security policies default-policy deny-all extra-knob",
+                "set security policies default-policy deny-al",
+                "set system server 1.1.1.1",
+                "set interfaces ge-0/0/0 disabel",
+                "set system services ssh login allow",
+                "set interfaces ge-0/0/0 mode trunk",
             ] {
                 assert!(
                     check_config_paths(catalog, &res, &set(line)).is_err(),

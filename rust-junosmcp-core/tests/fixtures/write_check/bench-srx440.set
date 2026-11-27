@@ -143,9 +143,9 @@ set interfaces ge-0/0/7 unit 0
 set interfaces ge-0/0/8 unit 0
 set interfaces ge-0/0/9 unit 0
 set interfaces lo0 unit 0 family inet address 127.0.0.1/32
-set interfaces re0:mgmt-0 unit 0 family inet address 192.168.1.75/24
+set interfaces re0:mgmt-0 unit 0 family inet address 198.51.100.75/24
 set interfaces st0 unit 1 family inet address 10.66.250.2/30
-set routing-instances mgmt_junos routing-options static route 0.0.0.0/0 next-hop 192.168.1.1
+set routing-instances mgmt_junos routing-options static route 0.0.0.0/0 next-hop 198.51.100.1
 set applications application-set lab-apps application junos-icmp-all
 set applications application-set lab-apps application junos-ssh
 set applications application-set lab-apps application junos-https

@@ -138,13 +138,13 @@ set security address-book global address-set lab-hosts address br2-users
 set security flow tcp-mss ipsec-vpn mss 1350
 set interfaces ge-0/0/0 unit 0 family inet address 10.66.183.2/24
 set interfaces ge-0/0/1 unit 0 family inet address 10.66.171.1/24
-set interfaces fxp0 unit 0 family inet address 192.168.1.210/24
+set interfaces fxp0 unit 0 family inet address 198.51.100.210/24
 set interfaces st0 unit 1 family inet address 10.66.250.6/30
 set applications application-set lab-apps application junos-icmp-all
 set applications application-set lab-apps application junos-ssh
 set applications application-set lab-apps application junos-https
 set protocols l2-learning global-mode switching
-set routing-options static route 0.0.0.0/0 next-hop 192.168.1.1
+set routing-options static route 0.0.0.0/0 next-hop 198.51.100.1
 set routing-options static route 10.66.151.0/24 next-hop st0.1
 set routing-options static route 10.66.152.0/24 next-hop st0.1
 set routing-options static route 10.66.161.0/24 next-hop st0.1

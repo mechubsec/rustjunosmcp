@@ -118,24 +118,30 @@ pub fn train_for(version: &str) -> Option<Train> {
     (train >= LOWEST_SUPPORTED).then_some(train)
 }
 
-/// The Family of a device from its reported model and version.
+/// Why an SRX on Junos OS Evolved is answered inexactly.
+pub const SRX_EVO_WARNING: &str =
+    "SRX on Junos OS Evolved: Juniper publishes no SRX EVO YANG; answered from junos-es";
+
+/// The Family of a device from its reported model and version, and whether
+/// that Family is exact for the device.
 ///
-/// A `-EVO` version is Junos OS Evolved whatever the model; otherwise SRX,
-/// vSRX and cSRX models are `junos-es` and EX models `junos-ex`. Anything
-/// else returns `None`.
-pub fn family_for(model: &str, version: &str) -> Option<Family> {
-    if version.to_ascii_uppercase().contains("-EVO") {
-        return Some(Family::JunosEvo);
-    }
+/// SRX, vSRX and cSRX models are `junos-es`; on a `-EVO` release that is
+/// inexact (see [`SRX_EVO_WARNING`]). Any other `-EVO` version is
+/// `junos-evo`, EX models `junos-ex`. Anything else returns `None`.
+pub fn family_for(model: &str, version: &str) -> Option<(Family, bool)> {
+    let evo = version.to_ascii_uppercase().contains("-EVO");
     let model = model.trim().to_ascii_lowercase();
     if ["srx", "vsrx", "csrx"]
         .iter()
         .any(|prefix| model.starts_with(prefix))
     {
-        return Some(Family::JunosEs);
+        return Some((Family::JunosEs, !evo));
+    }
+    if evo {
+        return Some((Family::JunosEvo, true));
     }
     if model.starts_with("ex") {
-        return Some(Family::JunosEx);
+        return Some((Family::JunosEx, true));
     }
     None
 }
@@ -171,12 +177,17 @@ mod tests {
     #[test]
     fn family_for_table() {
         let cases = [
-            ("SRX440", "25.4X300-D40.2-EVO", Some(Family::JunosEvo)),
-            ("EX2300-C-12P", "23.4R2-S2.1", Some(Family::JunosEx)),
-            ("csrx", "26.2R1.7", Some(Family::JunosEs)),
-            ("cSRX", "26.2R1.7", Some(Family::JunosEs)),
-            ("vSRX3", "24.2R2-S5.5", Some(Family::JunosEs)),
-            ("SRX345", "23.4R2", Some(Family::JunosEs)),
+            (
+                "SRX440",
+                "25.4X300-D40.2-EVO",
+                Some((Family::JunosEs, false)),
+            ),
+            ("PTX10001", "25.4R1.9-EVO", Some((Family::JunosEvo, true))),
+            ("EX2300-C-12P", "23.4R2-S2.1", Some((Family::JunosEx, true))),
+            ("csrx", "26.2R1.7", Some((Family::JunosEs, true))),
+            ("cSRX", "26.2R1.7", Some((Family::JunosEs, true))),
+            ("vSRX3", "24.2R2-S5.5", Some((Family::JunosEs, true))),
+            ("SRX345", "23.4R2", Some((Family::JunosEs, true))),
             ("MX204", "23.4R1", None),
         ];
         for (model, version, expected) in cases {

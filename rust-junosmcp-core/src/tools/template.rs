@@ -229,6 +229,7 @@ pub async fn handle_with_cancel(
             }
         }
 
+        let started = std::time::Instant::now();
         let catalog_warnings = match train_cache
             .check_write(
                 &dm,
@@ -236,9 +237,11 @@ pub async fn handle_with_cancel(
                 std::slice::from_ref(&payload),
                 Duration::from_secs(args.timeout),
                 false,
+                &ct,
             )
             .await
         {
+            Err(JmcpError::Cancelled) => return Err(JmcpError::Cancelled),
             Ok(warnings) => warnings,
             Err(e) => {
                 rows.push(json!({
@@ -259,7 +262,8 @@ pub async fn handle_with_cancel(
             args.confirm_timeout_mins,
             allow_plane_owned_writes,
             &dm,
-            Duration::from_secs(args.timeout),
+            // One budget per device: the commit gets what the check left.
+            Duration::from_secs(args.timeout).saturating_sub(started.elapsed()),
             &ct,
         )
         .await

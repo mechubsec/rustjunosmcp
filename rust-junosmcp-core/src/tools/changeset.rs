@@ -20,9 +20,6 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-/// How long create waits for the device's facts for the API catalog check.
-const CATALOG_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-
 /// Arguments for `create_junos_change_set`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -559,7 +556,7 @@ pub async fn create_change_set_with_cancel(
     policy: Arc<Policy>,
     attribution: Attribution,
     owner_subject: Option<rust_junosmcp_auth::OidcSubject>,
-    _ct: CancellationToken,
+    ct: CancellationToken,
     allow_plane_owned_writes: bool,
     train_cache: &DeviceTrainCache,
 ) -> Result<Value, JmcpError> {
@@ -784,8 +781,9 @@ pub async fn create_change_set_with_cancel(
             &dm,
             &args.device,
             &config_payloads,
-            CATALOG_CHECK_TIMEOUT,
+            crate::tools::lookup_api::CATALOG_CHECK_TIMEOUT,
             true,
+            &ct,
         )
         .await?;
 
