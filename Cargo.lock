@@ -3147,6 +3147,7 @@ dependencies = [
  "axum",
  "chrono",
  "dashmap",
+ "flate2",
  "futures",
  "globset",
  "http",

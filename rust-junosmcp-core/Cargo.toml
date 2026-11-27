@@ -54,6 +54,7 @@ mecmcp-secret = { workspace = true }
 mecmcp-redact = { workspace = true }
 dashmap      = { workspace = true }
 futures      = "0.3"
+flate2       = "1"
 rustnetconf  = { workspace = true }
 
 [dev-dependencies]
