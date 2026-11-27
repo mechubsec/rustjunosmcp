@@ -124,6 +124,14 @@ def test_note_attached(catalog):
     assert "note" not in route_old
 
 
+def test_every_note_names_a_catalog_entry(tmp_path):
+    notes = tmp_path / "notes"
+    shutil.copytree(FIXTURES / "notes", notes)
+    (notes / "rpc" / "get-no-such-rpc.md").write_text("orphan")
+    with pytest.raises(SystemExit, match="get-no-such-rpc"):
+        generate.main([str(FIXTURES), str(tmp_path / "out"), "--notes", str(notes), "--commit", FAKE_SHA])
+
+
 def test_outputs_interned(catalog):
     document = catalog["rpc"]["junos-es"]
     entries = document["families"]["junos-es"]

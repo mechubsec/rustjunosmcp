@@ -180,6 +180,15 @@ def attach_notes(entries, notes_dir, kind):
                 variant["note"] = "\n\n".join(parts)
 
 
+def check_notes_match_entries(notes_dir, names_by_kind):
+    """Exit if a note file names no catalog entry in any family (a typo would silently drop it)."""
+    for kind, names in names_by_kind.items():
+        known = {name.replace(" ", "-") for name in names}
+        for note_file in sorted((notes_dir / kind).glob("*.md")) if notes_dir else []:
+            if note_file.stem not in known:
+                sys.exit(f"error: note {note_file} names no {kind} catalog entry")
+
+
 def intern_outputs(entries):
     """Replace each variant's output tree with an index into the returned list of distinct trees."""
     outputs, index = [], {}
@@ -254,6 +263,7 @@ def main(argv=None):
     trains = sorted({job.train for job in jobs}, key=_train_key)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     files, counts = {}, {}
+    names_by_kind = {stem: set() for stem in STEMS.values()}
     for kind, stem in STEMS.items():
         gap_trains = {}
         for gap in gaps:
@@ -261,6 +271,7 @@ def main(argv=None):
                 gap_trains.setdefault(gap["family"], set()).add(gap["train"])
         for family, entries in merge(per_kind[kind], gap_trains).items():
             attach_notes(entries, args.notes, stem)
+            names_by_kind[stem].update(entries)
             family_gaps = [g for g in gaps if g["kind"] == stem and g["family"] == family]
             document = {"source": source, "trains": trains, "families": {family: entries}, "gaps": family_gaps}
             if kind == "rpc":
@@ -269,6 +280,7 @@ def main(argv=None):
             files[path.name] = {"raw": raw_size, "written": path.stat().st_size}
             counts[f"{stem}-{family}"] = len(entries)
 
+    check_notes_match_entries(args.notes, names_by_kind)
     for gap in gaps:
         print(f"gap: {gap['train']} {gap['family']} {gap['kind']} {gap['module']}: {gap['reason']}", file=sys.stderr)
     print(json.dumps({"files": files, "counts": counts, "gaps": len(gaps)}, indent=2))
