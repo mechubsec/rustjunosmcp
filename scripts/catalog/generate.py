@@ -1,4 +1,4 @@
-"""Generate the embedded Junos API catalog (rpc.json, config.json) from a Juniper/yang checkout.
+"""Generate the embedded Junos API catalog (rpc-<family>.json, config-<family>.json) from a Juniper/yang checkout.
 
 Usage: generate.py <yang-checkout> <out-dir> [--notes DIR] [--commit SHA] [--jobs N]
 Run with: uv run --with pyang==2.6.1 --with 'setuptools<81' python scripts/catalog/generate.py ...
@@ -134,17 +134,36 @@ def merge(per_train):
     return families
 
 
-def attach_notes(families, notes_dir, kind):
-    """Add `note` from notes/<kind>/<name>.md (spaces as dashes) to every variant of an entry."""
-    if notes_dir is None:
-        return
-    for entries in families.values():
-        for name, variants in entries.items():
-            note_file = notes_dir / kind / f"{name.replace(' ', '-')}.md"
-            if note_file.is_file():
-                note = note_file.read_text().strip()
-                for variant in variants:
-                    variant["note"] = note
+COLLAPSED_NOTES = {
+    "logical-systems": "Contains the full root hierarchy for each logical system; look up the root path instead.",
+    "tenants": "Contains the full root hierarchy for each tenant; look up the root path instead.",
+}
+
+
+def attach_notes(entries, notes_dir, kind):
+    """Add `note` to every variant of an entry: the collapse note for logical-systems/tenants (config),
+    then notes/<kind>/<name>.md (spaces as dashes), joined by a blank line."""
+    for name, variants in entries.items():
+        parts = [COLLAPSED_NOTES[name]] if kind == "config" and name in COLLAPSED_NOTES else []
+        note_file = notes_dir / kind / f"{name.replace(' ', '-')}.md" if notes_dir else None
+        if note_file and note_file.is_file():
+            parts.append(note_file.read_text().strip())
+        if parts:
+            for variant in variants:
+                variant["note"] = "\n\n".join(parts)
+
+
+def intern_outputs(entries):
+    """Replace each variant's output tree with an index into the returned list of distinct trees."""
+    outputs, index = [], {}
+    for variants in entries.values():
+        for variant in variants:
+            key = json.dumps(variant["output"], sort_keys=True)
+            if key not in index:
+                index[key] = len(outputs)
+                outputs.append(variant["output"])
+            variant["output"] = index[key]
+    return outputs
 
 
 def write_catalog(out_dir, stem, document):
@@ -192,12 +211,15 @@ def main(argv=None):
     trains = sorted({job.train for job in jobs}, key=_train_key)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     files, counts = {}, {}
-    for kind, stem, notes_kind in (("rpc", "rpc", "rpc"), ("conf", "config", "config")):
-        families = merge(per_kind[kind])
-        attach_notes(families, args.notes, notes_kind)
-        path, raw_size = write_catalog(args.out_dir, stem, {"source": source, "trains": trains, "families": families})
-        files[path.name] = {"raw": raw_size, "written": path.stat().st_size}
-        counts[stem] = {family: len(entries) for family, entries in families.items()}
+    for kind, stem in (("rpc", "rpc"), ("conf", "config")):
+        for family, entries in merge(per_kind[kind]).items():
+            attach_notes(entries, args.notes, stem)
+            document = {"source": source, "trains": trains, "families": {family: entries}}
+            if kind == "rpc":
+                document["outputs"] = intern_outputs(entries)
+            path, raw_size = write_catalog(args.out_dir, f"{stem}-{family}", document)
+            files[path.name] = {"raw": raw_size, "written": path.stat().st_size}
+            counts[f"{stem}-{family}"] = len(entries)
 
     for warning in skipped:
         print(f"warning: skipped {warning}", file=sys.stderr)

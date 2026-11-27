@@ -18,6 +18,8 @@ DATA_KEYWORDS = ("container", "list", "leaf", "leaf-list", "anyxml", "anydata")
 NON_FATAL_ERRORS = {"BAD_STATUS_REFERENCE"}
 # Every Junos container repeats these (`uses apply-advanced`); keep them only at the top level.
 APPLY_NODES = {"apply-groups", "apply-groups-except", "apply-macro"}
+# These lists mirror the root hierarchy; keep only their direct children.
+COLLAPSED_LISTS = {"logical-systems", "tenants"}
 
 
 def pyang_plugin_init():
@@ -153,4 +155,6 @@ def _walk_config(stmt, prefix, out):
             "range": value_range,
             "units": units.arg if units is not None else None,
         }
+        if prefix and prefix[0] in COLLAPSED_LISTS:
+            continue
         _walk_config(child, path, out)

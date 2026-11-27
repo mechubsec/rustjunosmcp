@@ -23,4 +23,10 @@ module junos-es-rpc-route {
       container route-summary-information;
     }
   }
+  rpc get-route-summary-brief-information {
+    junos:command "show route summary brief";
+    output {
+      container route-summary-information;
+    }
+  }
 }

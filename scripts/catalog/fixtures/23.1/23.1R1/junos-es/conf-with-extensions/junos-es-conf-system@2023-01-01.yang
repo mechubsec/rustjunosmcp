@@ -13,6 +13,12 @@ module junos-es-conf-system {
   augment /jc:configuration {
     uses system-group;
   }
+  augment /jc:configuration/jc:logical-systems {
+    uses system-group;
+  }
+  augment /jc:configuration/jc:tenants {
+    uses system-group;
+  }
   augment /jc:configuration/jc:groups {
     uses system-group;
   }

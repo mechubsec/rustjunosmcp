@@ -7,6 +7,18 @@ module junos-es-conf-root {
     leaf-list apply-groups {
       type string;
     }
+    list logical-systems {
+      key name;
+      leaf name {
+        type string;
+      }
+    }
+    list tenants {
+      key name;
+      leaf name {
+        type string;
+      }
+    }
     list groups {
       key name;
       leaf name {
