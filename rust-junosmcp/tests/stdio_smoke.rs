@@ -350,3 +350,37 @@ fn denied_command_returns_tool_error() {
         "expected matched-rule pattern in: {body}"
     );
 }
+
+/// Catalog and skill text reaches the model verbatim through the real
+/// `call_tool` path: the last-mile secret redactor must not mangle words such
+/// as "session" or "secret" in static content.
+#[test]
+fn catalog_and_skill_text_survive_call_tool_unredacted() {
+    let inventory = common::write_inv("{}");
+    let skills_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../skills");
+    let mut server = common::spawn_stdio_server_with_args(&[
+        "--device-mapping",
+        inventory.path().to_str().unwrap(),
+        "--skills-dir",
+        skills_dir,
+    ]);
+
+    let lookup = common::call_tool(
+        &mut server,
+        "lookup_junos_api",
+        json!({"family": "junos-es", "release": "24.4", "query": "get-flow-session-information"}),
+    );
+    let hit = &lookup["hits"][0];
+    assert_eq!(hit["name"], "get-flow-session-information", "{lookup}");
+    assert_eq!(hit["cli"], "show security flow session", "{lookup}");
+
+    let read = common::call_tool(
+        &mut server,
+        "read_junos_skill",
+        json!({"name": "junos-config-paths"}),
+    );
+    let text = read.pointer("/content/0/text").and_then(Value::as_str);
+    let on_disk =
+        std::fs::read_to_string(format!("{skills_dir}/junos-config-paths/SKILL.md")).unwrap();
+    assert_eq!(text, Some(on_disk.as_str()));
+}

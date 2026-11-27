@@ -480,6 +480,32 @@ fn redact_structured_content(structured: &mut Value) {
 /// building the message, and tags the resulting `ErrorData.data` with
 /// `{"code": "confirmation_..."}` so this pass can recognize that message
 /// and skip redacting it a second, less careful time.
+/// Tools whose successful result is catalog or skill text compiled into or
+/// shipped with the server, never device data, so the last-mile pass is
+/// skipped for it: the redactor's denylist mangles catalog names and skill
+/// prose ("session", "secret", "PSK"). Their error results are still redacted.
+/// `execute_junos_rpc` redacts its device `output` in its handler; the other
+/// fields are the validated RPC name and catalog text.
+const STATIC_CONTENT_TOOLS: &[&str] = &[
+    "execute_junos_rpc",
+    "list_junos_skills",
+    "lookup_junos_api",
+    "read_junos_skill",
+];
+
+/// Whether `result` is a successful result of a [`STATIC_CONTENT_TOOLS`] tool.
+fn is_static_content_success(
+    tool: &str,
+    result: &Result<rmcp::model::CallToolResponse, rmcp::ErrorData>,
+) -> bool {
+    STATIC_CONTENT_TOOLS.contains(&tool)
+        && matches!(
+            result,
+            Ok(rmcp::model::CallToolResponse::Complete(call_result))
+                if call_result.is_error != Some(true)
+        )
+}
+
 pub(super) fn redact_last_mile(
     result: &mut Result<rmcp::model::CallToolResponse, rmcp::ErrorData>,
 ) {
@@ -822,6 +848,20 @@ impl JmcpHandler {
         })
     }
 
+    /// [`to_call_result`](Self::to_call_result) without redacting a success:
+    /// for [`STATIC_CONTENT_TOOLS`], whose success is catalog text (any device
+    /// output in it is redacted by the handler). Errors are redacted as usual.
+    fn static_call_result(
+        r: Result<Value, rust_junosmcp_core::JmcpError>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        match r {
+            Ok(value) => Ok(CallToolResult::success(vec![ContentBlock::text(
+                serde_json::to_string_pretty(&value).unwrap_or_else(|e| e.to_string()),
+            )])),
+            Err(e) => Self::to_call_result(Err(e)),
+        }
+    }
+
     /// Convert `ScopeError` into the same kind of `CallToolResult { isError: true }`
     /// that `JmcpError::Denied` produces. Mirrors `to_call_result`.
     fn scope_to_call_result(e: ScopeError) -> Result<CallToolResult, rmcp::ErrorData> {
@@ -1121,7 +1161,7 @@ impl JmcpHandler {
             }
             Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
-        Self::to_call_result(result)
+        Self::static_call_result(result)
     }
 
     #[tool(
@@ -1176,7 +1216,7 @@ impl JmcpHandler {
             }
             Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
-        Self::to_call_result(result)
+        Self::static_call_result(result)
     }
 
     #[tool(
@@ -1235,7 +1275,8 @@ impl JmcpHandler {
             Err(e) => fail_redacted(&mut audit, e.audit_kind(), e),
         }
         match result {
-            // Static skill text, not device output: no secret redaction.
+            // Static skill text, not device output: neither this handler nor
+            // call_tool's last-mile pass redacts it (STATIC_CONTENT_TOOLS).
             Ok(text) => Ok(CallToolResult::success(vec![ContentBlock::text(text)])),
             Err(e) => Ok(coded_error_result(&e)),
         }
@@ -2752,7 +2793,10 @@ impl ServerHandler for JmcpHandler {
         // SRX, success and error — passes through here before anything else
         // inspects or returns it, so a tool that forgot its own redaction
         // still cannot leak a secret to the model. See `redact_last_mile`.
-        redact_last_mile(&mut result);
+        // Static catalog/skill text is exempt on success (see STATIC_CONTENT_TOOLS).
+        if !is_static_content_success(effective_tool, &result) {
+            redact_last_mile(&mut result);
+        }
         // rmcp turns a bad argument into a text-only error before any handler
         // runs; give it the same coded body every handler error carries.
         if let Ok(rmcp::model::CallToolResponse::Complete(call_result)) = &mut result
