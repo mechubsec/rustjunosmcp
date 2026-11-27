@@ -1,0 +1,8 @@
+The files in data/ are generated from Juniper Networks' YANG models,
+https://github.com/Juniper/yang at commit 7a619c35c7d59d87fc224d96bd215aaa4e02ed25
+(see SOURCE), by scripts/catalog/generate.py.
+
+Copyright (c) Juniper Networks, Inc. Licensed under the Apache License, Version 2.0;
+see LICENSE-juniper-yang. The data is a transformed extract (RPC names, CLI commands,
+arguments, reply element names, configuration paths, types and descriptions) of those
+models, not the models themselves.

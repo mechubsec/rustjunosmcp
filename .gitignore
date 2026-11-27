@@ -46,3 +46,7 @@ target-deb/
 
 # Scratch tree left by `codex exec review`; contains a copy of the built binary.
 .review-codex/
+
+# Python (scripts/catalog)
+__pycache__/
+.pytest_cache/

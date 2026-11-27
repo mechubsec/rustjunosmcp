@@ -1,0 +1,8 @@
+module junos-common-ddl-extensions {
+  namespace "http://yang.juniper.net/junos/common/ddl-extensions";
+  prefix junos;
+  revision 2023-01-01;
+  extension command {
+    argument "command";
+  }
+}

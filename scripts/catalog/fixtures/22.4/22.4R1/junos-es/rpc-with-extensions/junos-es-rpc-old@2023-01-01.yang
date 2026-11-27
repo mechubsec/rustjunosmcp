@@ -1,0 +1,16 @@
+module junos-es-rpc-old {
+  namespace "http://yang.juniper.net/junos-es/rpc/old";
+  prefix old;
+  import junos-common-ddl-extensions {
+    prefix junos;
+    revision-date 2023-01-01;
+  }
+  import junos-common-types {
+    prefix jt;
+    revision-date 2023-01-01;
+  }
+  revision 2023-01-01;
+  rpc get-old-information {
+    junos:command "show old";
+  }
+}

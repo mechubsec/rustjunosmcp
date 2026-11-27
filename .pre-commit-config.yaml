@@ -1,4 +1,6 @@
 default_install_hook_types: [pre-commit, pre-push]
+# Generated Junos API catalog (`just catalog`): large and machine-written.
+exclude: ^rust-junosmcp-core/catalog/data/
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
