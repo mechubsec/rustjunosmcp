@@ -7,7 +7,7 @@
 use crate::catalog::{Catalog, Family};
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
-use crate::helpers::validate_input_length;
+use crate::helpers::{validate_input_length, validate_output_caps};
 use crate::policy::{BlocklistDomain, Decision, Policy, enforce_decision};
 use crate::tools::lookup_api::DeviceTrainCache;
 use schemars::JsonSchema;
@@ -42,9 +42,22 @@ pub struct ExecuteRpcArgs {
     /// for the rest. Only arguments the catalog lists for the RPC are accepted.
     #[serde(default)]
     pub args: BTreeMap<String, RpcArgValue>,
-    /// RPC timeout in seconds.
+    /// Timeout in seconds for the whole call: Family detection and the RPC.
     #[serde(default = "super::default_timeout")]
     pub timeout: u64,
+    /// Cap output to at most N lines (head; use `tail` for the last N).
+    /// Includes the truncation marker, so the response never exceeds N lines.
+    #[serde(default)]
+    #[schemars(range(min = 1))]
+    pub max_lines: Option<u32>,
+    /// Hard byte cap on returned output, inclusive of the truncation marker.
+    /// Must leave room for that marker; see `helpers::MIN_MAX_BYTES`.
+    #[serde(default)]
+    #[schemars(range(min = 64))]
+    pub max_bytes: Option<u32>,
+    /// With `max_lines`, keep the LAST N lines instead of the first N.
+    #[serde(default)]
+    pub tail: bool,
 }
 
 /// Call a read-only catalog RPC on a device and return its XML reply.
@@ -113,8 +126,12 @@ pub(crate) async fn run(
             args.rpc
         )));
     }
+    validate_output_caps(args.max_lines, args.max_bytes)?;
     // Fail fast on unknown devices before any connection.
     let _ = dm.inventory().get(&args.device)?;
+    // One budget for detection and the RPC together.
+    let timeout = Duration::from_secs(args.timeout);
+    let deadline = tokio::time::Instant::now() + timeout;
 
     // Before connecting to detect the Family: the RPC's CLI in every family
     // must be a `show`, and must not already be explicitly denied. Only an
@@ -155,7 +172,11 @@ pub(crate) async fn run(
     }
 
     let (family, train, exact_family) = cache
-        .detect(&dm, &args.device, Duration::from_secs(args.timeout))
+        .detect(
+            &dm,
+            &args.device,
+            deadline.saturating_duration_since(tokio::time::Instant::now()),
+        )
         .await?;
     let resolution =
         crate::catalog::off_runtime(|| catalog.resolve_rpc(family, train, exact_family));
@@ -266,13 +287,14 @@ pub(crate) async fn run(
         )?;
     }
 
-    let timeout = Duration::from_secs(args.timeout);
-    let output = tokio::time::timeout(timeout, async {
+    let output = tokio::time::timeout_at(deadline, async {
         let mut dev = dm.open(&args.device).await?;
         Ok::<_, JmcpError>(dev.rpc()?.call(&args.rpc, &pairs).await?)
     })
     .await
     .map_err(|_| JmcpError::Timeout(timeout))??;
+    let output =
+        crate::output::process_output("", output, args.max_lines, args.max_bytes, args.tail);
 
     let warning = resolution
         .warning
@@ -340,6 +362,9 @@ mod tests {
                 .map(|(name, value)| (name.to_string(), value.clone()))
                 .collect(),
             timeout: 2,
+            max_lines: None,
+            max_bytes: None,
+            tail: false,
         }
     }
 
@@ -363,6 +388,14 @@ mod tests {
             .await
             .unwrap_err();
         (err, commands)
+    }
+
+    #[tokio::test]
+    async fn rpc_rejects_unusable_output_caps() {
+        let mut args = call("get-arp-table-information", &[]);
+        args.max_bytes = Some(10);
+        let err = run_err(None, args).await.to_string();
+        assert!(err.contains("max_bytes"), "{err}");
     }
 
     #[tokio::test]

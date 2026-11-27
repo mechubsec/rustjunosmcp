@@ -1166,7 +1166,7 @@ impl JmcpHandler {
 
     #[tool(
         name = "execute_junos_rpc",
-        description = "Call a read-only Junos RPC (name starting with `get-`) known to the API catalog, instead of parsing CLI text. Find the RPC name and its arguments first with lookup_junos_api. `args` maps argument names to a string, or to true for an `empty` flag. Unknown arguments, non-`get-` RPCs and values containing `<`, `>`, `&`, quotes or control characters are refused. The RPC's CLI equivalent (e.g. `show arp`) plus the arguments is checked against the same command allow/blocklist as execute_junos_command. Returns the XML reply, redacted like execute_junos_command output; `warning` is set when the catalog train differs from the device's."
+        description = "Call a read-only Junos RPC (name starting with `get-`) known to the API catalog, instead of parsing CLI text. Find the RPC name and its arguments first with lookup_junos_api. `args` maps argument names to a string, or to true for an `empty` flag. Unknown arguments, non-`get-` RPCs and values containing `<`, `>`, `&`, quotes or control characters are refused. The RPC's CLI equivalent (e.g. `show arp`) plus the arguments is checked against the same command allow/blocklist as execute_junos_command. Returns the XML reply, redacted like execute_junos_command output, with the same optional max_lines/max_bytes/tail caps; `timeout` covers the whole call. `warning` is set when the catalog train differs from the device's."
     )]
     async fn execute_junos_rpc(
         &self,
