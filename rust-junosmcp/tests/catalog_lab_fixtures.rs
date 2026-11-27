@@ -1,16 +1,17 @@
 #![allow(clippy::unwrap_used, missing_docs)]
-//! Offline replay of lab captures: the RPC a bench device reported for
+//! Offline replay of lab captures: the RPC name a bench device reported for
 //! `show version | display xml rpc` (redacted, see
-//! `scripts/catalog/verify_lab.py`) is accepted by `execute_junos_rpc`, which
-//! returns the catalog's reply root. Real `display xml` replies cannot be
-//! captured through the bench server (it ignores that pipe).
+//! `scripts/catalog/verify_lab.py`) is accepted by `execute_junos_rpc`.
+//! Real `display xml` replies cannot be captured through the bench server (it
+//! ignores that pipe), so no reply root is checked against the device.
 mod common;
 
 use common::fake_netconf::{FakeNetconf, OK, client_key_pem};
 use common::{call_tool, spawn_stdio_server_with_protocol, write_restricted};
 use serde_json::{Value, json};
 
-/// (fixture file, product model, release) per catalog family.
+/// (fixture file, product model, release) per catalog family. Hardcoded: the
+/// fixture's xmlns carries only the release, and the model is not in the capture.
 const FIXTURES: &[(&str, &str, &str)] = &[
     (
         "junos-ex-display-xml-rpc-show-version.xml",
@@ -40,7 +41,7 @@ fn rpc_name(fixture: &str) -> String {
 }
 
 #[test]
-fn lab_reported_rpc_replays_with_the_catalog_reply_root() {
+fn lab_captured_rpc_name_is_accepted_by_execute_junos_rpc() {
     for (fixture, model, release) in FIXTURES {
         let rpc = rpc_name(fixture);
         assert_eq!(rpc, "get-software-information", "{fixture}");

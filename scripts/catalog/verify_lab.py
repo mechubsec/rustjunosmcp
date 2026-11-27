@@ -15,13 +15,14 @@ reported "n/a" when the server's command path ignores the pipe.
 import datetime
 import gzip
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
 from mechubbench.runner import MCPClient
 
-ENDPOINT = "http://192.168.1.231:30030/mcp"
+ENDPOINT = os.environ.get("BENCH_MCP_URL", "http://192.168.1.231:30030/mcp")
 TOKEN_FILE = Path.home() / "Projects/mechubbench/.env.bench-setup-token"
 DEVICES = ["bench-ex2300", "bench-srx1600", "bench-srx440", "bench-srx345", "bench-vsrx-inet", "bench-csrx"]
 FIXTURE_DEVICES = {"bench-ex2300": "junos-ex", "bench-srx1600": "junos-es"}
@@ -65,6 +66,7 @@ def first_element(xml):
 
 def run(client, device, command):
     """Run a show command, returning (text, error)."""
+    assert device.startswith("bench-"), f"refusing non-bench device {device!r}"
     try:
         return client.call_tool("execute_junos_command", {"router_name": device, "command": command}, truncate=False), None
     except Exception as error:  # report, never abort the sweep
@@ -86,15 +88,16 @@ def identify(client, device):
 
 def pick(catalog, family, train):
     """Choose up to ten (rpc, cli, output_roots) entries for the device class."""
-    # Class-specific RPCs first so the ten always include EX switching / SRX security ones.
-    wanted = (EX_ONLY if family == "junos-ex" else SRX_ONLY[:3]) + COMMON
+    # Named RPCs first (lldp, license, class-specific), then fill to the cap.
+    named = ["get-lldp-neighbors-information", "get-license-summary-information"]
+    wanted = named + (EX_ONLY if family == "junos-ex" else SRX_ONLY[:3]) + COMMON
     picked = []
-    for name in wanted:
+    for name in dict.fromkeys(wanted):
         for entry in catalog["families"][family].get(name, []):
             if train in entry["trains"] and entry["cli"].startswith("show "):
                 picked.append((name, entry["cli"], sorted(catalog["outputs"][entry["output"]])))
                 break
-        if len(picked) == 10:
+        if len(picked) == 10:  # duplicates in `wanted` are skipped below
             break
     return picked
 

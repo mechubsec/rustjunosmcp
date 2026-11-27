@@ -3,6 +3,32 @@
     "checks": [
       {
         "catalog_output_roots": [
+          "lldp-neighbors-information",
+          "multi-routing-engine-results"
+        ],
+        "cli": "show lldp neighbors",
+        "display_xml": "error: Tool execution failed: netconf error: RPC error: server error: [OperationFailed] syntax error, expecting <command>",
+        "rpc": "get-lldp-neighbors-information",
+        "rpc_error": "Tool execution failed: netconf error: RPC error: server error: [OperationFailed] syntax error, expecting <command>",
+        "rpc_name_got": null,
+        "rpc_name_ok": false,
+        "unsupported_on_device": true
+      },
+      {
+        "catalog_output_roots": [
+          "license-summary-information",
+          "multi-routing-engine-results"
+        ],
+        "cli": "show system license",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-license-summary-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
           "flow-session-information",
           "multi-routing-engine-results"
         ],
@@ -104,32 +130,6 @@
         "rpc_name_got": null,
         "rpc_name_ok": true,
         "unsupported_on_device": false
-      },
-      {
-        "catalog_output_roots": [
-          "chassis-inventory",
-          "multi-routing-engine-results"
-        ],
-        "cli": "show chassis hardware",
-        "display_xml": "n/a (pipe ignored)",
-        "rpc": "get-chassis-inventory",
-        "rpc_error": null,
-        "rpc_name_got": null,
-        "rpc_name_ok": true,
-        "unsupported_on_device": false
-      },
-      {
-        "catalog_output_roots": [
-          "multi-routing-engine-results",
-          "system-storage-information"
-        ],
-        "cli": "show system storage",
-        "display_xml": "n/a (pipe ignored)",
-        "rpc": "get-system-storage",
-        "rpc_error": null,
-        "rpc_name_got": null,
-        "rpc_name_ok": true,
-        "unsupported_on_device": false
       }
     ],
     "family": "junos-es",
@@ -138,6 +138,30 @@
   },
   "bench-ex2300": {
     "checks": [
+      {
+        "catalog_output_roots": [
+          "lldp-neighbors-information"
+        ],
+        "cli": "show lldp neighbors",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-lldp-neighbors-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "license-summary-information"
+        ],
+        "cli": "show system license",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-license-summary-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
       {
         "catalog_output_roots": [
           "l2ng-l2ald-rtb-macdb"
@@ -233,30 +257,6 @@
         "rpc_name_got": null,
         "rpc_name_ok": true,
         "unsupported_on_device": false
-      },
-      {
-        "catalog_output_roots": [
-          "system-storage-information"
-        ],
-        "cli": "show system storage",
-        "display_xml": "n/a (pipe ignored)",
-        "rpc": "get-system-storage",
-        "rpc_error": null,
-        "rpc_name_got": null,
-        "rpc_name_ok": true,
-        "unsupported_on_device": false
-      },
-      {
-        "catalog_output_roots": [
-          "commit-information"
-        ],
-        "cli": "show system commit",
-        "display_xml": "n/a (pipe ignored)",
-        "rpc": "get-commit-information",
-        "rpc_error": null,
-        "rpc_name_got": null,
-        "rpc_name_ok": true,
-        "unsupported_on_device": false
       }
     ],
     "family": "junos-ex",
@@ -265,6 +265,30 @@
   },
   "bench-srx1600": {
     "checks": [
+      {
+        "catalog_output_roots": [
+          "lldp-neighbors-information"
+        ],
+        "cli": "show lldp neighbors",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-lldp-neighbors-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "license-summary-information"
+        ],
+        "cli": "show system license",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-license-summary-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
       {
         "catalog_output_roots": [
           "flow-session-information"
@@ -356,30 +380,6 @@
         "cli": "show system uptime",
         "display_xml": "n/a (pipe ignored)",
         "rpc": "get-system-uptime-information",
-        "rpc_error": null,
-        "rpc_name_got": null,
-        "rpc_name_ok": true,
-        "unsupported_on_device": false
-      },
-      {
-        "catalog_output_roots": [
-          "chassis-inventory"
-        ],
-        "cli": "show chassis hardware",
-        "display_xml": "n/a (pipe ignored)",
-        "rpc": "get-chassis-inventory",
-        "rpc_error": null,
-        "rpc_name_got": null,
-        "rpc_name_ok": true,
-        "unsupported_on_device": false
-      },
-      {
-        "catalog_output_roots": [
-          "system-storage-information"
-        ],
-        "cli": "show system storage",
-        "display_xml": "n/a (pipe ignored)",
-        "rpc": "get-system-storage",
         "rpc_error": null,
         "rpc_name_got": null,
         "rpc_name_ok": true,
@@ -394,6 +394,30 @@
     "checks": [
       {
         "catalog_output_roots": [
+          "lldp-neighbors-information"
+        ],
+        "cli": "show lldp neighbors",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-lldp-neighbors-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "license-summary-information"
+        ],
+        "cli": "show system license",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-license-summary-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
           "flow-session-information"
         ],
         "cli": "show security flow session",
@@ -483,30 +507,6 @@
         "cli": "show system uptime",
         "display_xml": "n/a (pipe ignored)",
         "rpc": "get-system-uptime-information",
-        "rpc_error": null,
-        "rpc_name_got": null,
-        "rpc_name_ok": true,
-        "unsupported_on_device": false
-      },
-      {
-        "catalog_output_roots": [
-          "chassis-inventory"
-        ],
-        "cli": "show chassis hardware",
-        "display_xml": "n/a (pipe ignored)",
-        "rpc": "get-chassis-inventory",
-        "rpc_error": null,
-        "rpc_name_got": null,
-        "rpc_name_ok": true,
-        "unsupported_on_device": false
-      },
-      {
-        "catalog_output_roots": [
-          "system-storage-information"
-        ],
-        "cli": "show system storage",
-        "display_xml": "n/a (pipe ignored)",
-        "rpc": "get-system-storage",
         "rpc_error": null,
         "rpc_name_got": null,
         "rpc_name_ok": true,
@@ -521,6 +521,30 @@
     "checks": [
       {
         "catalog_output_roots": [
+          "lldp-neighbors-information"
+        ],
+        "cli": "show lldp neighbors",
+        "display_xml": "error: Tool execution failed: netconf error: RPC error: failed to parse RPC response: significant text outside a reply payload",
+        "rpc": "get-lldp-neighbors-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "license-summary-information"
+        ],
+        "cli": "show system license",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-license-summary-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
           "flow-session-information"
         ],
         "cli": "show security flow session",
@@ -614,30 +638,6 @@
         "rpc_name_got": null,
         "rpc_name_ok": true,
         "unsupported_on_device": false
-      },
-      {
-        "catalog_output_roots": [
-          "chassis-inventory"
-        ],
-        "cli": "show chassis hardware",
-        "display_xml": "n/a (pipe ignored)",
-        "rpc": "get-chassis-inventory",
-        "rpc_error": null,
-        "rpc_name_got": null,
-        "rpc_name_ok": true,
-        "unsupported_on_device": false
-      },
-      {
-        "catalog_output_roots": [
-          "system-storage-information"
-        ],
-        "cli": "show system storage",
-        "display_xml": "n/a (pipe ignored)",
-        "rpc": "get-system-storage",
-        "rpc_error": null,
-        "rpc_name_got": null,
-        "rpc_name_ok": true,
-        "unsupported_on_device": false
       }
     ],
     "family": "junos-es",
@@ -646,6 +646,32 @@
   },
   "bench-vsrx-inet": {
     "checks": [
+      {
+        "catalog_output_roots": [
+          "lldp-neighbors-information",
+          "multi-routing-engine-results"
+        ],
+        "cli": "show lldp neighbors",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-lldp-neighbors-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
+      {
+        "catalog_output_roots": [
+          "license-summary-information",
+          "multi-routing-engine-results"
+        ],
+        "cli": "show system license",
+        "display_xml": "n/a (pipe ignored)",
+        "rpc": "get-license-summary-information",
+        "rpc_error": null,
+        "rpc_name_got": null,
+        "rpc_name_ok": true,
+        "unsupported_on_device": false
+      },
       {
         "catalog_output_roots": [
           "flow-session-information",
@@ -745,32 +771,6 @@
         "cli": "show system uptime",
         "display_xml": "n/a (pipe ignored)",
         "rpc": "get-system-uptime-information",
-        "rpc_error": null,
-        "rpc_name_got": null,
-        "rpc_name_ok": true,
-        "unsupported_on_device": false
-      },
-      {
-        "catalog_output_roots": [
-          "chassis-inventory",
-          "multi-routing-engine-results"
-        ],
-        "cli": "show chassis hardware",
-        "display_xml": "n/a (pipe ignored)",
-        "rpc": "get-chassis-inventory",
-        "rpc_error": null,
-        "rpc_name_got": null,
-        "rpc_name_ok": true,
-        "unsupported_on_device": false
-      },
-      {
-        "catalog_output_roots": [
-          "multi-routing-engine-results",
-          "system-storage-information"
-        ],
-        "cli": "show system storage",
-        "display_xml": "n/a (pipe ignored)",
-        "rpc": "get-system-storage",
         "rpc_error": null,
         "rpc_name_got": null,
         "rpc_name_ok": true,
