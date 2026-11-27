@@ -1127,7 +1127,7 @@ impl JmcpHandler {
 
     #[tool(
         name = "lookup_junos_api",
-        description = "Look up a Junos operational RPC or configuration path in the embedded API catalog. Call this BEFORE issuing an RPC or CLI command (execute_junos_command) or writing configuration, instead of guessing RPC names, arguments or config syntax. Results are per Family (junos-es, junos-ex, junos-evo) and Release train (23.1 or later): pass `router` to use the device's own model and version, or `family` + `release` (e.g. junos-es, 24.4) when no device is reachable. `kind` is `rpc` (default) or `config`; `query` is an RPC name, CLI command, config path or keywords. If the result has a `warning`, the answer comes from a nearby train or a guessed family, so verify against the device. Read-only."
+        description = "Look up a Junos operational RPC or configuration path in the embedded API catalog. Call this BEFORE issuing an RPC or CLI command (execute_junos_command) or writing configuration, instead of guessing RPC names, arguments or config syntax. Results are per Family (junos-es, junos-ex, junos-evo) and Release train (23.1 or later): pass `router` to use the device's own model and version, or `family` + `release` (e.g. junos-es, 24.4) when no device is reachable. `kind` is `rpc` (default) or `config`; `query` is an RPC name, CLI command, config path or keywords; an exact RPC name also returns the reply element tree, 3 levels deep. If the result has a `warning`, the answer comes from a nearby train or a guessed family, so verify against the device. Read-only."
     )]
     async fn lookup_junos_api(
         &self,

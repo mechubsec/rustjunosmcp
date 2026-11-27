@@ -311,7 +311,10 @@ answered from junos-es".
 Read-scope tool. Arguments: `router` (a device whose model and version pick
 the Family and train) or `family` + `release`; `query` (RPC name, CLI
 command, config path or keywords); `kind` (`rpc`, default, or `config`);
-`limit` (default 10, max 50); `timeout`. A reply from a nearby train, a
+`limit` (default 10, max 50); `timeout`. Only a hit on the exact RPC name
+carries the reply element tree (`output`), cut to 3 levels with
+`output_truncated: true` when deeper elements were left out; CLI and keyword
+hits carry none. A reply from a nearby train, a
 guessed family, or a train with gaps carries a `warning`. With `router` it
 reads device facts when its 15-minute train cache is cold; the cache is
 cleared by `reload_devices` and `upgrade_junos`.

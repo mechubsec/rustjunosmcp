@@ -538,6 +538,25 @@ mod tests {
         assert_eq!(family_for("MX480", "24.4R1"), None);
     }
 
+    /// A full `get-interface-information` reply tree is ~470 KB; the lookup
+    /// result must stay small enough for a model's context.
+    #[tokio::test]
+    async fn lookup_of_large_rpc_stays_small() {
+        let mut lookup = args(None, Some("junos-es"), Some("24.4"));
+        lookup.query = "get-interface-information".into();
+        let out = run(
+            Catalog::embedded(),
+            lookup,
+            manager(),
+            &DeviceTrainCache::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out["hits"][0]["output_truncated"], true, "{out}");
+        let size = serde_json::to_string_pretty(&out).unwrap().len();
+        assert!(size < 64 * 1024, "{size} bytes");
+    }
+
     #[test]
     fn cache_returns_fresh_entries_only() {
         let cache = DeviceTrainCache::default();

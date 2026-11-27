@@ -25,7 +25,8 @@ catalog of every operational RPC and configuration path per **Family**
    - `kind: config`: `query` is a configuration path (`security policies`) or
      keywords. The result gives value type, range and units.
 2. Read the hit: RPC name, CLI equivalent, argument names and which are
-   `empty` flags, and the trains it exists in.
+   `empty` flags, and the trains it exists in. Look up the exact RPC name to
+   get its reply element tree, 3 levels deep (`output_truncated` when cut).
 3. Call it.
    - `execute_junos_rpc` for `get-*` RPCs whose CLI is a `show ...` command.
      `args` maps argument names to a string, or `true` for an `empty` flag.

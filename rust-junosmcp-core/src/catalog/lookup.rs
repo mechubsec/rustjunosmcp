@@ -22,8 +22,13 @@ pub struct RpcHit {
     pub description: Option<Text>,
     /// The arguments it accepts.
     pub input: Vec<RpcInput>,
-    /// The reply element tree.
-    pub output: OutputTree,
+    /// The reply element tree, only on an exact-name lookup hit and only
+    /// [`OUTPUT_DEPTH`] levels deep; `None` on CLI and keyword hits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<OutputTree>,
+    /// True when `output` lost elements below [`OUTPUT_DEPTH`].
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub output_truncated: bool,
     /// Generator guidance, when any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<Text>,
@@ -55,7 +60,44 @@ fn config_entry(variants: &[ConfigEntry], train: Train) -> Option<&ConfigEntry> 
     for_train(variants, train, |entry| &entry.trains)
 }
 
-fn rpc_hit(data: &Data<RpcVariant>, name: &str, variant: &RpcVariant, in_train: bool) -> RpcHit {
+/// Reply-tree levels an exact-name lookup returns. A full tree runs to
+/// ~470 KB (`get-interface-information`); three levels are ~11 KB and name
+/// the record element and its fields.
+pub const OUTPUT_DEPTH: usize = 3;
+
+/// `tree` cut to `depth` levels, and whether anything was cut.
+fn cut(tree: &OutputTree, depth: usize) -> (OutputTree, bool) {
+    if depth == 0 {
+        return (OutputTree::default(), !tree.0.is_empty());
+    }
+    let mut truncated = false;
+    let children = tree
+        .0
+        .iter()
+        .map(|(name, child)| {
+            let (child, cut_below) = cut(child, depth - 1);
+            truncated |= cut_below;
+            (name.clone(), child)
+        })
+        .collect();
+    (OutputTree(children), truncated)
+}
+
+/// The hit for `variant`; `with_output` adds its reply tree cut to [`OUTPUT_DEPTH`].
+fn rpc_hit(
+    data: &Data<RpcVariant>,
+    name: &str,
+    variant: &RpcVariant,
+    in_train: bool,
+    with_output: bool,
+) -> RpcHit {
+    let (output, output_truncated) = match data.outputs.get(variant.output) {
+        Some(tree) if with_output => {
+            let (tree, truncated) = cut(tree, OUTPUT_DEPTH);
+            (Some(tree), truncated)
+        }
+        _ => (None, false),
+    };
     RpcHit {
         name: name.to_owned(),
         trains: variant.trains.clone(),
@@ -63,11 +105,8 @@ fn rpc_hit(data: &Data<RpcVariant>, name: &str, variant: &RpcVariant, in_train: 
         cli: variant.cli.clone(),
         description: variant.description.clone(),
         input: variant.input.clone(),
-        output: data
-            .outputs
-            .get(variant.output)
-            .cloned()
-            .unwrap_or_default(),
+        output,
+        output_truncated,
         note: variant.note.clone(),
     }
 }
@@ -161,7 +200,7 @@ impl Catalog {
             .get(&query)
             .and_then(|variants| rpc_variant(variants, res.used))
         {
-            return vec![rpc_hit(data, &query, variant, true)];
+            return vec![rpc_hit(data, &query, variant, true, true)];
         }
 
         let command = query.split('|').next().unwrap_or_default();
@@ -176,7 +215,7 @@ impl Catalog {
                 by_cli.clear();
             }
             if len == best {
-                by_cli.push(rpc_hit(data, name, variant, true));
+                by_cli.push(rpc_hit(data, name, variant, true, false));
             }
         }
         if !by_cli.is_empty() {
@@ -200,7 +239,7 @@ impl Catalog {
         ranked
             .into_iter()
             .take(limit)
-            .map(|(_, name, variant)| rpc_hit(data, name, variant, true))
+            .map(|(_, name, variant)| rpc_hit(data, name, variant, true, false))
             .collect()
     }
 
@@ -276,16 +315,17 @@ impl Catalog {
     /// The RPC `name` for the resolved train. When the RPC exists in the
     /// Family but not in that train, returns its newest definition with
     /// `in_train: false`; `None` when the Family has no such RPC at all.
+    /// The hit carries no reply tree.
     pub fn rpc(&self, res: &Resolution, name: &str) -> Option<RpcHit> {
         let data = self.rpc_data(res.family)?;
         let variants = data.entries.get(name)?;
         if let Some(variant) = rpc_variant(variants, res.used) {
-            return Some(rpc_hit(data, name, variant, true));
+            return Some(rpc_hit(data, name, variant, true, false));
         }
         let newest = variants
             .iter()
             .max_by_key(|variant| variant.trains.iter().max().copied())?;
-        Some(rpc_hit(data, name, newest, false))
+        Some(rpc_hit(data, name, newest, false, false))
     }
 
     /// Whether a `set`-style token path (`["system", "name-server",
@@ -428,7 +468,13 @@ mod tests {
         let catalog = fixture_catalog();
         let hits = catalog.lookup_rpc(&resolution(25, 4), "get-arp-table-information", 10);
         assert_eq!(names(&hits), ["get-arp-table-information"]);
-        assert_eq!(hits[0].output.0[0].0, "arp-table-information");
+        assert_eq!(
+            hits[0].output.as_ref().unwrap().0[0].0,
+            "arp-table-information"
+        );
+        // CLI and keyword hits carry no reply tree.
+        let res = resolution(25, 4);
+        assert!(catalog.lookup_rpc(&res, "show arp", 10)[0].output.is_none());
         assert!(hits[0].input.iter().any(|input| input.name == "no-resolve"));
     }
 
