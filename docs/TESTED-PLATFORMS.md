@@ -21,3 +21,24 @@ Cross-platform gaps: a spurious "owned by unknown" config-authority warning
 ([#674](https://github.com/mechubsec/rustjunosmcp/issues/674)); RT_FLOW traffic-log lines come
 back wholesale as `[REDACTED]` from `execute_junos_command_batch` (seen on SRX440 EVO, SRX345,
 SRX1600 and cSRX); no way to pass an IKE PSK in a change set without it landing in the payload.
+
+## Catalog check (2026-11-27)
+
+`scripts/catalog/verify_lab.py` took the CLI behind 10 catalog RPCs per bench model, ran it
+through `execute_junos_command` with `| display xml rpc`, and compared the RPC name the device
+reports with the catalog's. Results: `scripts/catalog/lab-results/2026-11-27.json`.
+
+| Model | Release | RPC names matched |
+|---|---|---|
+| EX2300-C-12P | 23.4R2-S2.1 | 10 of 10 |
+| SRX345 | 25.4R1-S2.3 | 10 of 10 |
+| SRX440 (EVO) | 25.4X300-D40.2-EVO | 10 of 10 |
+| SRX1600 | 25.4R1.12 | 10 of 10 |
+| vSRX 3.0 | 26.2R1.7 | 10 of 10 |
+| cSRX | 26.2R1.7 | 8 of 10; no `show arp` or `show route` on the device (overlay notes added) |
+
+Not verified: that the reply root matches the catalog output (the 2.8.1 bench server ignores
+`| display xml` and returns CLI text, and has no `execute_junos_rpc`), and the 26.2
+`multi-routing-engine-results` wrapper. SRX440 EVO fails `show lldp neighbors | display xml`
+with a parse error ("significant text outside a reply payload"). No real-device `execute_junos_rpc`
+call has been made yet.

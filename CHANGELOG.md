@@ -32,6 +32,22 @@ All notable user-facing changes are recorded here. Format loosely follows
   Redaction and output caps still apply. Under `mode: allowlist`,
   `display inheritance` must be in `allowed_pipes`. Tested against replies
   captured from a vSRX (#671).
+- Embedded Junos API catalog (Juniper/yang commit pinned in
+  `rust-junosmcp-core/catalog/SOURCE`, Apache-2.0, about 8.4 MB gzipped in the
+  binary) and four tools. `lookup_junos_api` finds RPCs and config paths per
+  family and release; `execute_junos_rpc` calls a catalog `get-*` RPC whose CLI
+  is `show …` and returns the XML. Every named and positional CLI form of the
+  RPC (flags before and after values) must pass the command allowlist; an
+  allowlist entry written with a positional value, such as `show log
+  messages`, now also needs the named form allowed. `list_junos_skills` and
+  `read_junos_skill` serve skills for clients without the extension. See
+  `docs/REFERENCE.md` for known upstream gaps.
+- Skills over MCP (SEP-2640) from `--skills-dir` / `JMCP_SKILLS_DIR` (default
+  `/usr/share/rust-junosmcp/skills`): four skills ship in `skills/` and the LXC
+  package and the Docker image install them. `skills/*` and `resources/*` need a valid token but
+  are not tool-scoped. New dependencies via rmcp `skills-fs`: the cap-std family (Apache-2.0 / MIT) and
+  `yaml_serde` + `libyaml-rs`; see the dependency review in
+  `docs/REFERENCE.md`.
 
 ### Changed
 
