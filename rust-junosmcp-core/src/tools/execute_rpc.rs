@@ -70,7 +70,7 @@ fn text_is_safe(value: &str) -> bool {
     !value.is_empty()
         && value
             .chars()
-            .all(|c| (' '..='~').contains(&c) && !matches!(c, '<' | '>' | '&' | '"' | '\''))
+            .all(|c| (' '..='~').contains(&c) && !matches!(c, '<' | '>' | '&' | '"' | '\'' | ';'))
 }
 
 /// Most text arguments one call may carry: each doubles the policy strings
@@ -172,7 +172,7 @@ pub(crate) async fn run(
 
     // Validate arguments. Flags are always named in the CLI; text arguments
     // may be positional on the device, so both forms are policy-checked.
-    let mut flags_cli = hit.cli.to_string();
+    let mut flags = String::new();
     let mut texts: Vec<(&str, &str)> = Vec::new();
     let mut pairs: Vec<(&str, &str)> = Vec::new();
     for (name, value) in &args.args {
@@ -203,15 +203,15 @@ pub(crate) async fn run(
         match value {
             RpcArgValue::Flag(false) => {}
             RpcArgValue::Flag(true) if is_flag => {
-                flags_cli.push(' ');
-                flags_cli.push_str(name);
+                flags.push(' ');
+                flags.push_str(name);
                 pairs.push((name, ""));
             }
             RpcArgValue::Text(text) if !is_flag => {
                 validate_input_length(name, text)?;
                 if !text_is_safe(text) {
                     return Err(invalid(format!(
-                        "argument {name:?} must be non-empty printable ASCII with no `<`, `>`, `&` or quotes"
+                        "argument {name:?} must be non-empty printable ASCII with no `<`, `>`, `&`, `;` or quotes"
                     )));
                 }
                 texts.push((name, text));
@@ -233,19 +233,26 @@ pub(crate) async fn run(
         )));
     }
 
-    // Every combination of named/positional forms must be allowed.
+    // Every combination of named/positional forms must be allowed, with the
+    // flags both before and after the text values (a positional value usually
+    // follows the base command directly). Text order follows the catalog.
+    let position = |name: &str| hit.input.iter().position(|input| &*input.name == name);
+    texts.sort_by_key(|(name, _)| position(name));
     commands.clear();
     for mask in 0..(1usize << texts.len()) {
-        let mut cli = flags_cli.clone();
+        let mut values = String::new();
         for (index, (name, text)) in texts.iter().enumerate() {
             if mask & (1 << index) != 0 {
-                cli.push(' ');
-                cli.push_str(name);
+                values.push(' ');
+                values.push_str(name);
             }
-            cli.push(' ');
-            cli.push_str(text);
+            values.push(' ');
+            values.push_str(text);
         }
-        commands.push(cli);
+        commands.push(format!("{}{flags}{values}", hit.cli));
+        if !flags.is_empty() {
+            commands.push(format!("{}{values}{flags}", hit.cli));
+        }
     }
     for cli in commands.clone() {
         enforce_decision(
@@ -373,7 +380,7 @@ mod tests {
         )
         .await;
         assert!(err.to_string().contains("not an argument"), "{err}");
-        for bad in ["a<b", "a>b", "a&b", "a\"b", "a'b", "a\nb", ""] {
+        for bad in ["a<b", "a>b", "a&b", "a\"b", "a'b", "a\nb", "a;b", ""] {
             let err = run_err(
                 None,
                 call("get-arp-table-information", &[("interface", text(bad))]),
@@ -445,6 +452,32 @@ mod tests {
         );
         assert!(
             commands.contains(&"show log filename messages".to_string()),
+            "{commands:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_flag_placement_cannot_bypass_deny_carveout() {
+        let policy = Some(
+            r#""mode":"allowlist","allow":["show interfaces"],
+               "commands":[{"action":"deny","pattern":"show interfaces ge-0/0/0*"}]"#
+                .to_string(),
+        );
+        let (err, commands) = run_err_in(
+            Catalog::embedded(),
+            policy,
+            call(
+                "get-interface-information",
+                &[
+                    ("interface-name", RpcArgValue::Text("ge-0/0/0".into())),
+                    ("local", RpcArgValue::Flag(true)),
+                ],
+            ),
+        )
+        .await;
+        assert!(matches!(err, JmcpError::Denied { .. }), "{err:?}");
+        assert!(
+            commands.contains(&"show interfaces ge-0/0/0 local".to_string()),
             "{commands:?}"
         );
     }
