@@ -4,11 +4,11 @@
 //! CLI equivalent plus the validated arguments is checked against the same
 //! policy as `execute_junos_command`.
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, Family, Train};
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
 use crate::helpers::validate_input_length;
-use crate::policy::{BlocklistDomain, Policy, enforce_decision};
+use crate::policy::{BlocklistDomain, Decision, Policy, enforce_decision};
 use crate::tools::lookup_api::DeviceTrainCache;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -48,13 +48,16 @@ pub struct ExecuteRpcArgs {
 }
 
 /// Call a read-only catalog RPC on a device and return its XML reply.
+///
+/// `commands` receives the CLI strings checked against the policy, for audit.
 pub async fn handle(
     args: ExecuteRpcArgs,
     dm: Arc<DeviceManager>,
     policy: Arc<Policy>,
     cache: &DeviceTrainCache,
+    commands: &mut Vec<String>,
 ) -> Result<Value, JmcpError> {
-    run(Catalog::embedded(), args, dm, policy, cache).await
+    run(Catalog::embedded(), args, dm, policy, cache, commands).await
 }
 
 fn invalid(message: String) -> JmcpError {
@@ -62,12 +65,38 @@ fn invalid(message: String) -> JmcpError {
 }
 
 /// Whether `value` is safe to send as an element value and echo into the
-/// policy string: no XML metacharacters and no control characters.
+/// policy string: printable ASCII without XML metacharacters or quotes.
 fn text_is_safe(value: &str) -> bool {
     !value.is_empty()
-        && !value
+        && value
             .chars()
-            .any(|c| c.is_control() || matches!(c, '<' | '>' | '&' | '"' | '\''))
+            .all(|c| (' '..='~').contains(&c) && !matches!(c, '<' | '>' | '&' | '"' | '\''))
+}
+
+/// Most text arguments one call may carry: each doubles the policy strings
+/// checked (named and positional form).
+const MAX_TEXT_ARGS: usize = 6;
+
+/// Whether the catalog CLI is a plain `show` command (not `request`/`clear`).
+fn is_show(cli: &str) -> bool {
+    cli.starts_with("show ")
+}
+
+/// Checks `cli` against the command policy, recording it in `commands`.
+fn check_cli(
+    policy: &Policy,
+    device: &str,
+    cli: &str,
+    commands: &mut Vec<String>,
+) -> Result<(), JmcpError> {
+    commands.push(cli.to_owned());
+    enforce_decision(
+        policy.check_command(device, cli),
+        "execute_junos_rpc",
+        device,
+        cli,
+        BlocklistDomain::Commands,
+    )
 }
 
 pub(crate) async fn run(
@@ -76,6 +105,7 @@ pub(crate) async fn run(
     dm: Arc<DeviceManager>,
     policy: Arc<Policy>,
     cache: &DeviceTrainCache,
+    commands: &mut Vec<String>,
 ) -> Result<Value, JmcpError> {
     if !args.rpc.starts_with("get-") {
         return Err(invalid(format!(
@@ -85,6 +115,44 @@ pub(crate) async fn run(
     }
     // Fail fast on unknown devices before any connection.
     let _ = dm.inventory().get(&args.device)?;
+
+    // Before connecting: the RPC's CLI in every family must be a `show`, and
+    // must not already be explicitly denied. Only an explicit deny rule is
+    // acted on here; allowlist matching needs the full argument string.
+    let newest = Train {
+        major: u16::MAX,
+        minor: u16::MAX,
+    };
+    let base_clis: Vec<String> = Family::ALL
+        .iter()
+        .filter_map(|family| {
+            let resolution = catalog.resolve(*family, newest, true);
+            catalog
+                .rpc(&resolution, &args.rpc)
+                .map(|hit| hit.cli.to_string())
+        })
+        .collect();
+    if base_clis.is_empty() {
+        return Err(invalid(format!(
+            "RPC {:?} is not in the API catalog; use lookup_junos_api to find it",
+            args.rpc
+        )));
+    }
+    for base in &base_clis {
+        if !is_show(base) {
+            return Err(invalid(format!(
+                "RPC {:?} is not read-only (CLI equivalent {base:?}); execute_junos_rpc only runs `show` RPCs",
+                args.rpc
+            )));
+        }
+        if matches!(
+            policy.check_command(&args.device, base),
+            Decision::Deny { .. }
+        ) {
+            check_cli(&policy, &args.device, base, commands)?;
+        }
+    }
+
     let (family, train, exact_family) = cache
         .detect(&dm, &args.device, Duration::from_secs(args.timeout))
         .await?;
@@ -95,12 +163,21 @@ pub(crate) async fn run(
             args.rpc, resolution.family
         ))
     })?;
+    if !is_show(&hit.cli) {
+        return Err(invalid(format!(
+            "RPC {:?} is not read-only (CLI equivalent {:?}); execute_junos_rpc only runs `show` RPCs",
+            args.rpc, &*hit.cli
+        )));
+    }
 
-    // Validate arguments and build the CLI string from catalog text and
-    // validated values only; flags set to false are dropped.
-    let mut cli = hit.cli.to_string();
+    // Validate arguments. Flags are always named in the CLI; text arguments
+    // may be positional on the device, so both forms are policy-checked.
+    let mut flags_cli = hit.cli.to_string();
+    let mut texts: Vec<(&str, &str)> = Vec::new();
     let mut pairs: Vec<(&str, &str)> = Vec::new();
     for (name, value) in &args.args {
+        let callable =
+            |input: &&crate::catalog::RpcInput| !input.name.contains(char::is_whitespace);
         let leaf = hit
             .input
             .iter()
@@ -111,30 +188,33 @@ pub(crate) async fn run(
                     args.rpc,
                     hit.input
                         .iter()
+                        .filter(callable)
                         .map(|input| &*input.name)
                         .collect::<Vec<_>>()
                         .join(", ")
                 ))
             })?;
+        if !callable(&leaf) {
+            return Err(invalid(format!(
+                "argument {name:?} is not callable via execute_junos_rpc"
+            )));
+        }
         let is_flag = leaf.type_name.as_deref().is_some_and(|t| t == "empty");
         match value {
             RpcArgValue::Flag(false) => {}
             RpcArgValue::Flag(true) if is_flag => {
-                cli.push(' ');
-                cli.push_str(name);
+                flags_cli.push(' ');
+                flags_cli.push_str(name);
                 pairs.push((name, ""));
             }
             RpcArgValue::Text(text) if !is_flag => {
                 validate_input_length(name, text)?;
                 if !text_is_safe(text) {
                     return Err(invalid(format!(
-                        "argument {name:?} must be non-empty and contain no `<`, `>`, `&`, quotes or control characters"
+                        "argument {name:?} must be non-empty printable ASCII with no `<`, `>`, `&` or quotes"
                     )));
                 }
-                cli.push(' ');
-                cli.push_str(name);
-                cli.push(' ');
-                cli.push_str(text);
+                texts.push((name, text));
                 pairs.push((name, text));
             }
             _ => {
@@ -146,14 +226,36 @@ pub(crate) async fn run(
             }
         }
     }
+    if texts.len() > MAX_TEXT_ARGS {
+        return Err(invalid(format!(
+            "at most {MAX_TEXT_ARGS} text arguments are accepted per call; got {}",
+            texts.len()
+        )));
+    }
 
-    enforce_decision(
-        policy.check_command(&args.device, &cli),
-        "execute_junos_rpc",
-        &args.device,
-        &cli,
-        BlocklistDomain::Commands,
-    )?;
+    // Every combination of named/positional forms must be allowed.
+    commands.clear();
+    for mask in 0..(1usize << texts.len()) {
+        let mut cli = flags_cli.clone();
+        for (index, (name, text)) in texts.iter().enumerate() {
+            if mask & (1 << index) != 0 {
+                cli.push(' ');
+                cli.push_str(name);
+            }
+            cli.push(' ');
+            cli.push_str(text);
+        }
+        commands.push(cli);
+    }
+    for cli in commands.clone() {
+        enforce_decision(
+            policy.check_command(&args.device, &cli),
+            "execute_junos_rpc",
+            &args.device,
+            &cli,
+            BlocklistDomain::Commands,
+        )?;
+    }
 
     let timeout = Duration::from_secs(args.timeout);
     let output = tokio::time::timeout(timeout, async {
@@ -189,11 +291,9 @@ mod tests {
     use crate::inventory::Inventory;
     use std::io::Write;
 
-    fn setup(allowlist: Option<&str>) -> (Arc<DeviceManager>, Arc<Policy>, DeviceTrainCache) {
-        let defaults = allowlist
-            .map(|allow| {
-                format!(r#""_blocklist_defaults":{{"mode":"allowlist","allow":[{allow}]}},"#)
-            })
+    fn setup(policy_inner: Option<&str>) -> (Arc<DeviceManager>, Arc<Policy>, DeviceTrainCache) {
+        let defaults = policy_inner
+            .map(|inner| format!(r#""_blocklist_defaults":{{{inner}}},"#))
             .unwrap_or_default();
         let mut file = tempfile::NamedTempFile::new().unwrap();
         write!(
@@ -234,11 +334,26 @@ mod tests {
         }
     }
 
-    async fn run_err(allowlist: Option<&str>, args: ExecuteRpcArgs) -> JmcpError {
-        let (dm, policy, cache) = setup(allowlist);
-        run(&fixture_catalog(), args, dm, policy, &cache)
+    /// An allowlist policy over `allow` (a JSON list body), plus extra `inner` JSON.
+    fn allow(list: &str) -> Option<String> {
+        Some(format!(r#""mode":"allowlist","allow":[{list}]"#))
+    }
+
+    async fn run_err(policy_json: Option<String>, args: ExecuteRpcArgs) -> JmcpError {
+        run_err_in(&fixture_catalog(), policy_json, args).await.0
+    }
+
+    async fn run_err_in(
+        catalog: &Catalog,
+        policy_json: Option<String>,
+        args: ExecuteRpcArgs,
+    ) -> (JmcpError, Vec<String>) {
+        let (dm, policy, cache) = setup(policy_json.as_deref());
+        let mut commands = Vec::new();
+        let err = run(catalog, args, dm, policy, &cache, &mut commands)
             .await
-            .unwrap_err()
+            .unwrap_err();
+        (err, commands)
     }
 
     #[tokio::test]
@@ -264,7 +379,10 @@ mod tests {
                 call("get-arp-table-information", &[("interface", text(bad))]),
             )
             .await;
-            assert!(err.to_string().contains("contain no"), "{bad:?}: {err}");
+            assert!(
+                err.to_string().contains("printable ASCII"),
+                "{bad:?}: {err}"
+            );
         }
         // Wrong kind of value for the leaf.
         let err = run_err(
@@ -278,7 +396,7 @@ mod tests {
     #[tokio::test]
     async fn rpc_policy_denial_honoured() {
         let err = run_err(
-            Some(r#""show version""#),
+            allow(r#""show version""#),
             call("get-arp-table-information", &[]),
         )
         .await;
@@ -287,16 +405,113 @@ mod tests {
 
     #[tokio::test]
     async fn rpc_policy_sees_args_in_cli() {
-        let err = run_err(
-            Some(r#""show version""#),
+        let (err, commands) = run_err_in(
+            &fixture_catalog(),
+            allow(r#""show version""#),
             call(
                 "get-arp-table-information",
                 &[("interface", RpcArgValue::Text("ge-0/0/0".into()))],
             ),
         )
+        .await;
+        assert!(matches!(err, JmcpError::DeniedAllowlist { .. }), "{err:?}");
+        assert_eq!(
+            commands,
+            ["show arp ge-0/0/0", "show arp interface ge-0/0/0"]
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_positional_form_cannot_bypass_deny_carveout() {
+        // `get-log filename=messages` is `show log messages` on the device.
+        let policy = Some(
+            r#""mode":"allowlist","allow":["show log"],
+               "commands":[{"action":"deny","pattern":"show log messages*"}]"#
+                .to_string(),
+        );
+        let (err, commands) = run_err_in(
+            Catalog::embedded(),
+            policy,
+            call(
+                "get-log",
+                &[("filename", RpcArgValue::Text("messages".into()))],
+            ),
+        )
+        .await;
+        assert!(matches!(err, JmcpError::Denied { .. }), "{err:?}");
+        assert!(
+            commands.contains(&"show log messages".to_string()),
+            "{commands:?}"
+        );
+        assert!(
+            commands.contains(&"show log filename messages".to_string()),
+            "{commands:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_rejects_non_show_get_rpcs_in_real_catalog() {
+        for rpc in ["get-jfw-tpm-upgrade", "get-cfmd-clear-context-history"] {
+            let (err, _) = run_err_in(Catalog::embedded(), None, call(rpc, &[])).await;
+            assert!(err.to_string().contains("not read-only"), "{rpc}: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn rpc_rejects_too_many_text_args_non_ascii_and_spaced_leaves() {
+        let text = |s: &str| RpcArgValue::Text(s.into());
+        let err = run_err(
+            None,
+            call(
+                "get-arp-table-information",
+                &[("interface", text("caf\u{e9}"))],
+            ),
+        )
+        .await;
+        assert!(err.to_string().contains("printable ASCII"), "{err}");
+        let (err, _) = run_err_in(
+            Catalog::embedded(),
+            None,
+            call("get-route-information", &[("output address", text("x"))]),
+        )
+        .await;
+        assert!(err.to_string().contains("not callable"), "{err}");
+        let many: Vec<_> = [
+            "logname",
+            "memory-filename",
+            "filename",
+            "files-path",
+            "pid",
+            "thread",
+            "remember",
+        ]
+        .iter()
+        .map(|name| (*name, text("x")))
+        .collect();
+        let (err, _) =
+            run_err_in(Catalog::embedded(), None, call("get-shmlog-entries", &many)).await;
+        assert!(err.to_string().contains("at most 6"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn rpc_pre_check_denies_before_connecting() {
+        // No cache entry and an unreachable device: a plain deny must win
+        // over the connection error.
+        let (dm, policy, _) = setup(Some(
+            r#""mode":"blocklist","commands":[{"action":"deny","pattern":"show arp*"}]"#,
+        ));
+        let cache = DeviceTrainCache::default();
+        let err = run(
+            &fixture_catalog(),
+            call("get-arp-table-information", &[]),
+            dm,
+            policy,
+            &cache,
+            &mut Vec::new(),
+        )
         .await
-        .to_string();
-        assert!(err.contains("show arp interface ge-0/0/0"), "{err}");
+        .unwrap_err();
+        assert!(matches!(err, JmcpError::Denied { .. }), "{err:?}");
     }
 
     /// Past the gates the call reaches the (unreachable) device, so the error

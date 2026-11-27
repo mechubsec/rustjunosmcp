@@ -1139,13 +1139,15 @@ impl JmcpHandler {
             audit.deny("router_scope");
             return Self::scope_to_call_result(e);
         }
-        audit.meta("command", args.rpc.clone());
+        audit.meta("rpc", args.rpc.clone());
 
+        let mut commands = Vec::new();
         let result = execute_rpc::handle(
             args,
             self.dm.clone(),
             self.policy.load_full(),
             &self.train_cache,
+            &mut commands,
         )
         .await
         .map(|mut value| {
@@ -1155,6 +1157,8 @@ impl JmcpHandler {
             }
             value
         });
+        // The CLI strings checked against the policy, as execute_junos_command records its command.
+        audit.meta("command", commands.join(" ; "));
         match &result {
             Ok(v) => {
                 audit.meta("output_bytes", v.to_string().len() as u64);
