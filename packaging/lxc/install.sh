@@ -318,6 +318,16 @@ install -m 0755 "$PACKAGE_ROOT/usr/local/bin/rust-junosmcp" "$BIN_DIR/rust-junos
 install -m 0644 "$PACKAGE_ROOT/etc/jmcp/devices.json.example" "$CONFIG_DIR/devices.json.example"
 install -m 0644 "$PACKAGE_ROOT/etc/systemd/system/rust-junosmcp.service" "$UNIT_DIR/rust-junosmcp.service"
 
+# Skills are optional in the payload (older packages lack them). Replace the
+# directory so a skill removed upstream does not linger.
+if [[ -d "$PACKAGE_ROOT/usr/share/rust-junosmcp/skills" ]]; then
+    SKILLS_DIR="$(target_path /usr/share/rust-junosmcp/skills)"
+    [[ ! -L "$SKILLS_DIR" ]] || fail "refusing to replace symlink: $SKILLS_DIR"
+    rm -rf "$SKILLS_DIR"
+    install -d -m 0755 "$(dirname "$SKILLS_DIR")"
+    cp -R "$PACKAGE_ROOT/usr/share/rust-junosmcp/skills" "$SKILLS_DIR"
+fi
+
 # DO NOT create devices.json on first install — the server will fail with a
 # clear actionable error telling the operator to copy the example and edit it.
 # Only preserve an existing devices.json on upgrade (it already exists).

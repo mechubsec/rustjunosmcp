@@ -7,12 +7,15 @@
 
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
-use crate::helpers::{build_config_payload, excerpt, resolve_load_action, validate_input_length};
+use crate::helpers::{
+    add_warnings, build_config_payload, excerpt, resolve_load_action, validate_input_length,
+};
 use crate::policy::{BlocklistDomain, Decision, Policy};
 use crate::tools::CommitCheckArgs;
 use crate::tools::candidate_transaction::{
     self, CandidateMode, CandidateRequest, CandidateResult, CheckOutcome,
 };
+use crate::tools::lookup_api::DeviceTrainCache;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,6 +40,7 @@ pub async fn handle(
         policy,
         allow_plane_owned_writes,
         CancellationToken::new(),
+        &DeviceTrainCache::default(),
     )
     .await
 }
@@ -48,6 +52,7 @@ pub async fn handle_with_cancel(
     policy: Arc<Policy>,
     allow_plane_owned_writes: bool,
     ct: CancellationToken,
+    train_cache: &DeviceTrainCache,
 ) -> Result<Value, JmcpError> {
     validate_input_length("config_text", &args.config_text)?;
     // Confirm the router exists before consulting the policy.
@@ -99,7 +104,19 @@ pub async fn handle_with_cancel(
     // configuration-set payload).
     let load_action = resolve_load_action(&args.config_format, rustez::LoadAction::Merge)?;
     let payload = build_config_payload(args.config_text, Some(&args.config_format))?;
-    let timeout_dur = Duration::from_secs(args.timeout);
+    let started = std::time::Instant::now();
+    let catalog_warnings = train_cache
+        .check_write(
+            &dm,
+            &args.device,
+            std::slice::from_ref(&payload),
+            Duration::from_secs(args.timeout),
+            false,
+            &ct,
+        )
+        .await?;
+    // One budget for the whole call: the write gets what the check left.
+    let timeout_dur = Duration::from_secs(args.timeout).saturating_sub(started.elapsed());
 
     let (result, warning) = candidate_transaction::run(
         &dm,
@@ -134,6 +151,7 @@ pub async fn handle_with_cancel(
     if let Some(warning) = warning {
         response["warning"] = json!(warning);
     }
+    add_warnings(&mut response, &catalog_warnings);
     Ok(response)
 }
 

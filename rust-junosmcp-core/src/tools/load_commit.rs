@@ -4,13 +4,14 @@
 use crate::device_manager::DeviceManager;
 use crate::error::JmcpError;
 use crate::helpers::{
-    ConfirmDecision, build_config_payload, confirm_timeout_to_secs, excerpt, parse_load_mode,
-    refuse_override_outside_changeset, resolve_confirm_timeout, resolve_load_action,
-    rollback_deadline_unix, validate_input_length,
+    ConfirmDecision, add_warnings, build_config_payload, confirm_timeout_to_secs, excerpt,
+    parse_load_mode, refuse_override_outside_changeset, resolve_confirm_timeout,
+    resolve_load_action, rollback_deadline_unix, validate_input_length,
 };
 use crate::policy::{BlocklistDomain, Decision, Policy};
 use crate::tools::LoadCommitArgs;
 use crate::tools::candidate_transaction::{self, CandidateMode, CandidateRequest, CandidateResult};
+use crate::tools::lookup_api::DeviceTrainCache;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,6 +35,7 @@ pub async fn handle(
         policy,
         allow_plane_owned_writes,
         CancellationToken::new(),
+        &DeviceTrainCache::default(),
     )
     .await
 }
@@ -45,6 +47,7 @@ pub async fn handle_with_cancel(
     policy: Arc<Policy>,
     allow_plane_owned_writes: bool,
     ct: CancellationToken,
+    train_cache: &DeviceTrainCache,
 ) -> Result<Value, JmcpError> {
     validate_input_length("config_text", &args.config_text)?;
 
@@ -101,7 +104,19 @@ pub async fn handle_with_cancel(
 
     let payload = build_config_payload(args.config_text, Some(&args.config_format))?;
 
-    let timeout_dur = Duration::from_secs(args.timeout);
+    let started = std::time::Instant::now();
+    let catalog_warnings = train_cache
+        .check_write(
+            &dm,
+            &args.device,
+            std::slice::from_ref(&payload),
+            Duration::from_secs(args.timeout),
+            false,
+            &ct,
+        )
+        .await?;
+    // One budget for the whole call: the write gets what the check left.
+    let timeout_dur = Duration::from_secs(args.timeout).saturating_sub(started.elapsed());
     // Commit-confirmed by default (MEC-45): a bad load that cuts management
     // access reverts itself unless the caller explicitly opts out with
     // `confirm_timeout_mins: 0`.
@@ -153,6 +168,7 @@ pub async fn handle_with_cancel(
             if let Some(warning) = authority_warning {
                 obj["warning"] = json!(warning);
             }
+            add_warnings(&mut obj, &catalog_warnings);
             Ok(obj)
         }
         CandidateResult::CommitFailed { diff, error } => {
@@ -160,6 +176,7 @@ pub async fn handle_with_cancel(
             if let Some(warning) = authority_warning {
                 obj["warning"] = json!(warning);
             }
+            add_warnings(&mut obj, &catalog_warnings);
             Ok(obj)
         }
         _ => unreachable!("load/commit transaction returned the wrong result kind"),
@@ -177,6 +194,51 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(json.as_bytes()).unwrap();
         Arc::new(Inventory::load(f.path()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn unknown_catalog_path_is_rejected_before_any_load() {
+        let inv = inv_with(
+            r#"{"r1":{"ip":"127.0.0.1","port":1,"username":"u","auth":{"type":"password","password":"x"}}}"#,
+        );
+        let dm = Arc::new(DeviceManager::new(inv.clone()));
+        let pol = Arc::new(Policy::build(&inv).unwrap());
+        let cache = DeviceTrainCache::default();
+        cache.put(
+            "r1",
+            (
+                crate::catalog::Family::JunosEs,
+                crate::catalog::Train {
+                    major: 25,
+                    minor: 4,
+                },
+                true,
+            ),
+        );
+        let result = handle_with_cancel(
+            LoadCommitArgs {
+                device: "r1".into(),
+                config_text: "set system host-name r1\nset system name-serverz 192.0.2.53".into(),
+                config_format: "set".into(),
+                mode: "merge".into(),
+                commit_comment: "test".into(),
+                confirm_timeout_mins: None,
+                timeout: 5,
+            },
+            dm,
+            pol,
+            false,
+            CancellationToken::new(),
+            &cache,
+        )
+        .await;
+        match result {
+            Err(JmcpError::Validation(message)) => {
+                assert!(message.contains("name-serverz"), "{message}");
+                assert!(!message.contains("host-name r1"), "{message}");
+            }
+            other => panic!("expected a catalog validation error, got {other:?}"),
+        }
     }
 
     #[tokio::test]

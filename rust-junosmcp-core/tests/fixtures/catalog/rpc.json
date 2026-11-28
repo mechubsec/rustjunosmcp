@@ -1,0 +1,135 @@
+{
+ "families": {
+  "junos-es": {
+   "get-arp-table-information": [
+    {
+     "cli": "show arp",
+     "description": "Show system Address Resolution Protocol table entries",
+     "input": [
+      {
+       "description": "Don't resolve hostnames",
+       "name": "no-resolve",
+       "type": "empty"
+      },
+      {
+       "description": "Name of interface",
+       "name": "interface",
+       "type": "string"
+      }
+     ],
+     "output": 0,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ]
+    }
+   ],
+   "get-new-feature-information": [
+    {
+     "cli": "show new-feature",
+     "description": "Show the new feature",
+     "input": [],
+     "output": 4,
+     "trains": [
+      "25.4"
+     ]
+    }
+   ],
+   "get-route-information": [
+    {
+     "cli": "show route",
+     "description": "Show routing table information",
+     "input": [
+      {
+       "description": "Destination prefix",
+       "name": "destination",
+       "type": "ipprefix"
+      }
+     ],
+     "output": 2,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ]
+    }
+   ],
+   "get-route-summary-information": [
+    {
+     "cli": "show route summary",
+     "description": "Show route summary information",
+     "input": [],
+     "output": 3,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ]
+    }
+   ],
+   "get-software-information": [
+    {
+     "cli": "show version",
+     "description": "Show software process revision levels",
+     "input": [],
+     "output": 1,
+     "trains": [
+      "23.4",
+      "24.2"
+     ]
+    },
+    {
+     "cli": "show version",
+     "description": "Show software process revision levels",
+     "input": [],
+     "note": "25.4 adds no arguments",
+     "output": 1,
+     "trains": [
+      "25.4"
+     ]
+    }
+   ]
+  }
+ },
+ "gaps": [],
+ "outputs": [
+  {
+   "arp-table-information": {
+    "arp-table-entry": {
+     "interface-name": {},
+     "ip-address": {},
+     "mac-address": {}
+    }
+   }
+  },
+  {
+   "software-information": {
+    "host-name": {},
+    "junos-version": {}
+   }
+  },
+  {
+   "route-information": {
+    "route-table": {
+     "table-name": {}
+    }
+   }
+  },
+  {
+   "route-summary-information": {
+    "route-table": {}
+   }
+  },
+  {}
+ ],
+ "source": {
+  "commit": "fixture",
+  "repo": "Juniper/yang"
+ },
+ "trains": [
+  "23.4",
+  "24.2",
+  "25.4"
+ ]
+}

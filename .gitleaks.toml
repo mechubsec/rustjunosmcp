@@ -22,4 +22,8 @@ regexes = [
   # not the file path, so a real value re-captured into any file still fails.
   # See docs/superpowers/captures/README.md for the policy.
   '''\$[1569]\$FAKE[A-Za-z0-9./]*''',
+  # Public Juniper/yang commit pinned in rust-junosmcp-core/catalog/SOURCE; it appears
+  # in generated catalog data and matches sourcegraph-access-token (any 40-hex string).
+  # Listed by value, not commit, so the allowlist survives rebases.
+  '''7a619c35c7d59d87fc224d96bd215aaa4e02ed25''',
 ]

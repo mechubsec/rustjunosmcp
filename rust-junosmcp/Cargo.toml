@@ -103,6 +103,7 @@ rmcp = { version = "3", features = [
     "transport-io",
     "schemars",
     "transport-streamable-http-server",
+    "skills-fs",
 ] }
 schemars           = { workspace = true }
 arc-swap           = { workspace = true }

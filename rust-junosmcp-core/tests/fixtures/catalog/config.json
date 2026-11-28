@@ -1,0 +1,429 @@
+{
+ "families": {
+  "junos-es": {
+   "interfaces": [
+    {
+     "description": "Interface configuration",
+     "kind": "container",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "interfaces interface": [
+    {
+     "description": "Physical interface",
+     "kind": "list",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "interfaces interface name": [
+    {
+     "description": "Interface name",
+     "kind": "leaf",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "string",
+     "units": null
+    }
+   ],
+   "interfaces interface unit": [
+    {
+     "description": "Logical interface",
+     "kind": "list",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "interfaces interface unit description": [
+    {
+     "description": "Text description of interface",
+     "kind": "leaf",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "string",
+     "units": null
+    }
+   ],
+   "interfaces interface unit name": [
+    {
+     "description": "Logical unit number",
+     "kind": "leaf",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "string",
+     "units": null
+    }
+   ],
+   "logical-systems": [
+    {
+     "description": "Logical systems",
+     "kind": "list",
+     "note": "Contains the full root hierarchy for each logical system; look up the root path instead.",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "logical-systems name": [
+    {
+     "description": "Logical system name",
+     "kind": "leaf",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "string",
+     "units": null
+    }
+   ],
+   "logical-systems system": [
+    {
+     "description": "System parameters",
+     "kind": "container",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "security": [
+    {
+     "description": "Security configuration",
+     "kind": "container",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "security address-book": [
+    {
+     "description": "Security address book",
+     "kind": "list",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "security address-book address": [
+    {
+     "description": "Define a security address",
+     "kind": "list",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "security address-book address ip-prefix": [
+    {
+     "description": "Numeric IPv4 or IPv6 address with prefix",
+     "kind": "leaf",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "ipprefix",
+     "units": null
+    }
+   ],
+   "security address-book address name": [
+    {
+     "description": "Security address name",
+     "kind": "leaf",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "string",
+     "units": null
+    }
+   ],
+   "security address-book name": [
+    {
+     "description": "Address book name",
+     "kind": "leaf",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "string",
+     "units": null
+    }
+   ],
+   "security policies": [
+    {
+     "description": "Configure Network Security Policies",
+     "kind": "container",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "security policies policy": [
+    {
+     "description": "Define a policy context from this zone",
+     "kind": "list",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "security policies policy from-zone-name": [
+    {
+     "description": "Source zone",
+     "kind": "leaf",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "string",
+     "units": null
+    }
+   ],
+   "security policies policy policy": [
+    {
+     "description": "Define security policy in specified zone-to-zone direction",
+     "kind": "list",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "security policies policy policy match": [
+    {
+     "description": "Specify security policy match-criteria",
+     "kind": "container",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "security policies policy policy match source-address": [
+    {
+     "description": "Match IP source address",
+     "kind": "leaf-list",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "string",
+     "units": null
+    }
+   ],
+   "security policies policy policy name": [
+    {
+     "description": "Security policy name",
+     "kind": "leaf",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "string",
+     "units": null
+    }
+   ],
+   "security policies policy to-zone-name": [
+    {
+     "description": "Destination zone",
+     "kind": "leaf",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "string",
+     "units": null
+    }
+   ],
+   "system": [
+    {
+     "description": "System parameters",
+     "kind": "container",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "system host-name": [
+    {
+     "description": "Hostname for this router",
+     "kind": "leaf",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "string",
+     "units": null
+    }
+   ],
+   "system name-server": [
+    {
+     "description": "DNS name servers",
+     "kind": "list",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": null,
+     "units": null
+    }
+   ],
+   "system name-server name": [
+    {
+     "description": "DNS name server address",
+     "kind": "leaf",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "ipaddr",
+     "units": null
+    }
+   ],
+   "system name-server routing-instance": [
+    {
+     "description": "Routing instance through which server is reachable",
+     "kind": "leaf",
+     "range": null,
+     "trains": [
+      "23.4",
+      "24.2",
+      "25.4"
+     ],
+     "type": "string",
+     "units": null
+    }
+   ],
+   "system new-knob": [
+    {
+     "description": "A knob added in 25.4",
+     "kind": "leaf",
+     "range": "1..10",
+     "trains": [
+      "25.4"
+     ],
+     "type": "uint32",
+     "units": null
+    }
+   ]
+  }
+ },
+ "gaps": [
+  {
+   "family": "junos-es",
+   "kind": "config",
+   "module": "junos-es-conf-wlan",
+   "reason": "Juniper YANG syntax error",
+   "train": "24.2"
+  }
+ ],
+ "source": {
+  "commit": "fixture",
+  "repo": "Juniper/yang"
+ },
+ "trains": [
+  "23.4",
+  "24.2",
+  "25.4"
+ ]
+}

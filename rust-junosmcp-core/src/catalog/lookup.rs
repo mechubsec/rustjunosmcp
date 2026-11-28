@@ -1,0 +1,618 @@
+//! Catalog queries: RPC and Configuration path lookup and path validation.
+
+use serde::Serialize;
+
+use super::{
+    Catalog, ConfigEntry, Data, OutputTree, Resolution, RpcInput, RpcVariant, Text, Train,
+};
+
+/// An RPC as defined for a Resolution's train.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RpcHit {
+    /// The RPC name (`get-arp-table-information`).
+    pub name: String,
+    /// The trains this definition holds for.
+    pub trains: Vec<Train>,
+    /// False only from [`Catalog::rpc`] when the RPC is absent from the
+    /// resolved train and the newest definition was returned instead.
+    pub in_train: bool,
+    /// The CLI equivalent (`show arp`).
+    pub cli: Text,
+    /// What the RPC does.
+    pub description: Option<Text>,
+    /// The arguments it accepts.
+    pub input: Vec<RpcInput>,
+    /// The reply element tree, only on an exact-name lookup hit and only
+    /// [`OUTPUT_DEPTH`] levels deep; `None` on CLI and keyword hits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<OutputTree>,
+    /// True when `output` lost elements below [`OUTPUT_DEPTH`].
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub output_truncated: bool,
+    /// Generator guidance, when any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<Text>,
+}
+
+/// A Configuration path as defined for a Resolution's train.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ConfigHit {
+    /// The space-joined path (`system name-server`); list keys appear as
+    /// child leaves, never inside the path.
+    pub path: String,
+    /// The definition for the resolved train.
+    #[serde(flatten)]
+    pub entry: ConfigEntry,
+}
+
+/// The definition of an entry that holds for `train`.
+fn for_train<T>(variants: &[T], train: Train, trains: impl Fn(&T) -> &[Train]) -> Option<&T> {
+    variants
+        .iter()
+        .find(|variant| trains(variant).contains(&train))
+}
+
+fn rpc_variant(variants: &[RpcVariant], train: Train) -> Option<&RpcVariant> {
+    for_train(variants, train, |variant| &variant.trains)
+}
+
+fn config_entry(variants: &[ConfigEntry], train: Train) -> Option<&ConfigEntry> {
+    for_train(variants, train, |entry| &entry.trains)
+}
+
+/// Reply-tree levels an exact-name lookup returns. A full tree runs to
+/// ~470 KB (`get-interface-information`); three levels are ~11 KB and name
+/// the record element and its fields.
+pub const OUTPUT_DEPTH: usize = 3;
+
+/// `tree` cut to `depth` levels, and whether anything was cut.
+fn cut(tree: &OutputTree, depth: usize) -> (OutputTree, bool) {
+    if depth == 0 {
+        return (OutputTree::default(), !tree.0.is_empty());
+    }
+    let mut truncated = false;
+    let children = tree
+        .0
+        .iter()
+        .map(|(name, child)| {
+            let (child, cut_below) = cut(child, depth - 1);
+            truncated |= cut_below;
+            (name.clone(), child)
+        })
+        .collect();
+    (OutputTree(children), truncated)
+}
+
+/// The hit for `variant`; `with_output` adds its reply tree cut to [`OUTPUT_DEPTH`].
+fn rpc_hit(
+    data: &Data<RpcVariant>,
+    name: &str,
+    variant: &RpcVariant,
+    in_train: bool,
+    with_output: bool,
+) -> RpcHit {
+    let (output, output_truncated) = match data.outputs.get(variant.output) {
+        Some(tree) if with_output => {
+            let (tree, truncated) = cut(tree, OUTPUT_DEPTH);
+            (Some(tree), truncated)
+        }
+        _ => (None, false),
+    };
+    RpcHit {
+        name: name.to_owned(),
+        trains: variant.trains.clone(),
+        in_train,
+        cli: variant.cli.clone(),
+        description: variant.description.clone(),
+        input: variant.input.clone(),
+        output,
+        output_truncated,
+        note: variant.note.clone(),
+    }
+}
+
+/// How many lowercase `words` occur in `haystack`.
+fn score(words: &[&str], haystack: &str) -> usize {
+    let haystack = haystack.to_lowercase();
+    words.iter().filter(|word| haystack.contains(*word)).count()
+}
+
+/// The number of tokens in `cli` when it is a whole-token prefix of `query`.
+fn cli_prefix_len(cli: &str, query: &str) -> Option<usize> {
+    let mut query_tokens = query.split_whitespace();
+    let mut matched = 0;
+    for token in cli.split_whitespace() {
+        if query_tokens.next() != Some(token) {
+            return None;
+        }
+        matched += 1;
+    }
+    (matched > 0).then_some(matched)
+}
+
+/// CLI keywords the YANG renames to avoid clashes, field-verified on the
+/// bench-lab baselines: CLI `match` under a NAT rule.
+const RENAMED_KEYWORDS: &[(&str, &[&str])] = &[(
+    "match",
+    &[
+        "src-nat-rule-match",
+        "dest-nat-rule-match",
+        "static-nat-rule-match",
+    ],
+)];
+
+/// Lists whose keyword the CLI omits, field-verified on the bench-lab
+/// baselines: `interfaces ge-0/0/0` for `interfaces interface ge-0/0/0`,
+/// `vlans v1` (EX), `routing-instances mgmt_junos`, and the syslog facility
+/// in `system syslog file messages any any`. Add an entry when a real line
+/// is rejected; never accept any list.
+const ELIDED_LISTS: &[&str] = &[
+    "interfaces interface",
+    "vlans vlan",
+    "routing-instances instance",
+    "system syslog file contents",
+    "system syslog user contents",
+];
+
+/// Leaves whose keyword the CLI omits, field-verified on the bench-lab
+/// baselines (`storm-control default`, `traceoptions file f1`,
+/// `default-policy deny-all`, `address a1 10.0.0.0/8`). Add an entry when a
+/// real line is rejected; never accept any leaf.
+const POSITIONAL_LEAVES: &[&str] = &["profile-name", "filename", "default-action", "ip-prefix"];
+
+/// Whether `value` fits a leaf type: any value unless it is an enumeration
+/// (`enumeration: deny-all | permit-all`), which must list it.
+fn enum_allows(type_name: Option<&str>, value: &str) -> bool {
+    match type_name.and_then(|name| name.strip_prefix("enumeration:")) {
+        Some(values) => values.split('|').any(|allowed| allowed.trim() == value),
+        None => true,
+    }
+}
+
+fn child(parent: &str, token: &str) -> String {
+    if parent.is_empty() {
+        token.to_owned()
+    } else {
+        format!("{parent} {token}")
+    }
+}
+
+impl Catalog {
+    /// RPCs matching `query` on the resolved train, best first.
+    ///
+    /// Tries, in order, and returns the first stage that matches: the exact
+    /// RPC name; the longest catalog CLI that is a whole-token prefix of the
+    /// query (anything after the first `|` is dropped); then a case-insensitive
+    /// keyword match over name, CLI and description, ranked by words matched.
+    pub fn lookup_rpc(&self, res: &Resolution, query: &str, limit: usize) -> Vec<RpcHit> {
+        let Some(data) = self.rpc_data(res.family) else {
+            return Vec::new();
+        };
+        let query = query.trim().to_lowercase();
+        let in_train = || {
+            data.entries.iter().filter_map(|(name, variants)| {
+                rpc_variant(variants, res.used).map(|variant| (name, variant))
+            })
+        };
+
+        if let Some(variant) = data
+            .entries
+            .get(&query)
+            .and_then(|variants| rpc_variant(variants, res.used))
+        {
+            return vec![rpc_hit(data, &query, variant, true, true)];
+        }
+
+        let command = query.split('|').next().unwrap_or_default();
+        let mut best = 0;
+        let mut by_cli = Vec::new();
+        for (name, variant) in in_train() {
+            let Some(len) = cli_prefix_len(&variant.cli, command) else {
+                continue;
+            };
+            if len > best {
+                best = len;
+                by_cli.clear();
+            }
+            if len == best {
+                by_cli.push(rpc_hit(data, name, variant, true, false));
+            }
+        }
+        if !by_cli.is_empty() {
+            by_cli.truncate(limit);
+            return by_cli;
+        }
+
+        let words: Vec<&str> = query.split_whitespace().collect();
+        let mut ranked: Vec<(usize, &String, &RpcVariant)> = in_train()
+            .map(|(name, variant)| {
+                let text = format!(
+                    "{name} {} {}",
+                    variant.cli,
+                    variant.description.as_deref().unwrap_or_default()
+                );
+                (score(&words, &text), name, variant)
+            })
+            .filter(|(matched, ..)| *matched > 0)
+            .collect();
+        ranked.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(right.1)));
+        ranked
+            .into_iter()
+            .take(limit)
+            .map(|(_, name, variant)| rpc_hit(data, name, variant, true, false))
+            .collect()
+    }
+
+    /// Configuration paths matching `query` (space- or `/`-separated) on the
+    /// resolved train: the exact path followed by its descendants, shallowest
+    /// first; when neither exists, a keyword match over path and description.
+    pub fn lookup_config(&self, res: &Resolution, query: &str, limit: usize) -> Vec<ConfigHit> {
+        let Some(data) = self.config_data(res.family) else {
+            return Vec::new();
+        };
+        let query = query.to_lowercase();
+        let words: Vec<&str> = query
+            .split(|ch: char| ch == '/' || ch.is_whitespace())
+            .filter(|word| !word.is_empty())
+            .collect();
+        if words.is_empty() {
+            return Vec::new();
+        }
+        let path = words.join(" ");
+        let hit = |path: &String, entry: &ConfigEntry| ConfigHit {
+            path: path.clone(),
+            entry: entry.clone(),
+        };
+        let depth = |path: &str| path.matches(' ').count();
+
+        let below = format!("{path} ");
+        let mut found: Vec<(&String, &ConfigEntry)> = data
+            .entries
+            .range(path.clone()..)
+            .take_while(|(candidate, _)| **candidate == path || candidate.starts_with(&below))
+            .filter_map(|(candidate, variants)| {
+                config_entry(variants, res.used).map(|entry| (candidate, entry))
+            })
+            .collect();
+        if !found.is_empty() {
+            found.sort_by(|left, right| {
+                depth(left.0).cmp(&depth(right.0)).then(left.0.cmp(right.0))
+            });
+            return found
+                .into_iter()
+                .take(limit)
+                .map(|(path, entry)| hit(path, entry))
+                .collect();
+        }
+
+        let mut ranked: Vec<(usize, &String, &ConfigEntry)> = data
+            .entries
+            .iter()
+            .filter_map(|(candidate, variants)| {
+                let entry = config_entry(variants, res.used)?;
+                let text = format!(
+                    "{candidate} {}",
+                    entry.description.as_deref().unwrap_or_default()
+                );
+                let matched = score(&words, &text);
+                (matched > 0).then_some((matched, candidate, entry))
+            })
+            .collect();
+        ranked.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then(depth(left.1).cmp(&depth(right.1)))
+                .then(left.1.cmp(right.1))
+        });
+        ranked
+            .into_iter()
+            .take(limit)
+            .map(|(_, path, entry)| hit(path, entry))
+            .collect()
+    }
+
+    /// The RPC `name` for the resolved train. When the RPC exists in the
+    /// Family but not in that train, returns its newest definition with
+    /// `in_train: false`; `None` when the Family has no such RPC at all.
+    /// The hit carries no reply tree.
+    pub fn rpc(&self, res: &Resolution, name: &str) -> Option<RpcHit> {
+        let data = self.rpc_data(res.family)?;
+        let variants = data.entries.get(name)?;
+        if let Some(variant) = rpc_variant(variants, res.used) {
+            return Some(rpc_hit(data, name, variant, true, false));
+        }
+        let newest = variants
+            .iter()
+            .max_by_key(|variant| variant.trains.iter().max().copied())?;
+        Some(rpc_hit(data, name, newest, false, false))
+    }
+
+    /// Whether a `set`-style token path (`["system", "name-server",
+    /// "1.1.1.2", "routing-instance", "mgmt_junos"]`) exists on the
+    /// resolved train.
+    ///
+    /// Walks left to right. Tokens after a leaf or leaf-list are its value.
+    /// The token after a list is its key value. Junos CLI shorthands are
+    /// accepted: the elided keywords of [`ELIDED_LISTS`] (`interfaces
+    /// ge-0/0/0` for `interfaces interface ge-0/0/0`), keyword-named keys (`from-zone X
+    /// to-zone Y` for the `from-zone-name`/`to-zone-name` keys), the values of
+    /// [`POSITIONAL_LEAVES`] without their keyword, the CLI names in
+    /// [`RENAMED_KEYWORDS`], and the
+    /// root hierarchy repeated under `logical-systems <name>` and
+    /// `tenants <name>`.
+    pub fn config_path_exists(&self, res: &Resolution, path: &[&str]) -> bool {
+        let Some(data) = self.config_data(res.family) else {
+            return false;
+        };
+        let node = |path: &str| {
+            data.entries
+                .get(path)
+                .and_then(|variants| config_entry(variants, res.used))
+        };
+        let is_list = |path: &str| node(path).is_some_and(|entry| entry.kind == "list");
+        // Direct children of `parent` on the train, in catalog order.
+        let direct_children = |parent: &str| {
+            let below = child(parent, "");
+            let start = below.clone();
+            data.entries
+                .range(start.clone()..)
+                .take_while(move |(candidate, _)| candidate.starts_with(&start))
+                .filter(move |(candidate, variants)| {
+                    !candidate[below.len()..].contains(' ')
+                        && config_entry(variants, res.used).is_some()
+                })
+                .map(|(candidate, _)| candidate.clone())
+        };
+        let list_children = |parent: &str| {
+            direct_children(parent)
+                .filter(|candidate| is_list(candidate))
+                .collect::<Vec<_>>()
+        };
+
+        let mut current = String::new();
+        let mut index = 0;
+        while index < path.len() {
+            let token = path[index];
+            let next = path.get(index + 1).copied();
+
+            let mut named = child(&current, token);
+            if node(&named).is_none()
+                && let Some((_, renamed)) = RENAMED_KEYWORDS.iter().find(|(cli, _)| *cli == token)
+                && let Some(found) = direct_children(&current).find(|candidate| {
+                    renamed
+                        .iter()
+                        .any(|name| candidate.rsplit(' ').next() == Some(*name))
+                })
+            {
+                named = found;
+            }
+            if let Some(entry) = node(&named) {
+                if entry.kind != "list" && entry.kind != "container" {
+                    return true;
+                }
+                current = named;
+                index += 1;
+                if entry.kind == "list" && next.is_some() {
+                    // The key value; a list that mirrors the root hierarchy
+                    // (`logical-systems <name>`) continues from the root.
+                    index += 1;
+                    if entry
+                        .note
+                        .as_deref()
+                        .is_some_and(|note| note.contains("root hierarchy"))
+                    {
+                        current.clear();
+                    }
+                }
+                continue;
+            }
+
+            let in_list = is_list(&current);
+            if in_list && node(&child(&current, &format!("{token}-name"))).is_some() {
+                index += 2;
+                continue;
+            }
+            if current.is_empty() {
+                return false;
+            }
+            let elided = list_children(&current).into_iter().find_map(|list| {
+                if node(&child(&list, &format!("{token}-name"))).is_some() {
+                    return Some((list, 2));
+                }
+                // Only a field-verified list may drop its keyword, and then
+                // the key value must be last or followed by a child.
+                let next_fits = next.is_none_or(|next| node(&child(&list, next)).is_some());
+                (ELIDED_LISTS.contains(&list.as_str()) && next_fits).then_some((list, 1))
+            });
+            if let Some((list, consumed)) = elided {
+                current = list;
+                index += consumed;
+                continue;
+            }
+            // A positional leaf value: the CLI omits the keyword of a few
+            // leaves (`storm-control default`, `traceoptions file f1`,
+            // `default-policy deny-all`, `address a1 10.0.0.0/8`).
+            let positional = direct_children(&current).any(|candidate| {
+                let name = candidate.rsplit(' ').next().unwrap_or_default();
+                POSITIONAL_LEAVES.contains(&name)
+                    && node(&candidate).is_some_and(|entry| {
+                        entry.kind == "leaf" && enum_allows(entry.type_name.as_deref(), token)
+                    })
+            });
+            let next_fits = next.is_none_or(|next| node(&child(&current, next)).is_some());
+            if !(positional && next_fits) {
+                return false;
+            }
+            index += 1;
+        }
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{Family, fixture_catalog};
+    use super::*;
+
+    fn resolution(major: u16, minor: u16) -> Resolution {
+        fixture_catalog().resolve(Family::JunosEs, Train { major, minor }, true)
+    }
+
+    fn names(hits: &[RpcHit]) -> Vec<&str> {
+        hits.iter().map(|hit| hit.name.as_str()).collect()
+    }
+
+    #[test]
+    fn lookup_by_exact_name_resolves_output_tree() {
+        let catalog = fixture_catalog();
+        let hits = catalog.lookup_rpc(&resolution(25, 4), "get-arp-table-information", 10);
+        assert_eq!(names(&hits), ["get-arp-table-information"]);
+        assert_eq!(
+            hits[0].output.as_ref().unwrap().0[0].0,
+            "arp-table-information"
+        );
+        // CLI and keyword hits carry no reply tree.
+        let res = resolution(25, 4);
+        assert!(catalog.lookup_rpc(&res, "show arp", 10)[0].output.is_none());
+        assert!(hits[0].input.iter().any(|input| input.name == "no-resolve"));
+    }
+
+    #[test]
+    fn lookup_by_cli_text_with_pipe() {
+        let catalog = fixture_catalog();
+        let res = resolution(25, 4);
+        let hits = catalog.lookup_rpc(&res, "show arp   no-resolve | match 10.", 10);
+        assert_eq!(names(&hits), ["get-arp-table-information"]);
+        let hits = catalog.lookup_rpc(&res, "show route summary extensive", 10);
+        assert_eq!(names(&hits), ["get-route-summary-information"]);
+    }
+
+    #[test]
+    fn lookup_by_keywords_ranks() {
+        let catalog = fixture_catalog();
+        let hits = catalog.lookup_rpc(&resolution(25, 4), "Route SUMMARY", 10);
+        assert_eq!(
+            names(&hits),
+            ["get-route-summary-information", "get-route-information"]
+        );
+        let hits = catalog.lookup_rpc(&resolution(25, 4), "route summary", 1);
+        assert_eq!(names(&hits), ["get-route-summary-information"]);
+    }
+
+    #[test]
+    fn lookup_skips_rpcs_outside_the_train() {
+        let catalog = fixture_catalog();
+        assert!(
+            catalog
+                .lookup_rpc(&resolution(24, 2), "get-new-feature-information", 10)
+                .is_empty()
+        );
+        let hits = catalog.lookup_rpc(&resolution(25, 4), "new feature", 10);
+        assert_eq!(names(&hits), ["get-new-feature-information"]);
+    }
+
+    #[test]
+    fn rpc_picks_train_variant_and_falls_back() {
+        let catalog = fixture_catalog();
+        let hit = catalog
+            .rpc(&resolution(25, 4), "get-software-information")
+            .unwrap();
+        assert_eq!(hit.note.as_deref(), Some("25.4 adds no arguments"));
+        let hit = catalog
+            .rpc(&resolution(24, 2), "get-software-information")
+            .unwrap();
+        assert!(hit.in_train && hit.note.is_none());
+        let hit = catalog
+            .rpc(&resolution(24, 2), "get-new-feature-information")
+            .unwrap();
+        assert!(!hit.in_train);
+        assert!(catalog.rpc(&resolution(25, 4), "get-nothing").is_none());
+    }
+
+    #[test]
+    fn lookup_config_exact_then_descendants_then_keywords() {
+        let catalog = fixture_catalog();
+        let res = resolution(25, 4);
+        let hits = catalog.lookup_config(&res, "system/name-server", 10);
+        let paths: Vec<&str> = hits.iter().map(|hit| hit.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "system name-server",
+                "system name-server name",
+                "system name-server routing-instance"
+            ]
+        );
+        assert_eq!(hits[0].entry.kind, "list");
+        let hits = catalog.lookup_config(&res, "dns", 10);
+        assert_eq!(hits[0].path, "system name-server");
+        assert!(catalog.lookup_config(&res, "  ", 10).is_empty());
+        let hits = catalog.lookup_config(&resolution(24, 2), "system new-knob", 10);
+        assert!(hits.iter().all(|hit| hit.path != "system new-knob"));
+    }
+
+    #[test]
+    fn config_path_exists_ignores_list_keys() {
+        let catalog = fixture_catalog();
+        let res = resolution(25, 4);
+        let accepted: &[&[&str]] = &[
+            &[
+                "system",
+                "name-server",
+                "1.1.1.2",
+                "routing-instance",
+                "mgmt_junos",
+            ],
+            &["system", "host-name", "r1"],
+            &["system", "name-server", "1.1.1.2"],
+            &[
+                "interfaces",
+                "ge-0/0/0",
+                "unit",
+                "0",
+                "description",
+                "\"uplink",
+                "a\"",
+            ],
+            &["interfaces", "ge-0/0/0"],
+            &[
+                "security",
+                "policies",
+                "from-zone",
+                "trust",
+                "to-zone",
+                "untrust",
+                "policy",
+                "p1",
+                "match",
+                "source-address",
+                "any",
+            ],
+            &[
+                "security",
+                "address-book",
+                "global",
+                "address",
+                "a1",
+                "10.0.0.0/8",
+            ],
+            &["logical-systems", "LS1", "system", "host-name", "r1"],
+            &["system", "new-knob", "1"],
+        ];
+        for path in accepted {
+            assert!(catalog.config_path_exists(&res, path), "{path:?}");
+        }
+        let rejected: &[&[&str]] = &[
+            &["securty", "policies"],
+            &["system", "name-server", "1.1.1.2", "bogus", "extra"],
+            &["interfaces", "ge-0/0/0", "unti", "0"],
+            &["logical-systems", "LS1", "securty"],
+            &["nonsense"],
+        ];
+        for path in rejected {
+            assert!(!catalog.config_path_exists(&res, path), "{path:?}");
+        }
+        assert!(!catalog.config_path_exists(&resolution(24, 2), &["system", "new-knob", "1"]));
+    }
+}

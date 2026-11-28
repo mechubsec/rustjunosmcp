@@ -46,6 +46,10 @@ const JUNOS_TOOLS: &[&str] = &[
     "get_junos_change_set_status",
     "list_junos_change_sets",
     "get_junos_candidate_fingerprint",
+    "lookup_junos_api",
+    "execute_junos_rpc",
+    "list_junos_skills",
+    "read_junos_skill",
 ];
 
 #[cfg(feature = "srx")]
@@ -194,11 +198,11 @@ fn lists_expected_tools() {
     // `cancel_junos_change_set` adds one more (#293), then execute adds one.
     // MEC-54's four SRX policy-read tools add four more, and
     // `srx_flow_sessions` + `srx_policy_match` add two more (MEC-55), and
-    // `confirm_commit` adds one more (MEC-45), and `get_srx_feed_status` one (#528).
+    // `confirm_commit` adds one more (MEC-45), and `get_srx_feed_status` one (#528), and `lookup_junos_api` one.
     #[cfg(feature = "srx")]
-    assert_eq!(names.len(), 45);
+    assert_eq!(names.len(), 49);
     #[cfg(not(feature = "srx"))]
-    assert_eq!(names.len(), 29);
+    assert_eq!(names.len(), 33);
 }
 
 #[cfg(feature = "srx")]
@@ -345,4 +349,38 @@ fn denied_command_returns_tool_error() {
         body.contains("request system *"),
         "expected matched-rule pattern in: {body}"
     );
+}
+
+/// Catalog and skill text reaches the model verbatim through the real
+/// `call_tool` path: the last-mile secret redactor must not mangle words such
+/// as "session" or "secret" in static content.
+#[test]
+fn catalog_and_skill_text_survive_call_tool_unredacted() {
+    let inventory = common::write_inv("{}");
+    let skills_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../skills");
+    let mut server = common::spawn_stdio_server_with_args(&[
+        "--device-mapping",
+        inventory.path().to_str().unwrap(),
+        "--skills-dir",
+        skills_dir,
+    ]);
+
+    let lookup = common::call_tool(
+        &mut server,
+        "lookup_junos_api",
+        json!({"family": "junos-es", "release": "24.4", "query": "get-flow-session-information"}),
+    );
+    let hit = &lookup["hits"][0];
+    assert_eq!(hit["name"], "get-flow-session-information", "{lookup}");
+    assert_eq!(hit["cli"], "show security flow session", "{lookup}");
+
+    let read = common::call_tool(
+        &mut server,
+        "read_junos_skill",
+        json!({"name": "junos-config-paths"}),
+    );
+    let text = read.pointer("/content/0/text").and_then(Value::as_str);
+    let on_disk =
+        std::fs::read_to_string(format!("{skills_dir}/junos-config-paths/SKILL.md")).unwrap();
+    assert_eq!(text, Some(on_disk.as_str()));
 }

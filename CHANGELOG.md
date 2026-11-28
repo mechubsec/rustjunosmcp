@@ -32,6 +32,54 @@ All notable user-facing changes are recorded here. Format loosely follows
   Redaction and output caps still apply. Under `mode: allowlist`,
   `display inheritance` must be in `allowed_pipes`. Tested against replies
   captured from a vSRX (#671).
+- Embedded Junos API catalog (Juniper/yang commit pinned in
+  `rust-junosmcp-core/catalog/SOURCE`, Apache-2.0, about 8.4 MB gzipped in the
+  binary) and four tools. `lookup_junos_api` finds RPCs and config paths per
+  family and release; `execute_junos_rpc` calls a catalog `get-*` RPC whose CLI
+  is `show …` and returns the XML. Every named and positional CLI form of the
+  RPC (flags before and after values) must pass the command allowlist; an
+  allowlist entry written with a positional value, such as `show log
+  messages`, now also needs the named form allowed. `list_junos_skills` and
+  `read_junos_skill` serve skills for clients without the extension. Tokens
+  with a wildcard tool scope get all four (read tools). Each family's catalog
+  data is parsed on first use, lazily per family and kind, and costs about
+  90–125 MB resident once loaded. An SRX, vSRX or cSRX on a Junos OS Evolved
+  release is answered from junos-es, with the warning "SRX on Junos OS
+  Evolved: Juniper publishes no SRX EVO YANG; answered from junos-es". See
+  `docs/REFERENCE.md` for known upstream gaps.
+- Skills over MCP (SEP-2640) from `--skills-dir` / `JMCP_SKILLS_DIR` (default
+  `/usr/share/rust-junosmcp/skills`): four skills ship in `skills/` and the LXC
+  package and the Docker image install them. `skills/*` and `resources/*`
+  need a valid token but are not tool-scoped. New dependencies via rmcp
+  `skills-fs`: the cap-std family (Apache-2.0 / MIT) and
+  `yaml_serde` + `libyaml-rs`; see the dependency review in
+  `docs/REFERENCE.md`.
+
+### Changed
+
+- `load_and_commit_config`, `commit_check_config`,
+  `render_and_apply_j2_template` (per device, when applying) and
+  `create_junos_change_set` now check every configuration path against the
+  embedded API catalog for the device's family and release before touching
+  the candidate (or persisting the plan). When the catalog matches the release
+  exactly, an unknown path is an `invalid_argument` error naming each bad line
+  and up to 3 nearest catalog paths. When it does not (nearest-train fallback,
+  a train with catalog gaps, or an SRX, vSRX or cSRX on a Junos OS Evolved
+  release, which is answered from junos-es because Juniper publishes no SRX
+  EVO YANG), unknown paths are returned in `warning` instead. So are unknown
+  `delete`/`deactivate` paths, and `set` lines after `up` or `exit`. `set`
+  lines are checked in full, relative to any `edit`; text and XML loads only
+  at the first two levels. `groups`, `apply-groups`, wildcards and XML
+  `comment`/`undocumented` wrappers are skipped. The family and release come
+  from the device's facts, cached for 15 minutes. On a cache miss, opening the
+  device and reading facts share one budget: the smaller of the tool's
+  `timeout` and 15 s. The write keeps the rest of its `timeout`. If the facts
+  cannot be read, the model is not covered, or the budget runs out, the check
+  is skipped and `warning` says so. A device that refuses the connection fails
+  before the load, as before but without a second connect. Cancelling the
+  call cancels the check. A change-set create has no device step of its own:
+  it now connects once (within the same 15 s budget) to read facts, and for
+  an unreachable device it only warns.
 
 ### Fixed
 

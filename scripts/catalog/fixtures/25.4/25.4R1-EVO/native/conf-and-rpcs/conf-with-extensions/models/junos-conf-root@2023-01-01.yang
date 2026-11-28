@@ -1,0 +1,29 @@
+module junos-conf-root {
+  namespace "http://yang.juniper.net/junos/conf/root";
+  prefix jc;
+  revision 2023-01-01;
+  container configuration {
+    config true;
+    leaf-list apply-groups {
+      type string;
+    }
+    list logical-systems {
+      key name;
+      leaf name {
+        type string;
+      }
+    }
+    list tenants {
+      key name;
+      leaf name {
+        type string;
+      }
+    }
+    list groups {
+      key name;
+      leaf name {
+        type string;
+      }
+    }
+  }
+}

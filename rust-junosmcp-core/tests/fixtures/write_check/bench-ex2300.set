@@ -1,0 +1,80 @@
+set version 23.4R2-S2.1
+set system host-name bench-ex2300
+set system commit synchronize
+set system scripts language python3
+set system scripts synchronize
+set system login user netconf uid 2000
+set system login user netconf class super-user
+set system login user netconf authentication ssh-ed25519 "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIREDACTED lab"
+set system services netconf ssh
+set system services netconf rfc-compliant
+set system services netconf yang-compliant
+set system services ssh root-login allow
+set system services ssh protocol-version v2
+set system services ssh connection-limit 10
+set system auto-snapshot
+set chassis redundancy graceful-switchover
+set interfaces ge-0/0/0 description "pve3 eno1 trunk (all lab VLANs)"
+set interfaces ge-0/0/0 unit 0 family ethernet-switching interface-mode trunk
+set interfaces ge-0/0/0 unit 0 family ethernet-switching vlan members br1-users
+set interfaces ge-0/0/0 unit 0 family ethernet-switching vlan members br1-iot
+set interfaces ge-0/0/0 unit 0 family ethernet-switching vlan members hq-servers
+set interfaces ge-0/0/0 unit 0 family ethernet-switching vlan members br2-users
+set interfaces ge-0/0/0 unit 0 family ethernet-switching vlan members inet-hq
+set interfaces ge-0/0/0 unit 0 family ethernet-switching vlan members inet-br1
+set interfaces ge-0/0/0 unit 0 family ethernet-switching vlan members inet-br2
+set interfaces ge-0/0/0 unit 0 family ethernet-switching storm-control default
+set interfaces ge-0/0/1 description "SRX440 ge-0/0/1 LAN trunk"
+set interfaces ge-0/0/1 unit 0 family ethernet-switching interface-mode trunk
+set interfaces ge-0/0/1 unit 0 family ethernet-switching vlan members br1-users
+set interfaces ge-0/0/1 unit 0 family ethernet-switching vlan members br1-iot
+set interfaces ge-0/0/1 unit 0 family ethernet-switching storm-control default
+set interfaces ge-0/0/2 disable
+set interfaces ge-0/0/2 unit 0 family ethernet-switching storm-control default
+set interfaces ge-0/0/3 description "SRX1600 ge-0/0/1 LAN"
+set interfaces ge-0/0/3 unit 0 family ethernet-switching interface-mode access
+set interfaces ge-0/0/3 unit 0 family ethernet-switching vlan members hq-servers
+set interfaces ge-0/0/3 unit 0 family ethernet-switching storm-control default
+set interfaces ge-0/0/4 description "SRX345 ge-0/0/1 LAN"
+set interfaces ge-0/0/4 unit 0 family ethernet-switching interface-mode access
+set interfaces ge-0/0/4 unit 0 family ethernet-switching vlan members br2-users
+set interfaces ge-0/0/4 unit 0 family ethernet-switching storm-control default
+set interfaces ge-0/0/5 description "SRX1600 ge-0/0/0 WAN"
+set interfaces ge-0/0/5 unit 0 family ethernet-switching interface-mode access
+set interfaces ge-0/0/5 unit 0 family ethernet-switching vlan members inet-hq
+set interfaces ge-0/0/5 unit 0 family ethernet-switching storm-control default
+set interfaces ge-0/0/6 description "SRX440 ge-0/0/0 WAN"
+set interfaces ge-0/0/6 unit 0 family ethernet-switching interface-mode access
+set interfaces ge-0/0/6 unit 0 family ethernet-switching vlan members inet-br1
+set interfaces ge-0/0/6 unit 0 family ethernet-switching storm-control default
+set interfaces ge-0/0/7 description "SRX345 ge-0/0/0 WAN"
+set interfaces ge-0/0/7 unit 0 family ethernet-switching interface-mode access
+set interfaces ge-0/0/7 unit 0 family ethernet-switching vlan members inet-br2
+set interfaces ge-0/0/7 unit 0 family ethernet-switching storm-control default
+set interfaces ge-0/0/8 disable
+set interfaces ge-0/0/8 unit 0 family ethernet-switching storm-control default
+set interfaces ge-0/0/9 disable
+set interfaces ge-0/0/9 unit 0 family ethernet-switching storm-control default
+set interfaces ge-0/0/10 disable
+set interfaces ge-0/0/10 unit 0 family ethernet-switching storm-control default
+set interfaces ge-0/0/11 disable
+set interfaces ge-0/0/11 unit 0 family ethernet-switching storm-control default
+set interfaces ge-0/1/0 unit 0 family ethernet-switching storm-control default
+set interfaces xe-0/1/0 unit 0 family ethernet-switching storm-control default
+set interfaces ge-0/1/1 unit 0 family ethernet-switching storm-control default
+set interfaces xe-0/1/1 unit 0 family ethernet-switching storm-control default
+set interfaces vme unit 0 family inet dhcp
+set forwarding-options storm-control-profiles default all
+set protocols lldp interface all
+set protocols lldp-med interface all
+set protocols igmp-snooping vlan default
+set protocols rstp interface all
+set poe interface all
+set vlans br1-iot vlan-id 152
+set vlans br1-users vlan-id 151
+set vlans br2-users vlan-id 171
+set vlans default vlan-id 1
+set vlans hq-servers vlan-id 161
+set vlans inet-br1 vlan-id 182
+set vlans inet-br2 vlan-id 183
+set vlans inet-hq vlan-id 181

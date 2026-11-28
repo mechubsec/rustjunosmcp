@@ -947,6 +947,111 @@
       "additionalProperties": false
     }
   },
+  "execute_junos_rpc": {
+    "name": "execute_junos_rpc",
+    "description": "Call a read-only Junos RPC (name starting with `get-`) known to the API catalog, instead of parsing CLI text. Find the RPC name and its arguments first with lookup_junos_api. `args` maps argument names to a string, or to true for an `empty` flag. Unknown arguments, non-`get-` RPCs and values containing `<`, `>`, `&`, quotes or control characters are refused. The RPC's CLI equivalent (e.g. `show arp`) plus the arguments is checked against the same command allow/blocklist as execute_junos_command. Returns the XML reply, redacted like execute_junos_command output, with the same optional max_lines/max_bytes/tail caps; `timeout` covers the whole call. `warning` is set when the catalog train differs from the device's.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "RpcArgValue": {
+          "description": "One RPC argument: `true`/`false` for an `empty`-typed flag, else text.",
+          "anyOf": [
+            {
+              "description": "A flag argument; `false` is the same as leaving it out.",
+              "type": "boolean"
+            },
+            {
+              "description": "A text argument.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "required": [
+                "device"
+              ]
+            },
+            {
+              "required": [
+                "router_name"
+              ]
+            },
+            {
+              "required": [
+                "router"
+              ]
+            }
+          ]
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "device": {
+          "description": "The name of the device.",
+          "type": "string"
+        },
+        "rpc": {
+          "description": "A read-only RPC name starting with `get-`, such as\n`get-arp-table-information`. Find names and arguments with `lookup_junos_api`.",
+          "type": "string"
+        },
+        "args": {
+          "description": "RPC arguments by element name: `true` for an `empty` flag, a string\nfor the rest. Only arguments the catalog lists for the RPC are accepted.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/RpcArgValue"
+          }
+        },
+        "timeout": {
+          "description": "Timeout in seconds for the whole call: Family detection and the RPC.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 360
+        },
+        "max_lines": {
+          "description": "Cap output to at most N lines (head; use `tail` for the last N).\nIncludes the truncation marker, so the response never exceeds N lines.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "default": null
+        },
+        "max_bytes": {
+          "description": "Hard byte cap on returned output, inclusive of the truncation marker.\nMust leave room for that marker; see `helpers::MIN_MAX_BYTES`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 64,
+          "default": null
+        },
+        "tail": {
+          "description": "With `max_lines`, keep the LAST N lines instead of the first N.",
+          "type": "boolean",
+          "default": false
+        },
+        "router_name": {
+          "description": "The name of the device.\n\nAlias for `device`; accepted for backward compatibility.",
+          "type": "string"
+        },
+        "router": {
+          "description": "The name of the device.\n\nAlias for `device`; accepted for backward compatibility.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rpc"
+      ]
+    }
+  },
   "fetch_file": {
     "name": "fetch_file",
     "description": "Download a file from a Junos device's /var/tmp/<basename> to the host staging directory, with sha256 verification. Mirror of transfer_file.",
@@ -1419,6 +1524,14 @@
       }
     }
   },
+  "list_junos_skills": {
+    "name": "list_junos_skills",
+    "description": "List the Junos skills this server carries: workflow and judgement guidance (API lookup, config paths, EX switching, NETCONF) that goes with the tools. Returns [{name, description, uri}]. Read one with read_junos_skill. Use this when your client does not surface MCP skills itself. Read-only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
   "list_staged_files": {
     "name": "list_staged_files",
     "description": "List host-staging files (always); also lists /var/tmp/ on a Junos device when device is supplied",
@@ -1569,6 +1682,113 @@
         }
       },
       "additionalProperties": false
+    }
+  },
+  "lookup_junos_api": {
+    "name": "lookup_junos_api",
+    "description": "Look up a Junos operational RPC or configuration path in the embedded API catalog. Call this BEFORE issuing an RPC or CLI command (execute_junos_command) or writing configuration, instead of guessing RPC names, arguments or config syntax. Results are per Family (junos-es, junos-ex, junos-evo) and Release train (23.1 or later): pass `router` to use the device's own model and version, or `family` + `release` (e.g. junos-es, 24.4) when no device is reachable. `kind` is `rpc` (default) or `config`; `query` is an RPC name, CLI command, config path or keywords; an exact RPC name also returns the reply element tree, 3 levels deep. If the result has a `warning`, the answer comes from a nearby train or a guessed family, so verify against the device. Read-only.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "LookupKind": {
+          "description": "What to look up.",
+          "oneOf": [
+            {
+              "description": "An operational RPC (the default).",
+              "type": "string",
+              "const": "rpc"
+            },
+            {
+              "description": "A configuration path.",
+              "type": "string",
+              "const": "config"
+            }
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object",
+      "properties": {
+        "router": {
+          "description": "Inventory name of a device whose model and version select the Family\nand Release train. Use this or `family` + `release`, not both.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "family": {
+          "description": "`junos-es` (SRX), `junos-ex` (EX) or `junos-evo`. Requires `release`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "release": {
+          "description": "A Junos version or train, such as `24.4` or `24.4R2-S1`. Requires `family`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "query": {
+          "description": "An RPC name (`get-arp-table-information`), CLI command (`show arp`),\nconfiguration path (`security policies`) or keywords.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "`rpc` (default) or `config`.",
+          "$ref": "#/$defs/LookupKind"
+        },
+        "limit": {
+          "description": "Maximum hits (default 10, max 50).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "default": null
+        },
+        "timeout": {
+          "description": "Device connection timeout in seconds; only used with `router`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 360
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "read_junos_skill": {
+    "name": "read_junos_skill",
+    "description": "Read a file of a Junos skill by name (see list_junos_skills). `path` is relative to the skill directory and defaults to SKILL.md; a skill's SKILL.md names its reference files. Absolute paths and `..` are refused. Read-only.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Skill name from `list_junos_skills`, such as `junos-api-lookup`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "File inside the skill, relative to its directory (default `SKILL.md`).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
     }
   },
   "reload_devices": {

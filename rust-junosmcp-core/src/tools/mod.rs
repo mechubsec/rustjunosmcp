@@ -10,17 +10,21 @@ pub(crate) mod candidate_transaction;
 pub use candidate_transaction::{
     DEFAULT_CLEANUP_TIMEOUT_SECS, set_cleanup_timeout_secs, worst_case_duration,
 };
+pub use execute_rpc::{ExecuteRpcArgs, RpcArgValue};
+pub use lookup_api::LookupApiArgs;
 pub mod changeset;
 pub mod commit_check;
 pub mod config_diff;
 pub mod confirm_commit;
 pub mod discard_candidate;
 pub mod execute_command;
+pub mod execute_rpc;
 pub mod facts;
 pub mod fetch_file;
 pub mod get_config;
 pub mod list_staged_files;
 pub mod load_commit;
+pub mod lookup_api;
 pub mod pfe;
 pub mod reload_devices;
 pub mod rollback_config;
@@ -30,7 +34,7 @@ pub mod transfer_file;
 pub mod upgrade_junos;
 
 /// Default command execution timeout for most tools, in seconds.
-fn default_timeout() -> u64 {
+pub(crate) fn default_timeout() -> u64 {
     360
 }
 /// Default timeout for file-transfer operations, in seconds.

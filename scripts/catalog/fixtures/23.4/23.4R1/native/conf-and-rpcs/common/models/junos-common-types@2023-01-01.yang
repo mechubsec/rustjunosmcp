@@ -1,0 +1,8 @@
+module junos-common-types {
+  namespace "http://yang.juniper.net/junos/common/types";
+  prefix jt;
+  revision 2023-01-01;
+  typedef ipaddr {
+    type string;
+  }
+}

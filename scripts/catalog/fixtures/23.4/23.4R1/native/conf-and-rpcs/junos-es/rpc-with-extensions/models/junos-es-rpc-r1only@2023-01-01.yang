@@ -1,0 +1,16 @@
+module junos-es-rpc-r1only {
+  namespace "http://yang.juniper.net/junos-es/rpc/r1only";
+  prefix r1only;
+  import junos-common-ddl-extensions {
+    prefix junos;
+    revision-date 2023-01-01;
+  }
+  import junos-common-types {
+    prefix jt;
+    revision-date 2023-01-01;
+  }
+  revision 2023-01-01;
+  rpc get-r1-only-information {
+    junos:command "show r1 only";
+  }
+}

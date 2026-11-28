@@ -33,3 +33,30 @@ security:
     trivy fs --scanners vuln,misconfig,secret --exit-code 1 .
 
 release-check: fmt lint test security
+
+# Regenerate rust-junosmcp-core/catalog/data from the Juniper/yang commit pinned in SOURCE.
+catalog:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sha=$(sed -n 's/^commit: *//p' rust-junosmcp-core/catalog/SOURCE)
+    dir=target/juniper-yang
+    if [ "$(git -C "$dir" rev-parse HEAD 2>/dev/null)" != "$sha" ]; then
+        rm -rf "$dir"
+        git init -q "$dir"
+        git -C "$dir" remote add origin https://github.com/Juniper/yang.git
+        # Trains 23.x-29.x only; junos-es, junos-ex, common and EVO conf-and-rpcs.
+        git -C "$dir" sparse-checkout set --no-cone '/LICENSE' \
+            '/2[3-9].*/*/common/' \
+            '/2[3-9].*/*/junos-e[sx]/rpc-with-extensions/' '/2[3-9].*/*/junos-e[sx]/conf-with-extensions/' \
+            '/2[3-9].*/*/native/conf-and-rpcs/common/' \
+            '/2[3-9].*/*/native/conf-and-rpcs/junos-e[sx]/rpc-with-extensions/' \
+            '/2[3-9].*/*/native/conf-and-rpcs/junos-e[sx]/conf-with-extensions/' \
+            '/2[3-9].*/*-EVO/native/conf-and-rpcs/rpc-with-extensions/' \
+            '/2[3-9].*/*-EVO/native/conf-and-rpcs/conf-with-extensions/'
+        git -C "$dir" fetch -q --depth 1 --filter=blob:none origin "$sha"
+        git -C "$dir" checkout -q FETCH_HEAD
+    fi
+    cp "$dir/LICENSE" rust-junosmcp-core/catalog/LICENSE-juniper-yang
+    uv run --with pyang==2.6.1 --with 'setuptools<81' python -W ignore::UserWarning \
+        scripts/catalog/generate.py "$dir" rust-junosmcp-core/catalog/data \
+        --notes rust-junosmcp-core/catalog/notes

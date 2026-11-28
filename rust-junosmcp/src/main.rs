@@ -954,6 +954,10 @@ async fn main() -> Result<()> {
         direct_commit,
     )
     .with_tool_mode(args.tool_mode.tool_mode);
+    let handler = match load_skills(&args.skills_dir) {
+        Some(catalog) => handler.with_skills(catalog),
+        None => handler,
+    };
     #[cfg(feature = "srx")]
     let handler = handler.with_srx_runtime(
         token_store.is_some() && matches!(args.transport, Transport::StreamableHttp),
@@ -1590,4 +1594,26 @@ mod evidence_pipeline_tests {
         let config = args.into_pipeline_config().unwrap().unwrap();
         assert!(evidence_transports(&args, &config).is_err());
     }
+}
+
+/// Load the skills directory. A missing or unreadable directory, or one with
+/// no skills, starts the server without the skills extension.
+fn load_skills(
+    dir: &Path,
+) -> Option<std::sync::Arc<rmcp::handler::server::skill_catalog::SkillCatalog>> {
+    use rmcp::handler::server::skill_catalog::SkillCatalog;
+    let catalog = match SkillCatalog::from_dir(dir) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            tracing::info!(dir = %dir.display(), %error, "no skills loaded");
+            return None;
+        }
+    };
+    let count = catalog.skills().len();
+    if count == 0 {
+        tracing::info!(dir = %dir.display(), "skills directory holds no skills");
+        return None;
+    }
+    tracing::info!(dir = %dir.display(), count, "loaded skills");
+    Some(std::sync::Arc::new(catalog))
 }

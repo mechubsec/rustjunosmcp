@@ -1,0 +1,4 @@
+<rpc xmlns:junos="http://xml.juniper.net/junos/23.4R2-S2.1/junos" xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+<get-software-information>
+</get-software-information>
+</rpc>

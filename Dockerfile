@@ -68,6 +68,8 @@ COPY --from=builder --chown=65532:65532 \
     /src/target/release/rust-junosmcp /usr/local/bin/rust-junosmcp
 COPY --from=builder --chown=65532:65532 /stage-etc/jmcp /etc/jmcp
 COPY --from=builder --chown=65532:65532 /stage-var/lib/jmcp /var/lib/jmcp
+# Default --skills-dir (read-only content, root-owned).
+COPY --from=builder /src/skills /usr/share/rust-junosmcp/skills
 
 ENV RUST_LOG=info \
     JMCP_SUPPORT_BUNDLE_STAGING_DIR=/var/lib/jmcp/srx-staging/bundles \

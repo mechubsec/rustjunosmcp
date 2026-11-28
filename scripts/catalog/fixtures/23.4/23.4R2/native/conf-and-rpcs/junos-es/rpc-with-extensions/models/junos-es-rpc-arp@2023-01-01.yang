@@ -1,0 +1,47 @@
+module junos-es-rpc-arp {
+  namespace "http://yang.juniper.net/junos-es/rpc/arp";
+  prefix arp;
+  import junos-common-ddl-extensions {
+    prefix junos;
+    revision-date 2023-01-01;
+  }
+  import junos-common-types {
+    prefix jt;
+    revision-date 2023-01-01;
+  }
+  revision 2023-01-01;
+  rpc get-arp-table-information {
+    description "Show system Address Resolution Protocol table entries";
+    junos:command "show arp";
+    input {
+      uses command-forwarding;
+      leaf interface {
+        description "Name of the interface";
+        type string;
+      }
+    }
+    output {
+      container arp-table-information {
+        uses arp-table-information-block;
+      }
+    }
+  }
+  grouping command-forwarding {
+    choice chassis-selector {
+      case case_1 {
+        leaf all-chassis {
+          description "All chassis";
+          type empty;
+        }
+      }
+    }
+  }
+  grouping arp-table-information-block {
+    list arp-table-entry {
+      leaf mac-address {
+        description "MAC address";
+        type jt:ipaddr;
+      }
+    }
+  }
+}

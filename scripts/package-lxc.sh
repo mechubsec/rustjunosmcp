@@ -40,6 +40,12 @@ install -m 0644 devices-template.json "$PKGROOT/etc/jmcp/devices.json.example"
 install -m 0644 packaging/systemd/rust-junosmcp.service "$PKGROOT/etc/systemd/system/rust-junosmcp.service"
 install -m 0755 packaging/lxc/install.sh "$PKGROOT/install.sh"
 
+# Junos skills: the server's default --skills-dir.
+mkdir -p "$PKGROOT/usr/share/rust-junosmcp"
+cp -R skills "$PKGROOT/usr/share/rust-junosmcp/skills"
+find "$PKGROOT/usr/share/rust-junosmcp/skills" -type d -exec chmod 0755 {} +
+find "$PKGROOT/usr/share/rust-junosmcp/skills" -type f -exec chmod 0644 {} +
+
 # Provenance for the bytes actually in the archive. Skip-build must not name a
 # local rustc that did not compile the binary (mecmcp packaging R3).
 binary_sha256=$(sha256sum "$PKGROOT/usr/local/bin/rust-junosmcp" | cut -d' ' -f1)

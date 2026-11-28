@@ -1,0 +1,61 @@
+module junos-es-conf-system {
+  namespace "http://yang.juniper.net/junos-es/conf/system";
+  prefix jc-system;
+  import junos-common-types {
+    prefix jt;
+    revision-date 2023-01-01;
+  }
+  import junos-es-conf-root {
+    prefix jc;
+    revision-date 2023-01-01;
+  }
+  revision 2023-01-01;
+  augment /jc:configuration {
+    uses system-group;
+  }
+  augment /jc:configuration/jc:logical-systems {
+    uses system-group;
+  }
+  augment /jc:configuration/jc:tenants {
+    uses system-group;
+  }
+  augment /jc:configuration/jc:groups {
+    uses system-group;
+  }
+  grouping legacy-group {
+    status deprecated;
+    leaf legacy {
+      type string;
+    }
+  }
+  grouping system-group {
+    container system {
+      description "System parameters";
+      leaf-list apply-groups {
+        type string;
+      }
+      uses legacy-group;
+      list name-server {
+        key name;
+        ordered-by user;
+        description "DNS name server address";
+        leaf name {
+          description "DNS server address";
+          type jt:ipaddr;
+        }
+      }
+      leaf processes-limit {
+        description "Maximum processes";
+        units "processes";
+        type union {
+          type string {
+            pattern "<.*>|$.*";
+          }
+          type uint32 {
+            range "1 .. 64";
+          }
+        }
+      }
+    }
+  }
+}

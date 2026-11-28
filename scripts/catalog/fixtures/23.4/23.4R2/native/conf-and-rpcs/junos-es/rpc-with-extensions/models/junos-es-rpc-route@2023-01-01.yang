@@ -1,0 +1,32 @@
+module junos-es-rpc-route {
+  namespace "http://yang.juniper.net/junos-es/rpc/route";
+  prefix route;
+  import junos-common-ddl-extensions {
+    prefix junos;
+    revision-date 2023-01-01;
+  }
+  import junos-common-types {
+    prefix jt;
+    revision-date 2023-01-01;
+  }
+  revision 2023-01-01;
+  rpc get-route-summary-information {
+    description "Show route summary";
+    junos:command "show route summary";
+    input {
+      leaf table {
+        description "Name of routing table";
+        type string;
+      }
+    }
+    output {
+      container route-summary-information;
+    }
+  }
+  rpc get-route-summary-brief-information {
+    junos:command "show route summary brief";
+    output {
+      container route-summary-information;
+    }
+  }
+}
